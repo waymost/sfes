@@ -1,0 +1,42 @@
+# License and supply-chain gate (PROV-08, TDD section 12).
+
+[graph]
+all-features = true
+
+[licenses]
+# Every library crate and the Python wheel: this list only.
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.93
+# The allow list is policy (PROV-08), not a record of what is in use today.
+unused-allowed-license = "allow"
+# The reference player alone may also use MPL-2.0, OFL-1.1 and UFL-1.0. Exceptions are added
+# per dependency when sfes-player gains them (M2), and `cargo xtask deps` checks that none of
+# those dependencies reach a library crate.
+exceptions = []
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[advisories]
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

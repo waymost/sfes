@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/waymost/sfes"
+authors = ["The sfes contributors"]
+
+[workspace.dependencies]
+# Workspace crates
+sfes-api = { path = "crates/sfes-api", version = "0.0.0", default-features = false }
+sfes-movie = { path = "crates/sfes-movie", version = "0.0.0" }
+sfes-pool = { path = "crates/sfes-pool", version = "0.0.0" }
+sfes-env = { path = "crates/sfes-env", version = "0.0.0" }
+sfes-snes-core = { path = "crates/sfes-snes-core", version = "0.0.0", default-features = false }
+
+# Chip and core crates may use only these (TDD section 12)
+bitflags = { version = "2.13.2", default-features = false, features = ["serde"] }
+blake3 = { version = "1.8.7", default-features = false }
+serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
+thiserror = { version = "2.0.21", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+dbg_macro = "deny"
+float_arithmetic = "deny"
+undocumented_unsafe_blocks = "deny"
+# Conventions (AGENTS.md section 4)
+self_named_module_files = "deny"
+wildcard_imports = "deny"
+enum_glob_use = "deny"
+
+[profile.test]
+overflow-checks = true
