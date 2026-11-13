@@ -1,0 +1,35 @@
+name: PR commits
+
+# Sign-off and AI-review rules for a pull request's commits (PROV-06, PROV-07).
+#
+# This is its own workflow because it reads the PR description, and so must run again when
+# the description is edited: ticking the AI-review box sends an `edited` event. A manual
+# re-run of an earlier run would not help, because a re-run reuses the event payload of the
+# original run, with the description as it was then.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-commits-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Reads the PR description from the event payload for the AI-review checklist (PROV-07).
+      - run: cargo xtask provenance commits --base "origin/${{ github.base_ref }}"
