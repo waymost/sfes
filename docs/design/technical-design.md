@@ -577,7 +577,7 @@ Tests are layered from per-instruction vectors up to Python end-to-end runs; ben
 | Python | `pytest` against the built wheel: Gymnasium checker, vector env, PettingZoo API test | Every push from M5 |
 | Differential (M8) | Harness runs oracle binaries from paths in environment variables, compares outputs | Manual and weekly |
 
-- **Vector storage:** the test-vector sets are large, so they are not committed. `cargo xtask vectors fetch` downloads each set at the commit pinned in `tests/assets/MANIFEST.toml` and verifies every file's SHA-256 against the committed `tests/assets/vectors.lock` (written by `cargo xtask vectors lock`), and CI caches them. Both sets are MIT-licensed (spec, section 15).
+- **Vector storage:** the test-vector sets are large, so they are not committed. `cargo xtask vectors fetch` downloads each set at the commit pinned in `tests/assets/MANIFEST.toml` and verifies every file's SHA-256 against the committed `tests/assets/vectors.lock` (written by `cargo xtask vectors lock`), and CI caches them under a key derived from that lock file, runs the fetch on every job so a restored cache is verified too, and sets `SFES_REQUIRE_VECTORS=1` so a missing set fails the run instead of skipping it. Both sets are MIT-licensed (spec, section 15).
 - **Golden updates:** `cargo xtask golden --update` rewrites golden files; changes appear in the PR diff and need a written reason in the PR description. Each golden carries a status: unverified (blessed after manual comparison with an oracle's output) or oracle-confirmed (by the M8 harness). --update resets changed entries to unverified.
 - **Coverage:** `cargo llvm-cov` publishes a report; it informs reviews but does not gate merges.
 

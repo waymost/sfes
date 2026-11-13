@@ -38,8 +38,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # The 65816 vectors run in full on Linux and as a fixed sample, the first 500 tests of
+        # each file, on macOS and Windows (ADR 0004). An empty sample runs every test.
+        include:
+          - os: ubuntu-latest
+            vector-sample: ""
+          - os: macos-latest
+            vector-sample: "500"
+          - os: windows-latest
+            vector-sample: "500"
     runs-on: ${{ matrix.os }}
+    env:
+      # Missing vectors fail the run; without this they would be skipped.
+      SFES_REQUIRE_VECTORS: "1"
+      SFES_VECTOR_SAMPLE: ${{ matrix.vector-sample }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
@@ -47,6 +59,15 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest
+      # The set is 2.6 GB and never committed. One archive serves all three systems: the files
+      # are fetched with line-ending conversion off, so they are byte-identical everywhere.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: tests/assets/vectors/65816
+          key: vectors-65816-${{ hashFiles('tests/assets/vectors.lock') }}
+          enableCrossOsArchive: true
+      # Downloads on a cache miss; always verifies every file against vectors.lock.
+      - run: cargo xtask vectors fetch 65816
       - run: cargo build --workspace --all-targets --locked
       - run: cargo nextest run --workspace --locked --no-tests=warn
 

@@ -81,6 +81,8 @@ cargo nextest run -p sfes-test-harness
 | `SFES_REQUIRE_VECTORS=1` | A missing set fails the run. Without it the run is skipped with a message |
 | `SFES_VECTOR_SAMPLE=<n>` | Run only the first `n` tests of each file |
 
+CI caches the set, requires it, and runs all of it on Linux and the first 500 tests of each file on macOS and Windows.
+
 Only the opcodes in the harness's `IMPLEMENTED` list are run. The list is empty until the first instruction family lands (#33) and is deleted when all 256 opcodes exist (#43).
 
 ## Bring-up state
