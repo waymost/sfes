@@ -29,14 +29,16 @@ If emulator code is seen by accident (a search result, a linked snippet, an assi
 
 ## 2. Source tags and ambiguity records (PROV-03, PROV-04)
 
-- Every module in a chip crate (`sfes-snes-*`) and every function implementing hardware behaviour carries at least one tag naming a bibliography id or an ADR:
+- Every module in a chip crate (`sfes-snes-*`) and every function in one carries at least one tag naming a bibliography id or an ADR. Only methods of standard-library trait impls are exempt:
 
   ```rust
   // @source: fullsnes#dma-and-hdma
   // @source: adr-0012
   ```
 
-- Tests cite the source of their expected values the same way.
+- The anchor after `#` names the place in the source, in the form the source's bibliography entry defines, and is as precise as the source allows (a table row, not a chapter).
+- Tests cite the source of their expected values the same way. A test driven by test vectors cites the vector set, e.g. `sst-65816`.
+- Test vectors are evidence, not a specification: code is written from a document and checked against the vectors. Behaviour that only the vectors settle is recorded in an ADR.
 - `cargo xtask provenance lint` fails CI when a chip-crate file or any function in one (other than methods of standard-library trait impls) lacks a tag, or a tag names an unknown id.
 - When sources disagree or are silent, an ADR in `docs/adr/` records what each source says, the deciding evidence (test ROM, measurement, oracle output), the decision and its confidence.
 

@@ -6,14 +6,16 @@ Working rules for every contributor to sfes, human or coding assistant. Read [`P
 
 - Work only inside this checkout. No emulator source code exists on any path you can read, and none may be fetched, pasted, quoted or recalled into a prompt or answer.
 - Implement hardware behaviour **from the cited document section or the test vectors**, never from "how emulator X does it". If you notice you are recalling another emulator's code, stop, say so, and log it in [`provenance/exposures.md`](provenance/exposures.md).
-- Tag every chip-crate module, every function implementing hardware behaviour, and every test with its source:
+- Tag every chip-crate module, every function in a chip crate (helpers and private functions included; only methods of standard-library trait impls are exempt), and every test with its source:
 
   ```rust
   // @source: fullsnes#dma-and-hdma
   // @source: adr-0012
   ```
 
-  The id is a key in [`provenance/bibliography.toml`](provenance/bibliography.toml) or an ADR number in `docs/adr/`. The anchor after `#` names the section.
+  The id is a key in [`provenance/bibliography.toml`](provenance/bibliography.toml) or an ADR number in `docs/adr/`. The anchor after `#` names the section; each entry's `notes` give its anchor forms. Cite the most precise place the document offers: for a 65C816 cycle sequence that is the row of the datasheet's instruction-operation table (`wdc-w65c816s#table-5-7-1a`), not the table or the chapter.
+- A test driven by test vectors cites the vector set (`sst-65816`, or `sst-65816#a9.n` for one file). Vectors are evidence, not a specification: the function under test still cites the document it was written from.
+- Read the cited section before writing the code. The source documents that cannot be redistributed are kept outside the repo by the project owner; if you cannot read the section, do not write the code.
 - Code with no matching citation is rewritten. Where sources disagree or are silent, write an ADR (context, sources, decision, consequences, confidence) instead of guessing.
 - Oracle emulators are black boxes: only their outputs, labelled with name and version, may enter the repo.
 - Never commit ROMs, firmware, IPL dumps or test assets without a recorded license (`tests/assets/MANIFEST.toml`).
