@@ -18,63 +18,63 @@ notes = "Anchors in tags name fullsnes section titles in kebab case, e.g. fullsn
 [[source]]
 id = "anomie-regs"
 title = "Anomie's Register Doc"
-url = "https://www.romhacking.net/community/548/"
+url = "https://www.romhacking.net/documents/196/"
 license = "unstated"
 redistributable = false
 retrieved = "2026-11-12"
 version = "Revision 1157, 2007-07-12"
 sha256 = "19dfdf3f1c206655b8ede11bcd6dc053e36634f876819e40bb39cfb88a237dfd"
 notes = """
-File regs.txt. Retrieved by hand by the project owner (the page refuses automated retrieval); url is the author's document page. Anchors name section titles in kebab case, e.g. anomie-regs#hdma."""
+File regs.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors name section titles in kebab case, e.g. anomie-regs#hdma."""
 
 [[source]]
 id = "anomie-memmap"
 title = "Anomie's SNES Memory Mapping Doc"
-url = "https://www.romhacking.net/community/548/"
+url = "https://www.romhacking.net/documents/193/"
 license = "unstated"
 redistributable = false
 retrieved = "2026-11-12"
 version = "Revision 1160, 2008-12-21"
 sha256 = "955ad18c3336fb4c6c01c54cc4a26d7bf270482d0d11b28ea048ffd7990b4bfe"
 notes = """
-File memmap.txt. Retrieved by hand by the project owner (the page refuses automated retrieval); url is the author's document page."""
+File memmap.txt. Retrieved by hand by the project owner (the page refuses automated retrieval)."""
 
 [[source]]
 id = "anomie-timing"
 title = "Anomie's SNES Timing Doc"
-url = "https://www.romhacking.net/community/548/"
+url = "https://www.romhacking.net/documents/199/"
 license = "unstated"
 redistributable = false
 retrieved = "2026-11-12"
 version = "Revision 1160, 2008-12-21"
 sha256 = "a26b6a8899146601c05be5e79777d7b9ab5857732699e8b78ac2c67080877f9e"
 notes = """
-File timing.txt. Retrieved by hand by the project owner (the page refuses automated retrieval); url is the author's document page. Anchors name section titles in kebab case, e.g. anomie-timing#dma."""
+File timing.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors name section titles in kebab case, e.g. anomie-timing#dma."""
 
 [[source]]
 id = "anomie-spc700"
 title = "Anomie's SPC700 Doc"
-url = "https://www.romhacking.net/community/548/"
+url = "https://www.romhacking.net/documents/197/"
 license = "unstated"
 redistributable = false
 retrieved = "2026-11-12"
 version = "Revision 1162, 2009-07-19"
 sha256 = "c5c71f72e32cb425e83793ab42ffc85f5951cae2f417145accf0632d79475d35"
 notes = """
-File spc700.txt. Retrieved by hand by the project owner (the page refuses automated retrieval); url is the author's document page. The IPL boot ROM bytes it lists are firmware: they never enter the repo \
+File spc700.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). The IPL boot ROM bytes it lists are firmware: they never enter the repo \
 without a recorded license (PROVENANCE.md, section 6)."""
 
 [[source]]
 id = "anomie-dsp"
 title = "Anomie's S-DSP Doc, with updates by jwdonal"
-url = "https://www.romhacking.net/community/548/"
+url = "https://www.romhacking.net/documents/191/"
 license = "unstated"
 redistributable = false
 retrieved = "2026-11-12"
 version = "Revision 1212, 2015-09-28"
 sha256 = "21b793b10a70ac87e245ec2da4938ec7206e6eb5cdc67b6689770f9c5e0361bc"
 notes = """
-File apudsp_jwdonal.txt. Retrieved by hand by the project owner (the page refuses automated retrieval); url is the author's document page. RESTRICTED: two passages reproduce emulator code and are not \
+File apudsp_jwdonal.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). RESTRICTED: two passages reproduce emulator code and are not \
 usable sources (see provenance/exposures.md, 2026-11-12): the counter alternative attributed to \
 Mednafen (COUNTERS, from \"Another option\" to the end of the section) and the Gaussian table \
 and interpolation code attributed to libopenspc (PITCH ADJUSTMENTS, from \"The exact \
