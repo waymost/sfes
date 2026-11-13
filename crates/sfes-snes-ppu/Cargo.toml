@@ -1,0 +1,18 @@
+[package]
+name = "sfes-snes-ppu"
+description = "SNES PPU: scanline renderer, layers and sprite evaluation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[features]
+default = ["std"]
+std = []

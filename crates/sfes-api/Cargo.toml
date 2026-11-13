@@ -1,0 +1,22 @@
+[package]
+name = "sfes-api"
+description = "Console-neutral traits and shared types for sfes: System, Observer, Accuracy, units and state hashing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bitflags.workspace = true
+blake3.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[features]
+default = ["std"]
+std = ["blake3/std", "serde/std", "thiserror/std"]

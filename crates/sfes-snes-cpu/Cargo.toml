@@ -1,0 +1,19 @@
+[package]
+name = "sfes-snes-cpu"
+description = "65C816 CPU core, generic over its bus (main CPU and SA-1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sfes-api.workspace = true
+
+[features]
+default = ["std"]
+std = ["sfes-api/std"]
