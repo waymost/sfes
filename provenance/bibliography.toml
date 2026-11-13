@@ -96,5 +96,56 @@ url = "https://www.westerndesigncenter.com/wdc/documentation/w65c816s.pdf"
 license = "unstated"
 redistributable = false
 retrieved = "2026-11-12"
+version = "Dated March 13, 2024"
 sha256 = "b9177e1b045d2c8a801d1b23619abb4e5b29b88868fa491df7296dbc0b13447e"
-notes = "Copyright Western Design Center; cite section numbers as anchors, e.g. wdc-w65c816s#7.1."
+notes = """
+Copyright Western Design Center, all rights reserved: the PDF and any text extracted from it stay outside the repo. Anchor forms, always using the numbers \
+printed in the document: a section is its number (wdc-w65c816s#2.20, wdc-w65c816s#3.5.11); a table or figure is `table-` or `figure-` plus its number \
+(wdc-w65c816s#table-5-4, wdc-w65c816s#figure-2-1); a row of Table 5-7, Instruction Operation, adds the row label printed in its Address Mode column \
+(wdc-w65c816s#table-5-7-1a, wdc-w65c816s#table-5-7-22d); a numbered note under Table 5-7 is wdc-w65c816s#table-5-7-note-4. Code that implements a per-cycle \
+sequence cites the Table 5-7 row, not the table as a whole."""
+
+[[source]]
+id = "wdc-65816-manual"
+title = "Programming the 65816, Including the 6502, 65C02 and 65802 (David Eyes and Ron Lichty; published by the Western Design Center)"
+url = "https://archive.org/details/65816programmanual"
+license = "unstated"
+redistributable = false
+retrieved = "2026-11-12"
+version = "WDC edition, copyright 2007"
+sha256 = "dbccafcc47d6e53436bdc1c0049b3c54ffacfc9034a4041a7d92b6e6c5d72bb5"
+notes = """
+File 65816Programmanual.pdf, from the Internet Archive item at the URL. Retrieved by hand by the project owner. Copyright 2007 The Western Design Center, all rights reserved: the PDF and any text \
+extracted from it stay outside the repo. Vetted before registration (2026-11-12): a programming textbook whose listings are 65816 assembly, including the \
+DEBUG16 step-and-trace debugger of chapter 15, which runs on the processor itself; no emulator source code. Anchors name the chapter number, optionally \
+followed by a heading in kebab case, e.g. wdc-65816-manual#chapter-7 or wdc-65816-manual#chapter-18-adc. Where it and the datasheet differ, the datasheet \
+wins unless an ADR says otherwise."""
+
+[[source]]
+id = "6502org-65c816-opcodes"
+title = "65C816 Opcodes (Bruce Clark), 6502.org tutorial"
+url = "https://6502.org/tutorials/65c816opcodes.html"
+license = "unstated"
+redistributable = false
+retrieved = "2026-11-12"
+version = "Last updated September 28, 2015"
+sha256 = "b8e314d4afa446ee4e65f5899dc54fe469d791c8b5d7801d609d531f71d7d6c3"
+notes = """
+Retrieved by hand by the project owner (the page refused automated retrieval on 2026-11-12); the hash is of the saved HTML page. Vetted before registration (2026-11-12): prose and tables with short 65816 \
+assembly examples; it names no emulator and quotes no emulator source code. Anchors name the section number as printed, e.g. \
+6502org-65c816-opcodes#5.1.1, or 6502org-65c816-opcodes#appendix for the appendix on emulation mode. A community tutorial: where it and the datasheet \
+differ, write an ADR."""
+
+[[source]]
+id = "sst-65816"
+title = "SingleStepTests 65816: per-instruction test vectors"
+url = "https://github.com/SingleStepTests/65816"
+license = "MIT"
+redistributable = true
+retrieved = "2026-11-12"
+version = "Commit 307c63f5673c8c6b861c52f71ddb89212a227480"
+notes = """
+Fetched by `cargo xtask vectors fetch` and never committed; per-file hashes are in tests/assets/vectors.lock, so the entry has no sha256. Test evidence, \
+not a specification: the README does not say how the vectors were produced, so they confirm or contradict a reading of a document and do not replace \
+one. Behaviour that only the vectors settle needs an ADR naming the deciding tests by file and test name. Anchors name the vector file without `v1/` and \
+`.json`, e.g. sst-65816#a9.n for opcode A9 in native mode and sst-65816#a9.e in emulation mode; a test that runs the whole set cites sst-65816 alone."""
