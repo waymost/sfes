@@ -17,6 +17,7 @@ sfes-api = { path = "crates/sfes-api", version = "0.0.0", default-features = fal
 sfes-movie = { path = "crates/sfes-movie", version = "0.0.0" }
 sfes-pool = { path = "crates/sfes-pool", version = "0.0.0" }
 sfes-env = { path = "crates/sfes-env", version = "0.0.0" }
+sfes-snes-cpu = { path = "crates/sfes-snes-cpu", version = "0.0.0", default-features = false }
 sfes-snes-core = { path = "crates/sfes-snes-core", version = "0.0.0", default-features = false }
 
 # Chip and core crates may use only these (TDD section 12)

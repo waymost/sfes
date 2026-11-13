@@ -389,6 +389,13 @@ version = "0.0.0"
 [[package]]
 name = "sfes-test-harness"
 version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sfes-api",
+ "sfes-snes-cpu",
+ "thiserror",
+]
 
 [[package]]
 name = "sha2"
