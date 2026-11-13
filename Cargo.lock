@@ -373,6 +373,8 @@ version = "0.0.0"
 name = "sfes-snes-cpu"
 version = "0.0.0"
 dependencies = [
+ "bitflags",
+ "serde",
  "sfes-api",
 ]
 
