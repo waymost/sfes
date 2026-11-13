@@ -1,0 +1,24 @@
+# Patterns for `cargo xtask provenance scan` (PROV-05): signs that emulator source code has
+# entered the tree. Matched case-insensitively against code files (.rs .c .h .cc .cpp .hpp .py
+# .pyi .js .ts) outside provenance/, docs/ and tests/assets/. Names of test-ROM and document
+# authors (allowed sources) are deliberately absent.
+
+[[pattern]]
+regex = '(?i)copyright[^\n]{0,80}\b(byuu|bsnes|higan|ares|snes9x|zsnes|mesen|libretro|beetle|bizhawk)\b'
+reason = "emulator copyright header"
+
+[[pattern]]
+regex = '(?i)\bsnes9x\s*-\s*portable'
+reason = "Snes9x file header"
+
+[[pattern]]
+regex = '(?i)\b(byuu|gary henderson|jerremy koot|zsknight)\b'
+reason = "emulator author name"
+
+[[pattern]]
+regex = '(?i)\bSPDX-License-Identifier:\s*\(?\s*(A|L)?GPL'
+reason = "GPL-family license identifier in a code file"
+
+[[pattern]]
+regex = '(?i)GNU (Lesser |Affero )?General Public License'
+reason = "GPL-family license text in a code file"
