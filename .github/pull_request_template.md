@@ -7,6 +7,7 @@
 - [ ] Tests added or updated; golden-file changes explained below.
 - [ ] Public items documented; chip explainer updated for behaviour changes.
 - [ ] `@source:` tags present for hardware behaviour, with an ADR for any judgement call.
+- [ ] An ADR that changes or refines `docs/design/` updates that document in this PR, citing the ADR at the changed text.
 - [ ] fmt, clippy, cargo-deny and provenance checks pass.
 
 ## Attestation (required)

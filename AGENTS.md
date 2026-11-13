@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Working rules for every contributor to sfes, human or coding assistant. Read [`PROVENANCE.md`](PROVENANCE.md) first: it is binding and overrides anything here.
+Working rules for every contributor to sfes, human or coding assistant. Read [`PROVENANCE.md`](PROVENANCE.md) first: it is binding and overrides anything here. The [feature specification](docs/design/feature-specification.md) defines the requirement IDs (`PROV-03`, `EMU-02` …) and the [technical design](docs/design/technical-design.md) says how they are built.
 
 ## 1. Provenance rules for assistants
 
@@ -24,6 +24,7 @@ Working rules for every contributor to sfes, human or coding assistant. Read [`P
 - [Conventional Commits](https://www.conventionalcommits.org/): `feat(ppu): …`, `fix(cpu): …`, `docs(adr): …`, `ci: …`, `chore: …`.
 - Every commit is signed off (`git commit -s`, DCO). When an assistant contributed, add a trailer naming it, e.g. `Assisted-by: Claude Code (claude-opus-5-5)`.
 - An ADR in `docs/adr/NNNN-title.md` is required for hardware ambiguities, new dependencies in chip or core crates, and any format change.
+- An ADR that changes or refines the [technical design](docs/design/technical-design.md) or the [feature specification](docs/design/feature-specification.md) updates that document in the same PR, with a citation such as "(ADR 0004)" at the changed text.
 - Definition of done: tests added or updated (golden changes explained); public items documented; `@source:` tags present; all checks below pass; the AI-review checklist is complete for AI-assisted changes.
 
 ## 3. Checks to run before pushing
@@ -43,7 +44,7 @@ CI runs all of these, plus `cargo xtask provenance commits` on pull requests and
 
 ## 4. Rust conventions
 
-The technical design's code sketches show shape only; these conventions win where they differ.
+The [technical design](docs/design/technical-design.md)'s code sketches show shape only; these conventions win where they differ.
 
 - **Edition 2024**, with `style_edition = "2024"` in `rustfmt.toml`.
 - **A nested `if let` / `if` is a let-chain.**
@@ -94,7 +95,7 @@ The technical design's code sketches show shape only; these conventions win wher
   Meta { seed, region, frame: 0 }
   ```
 
-## 5. Project rules (from the technical design, section 12)
+## 5. Project rules (from the [technical design](docs/design/technical-design.md), section 12)
 
 - No panics in library code: `unwrap`, `expect`, `panic!`, `todo!` and `dbg!` are denied outside tests. Return `thiserror` enums; binaries (`sfes-player`, `xtask`) use `anyhow`.
 - Hardware wrap-around is explicit (`wrapping_add`, `wrapping_sub`, …); tests run with overflow checks on.
