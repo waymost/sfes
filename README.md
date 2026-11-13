@@ -6,6 +6,8 @@
 
 - [`PROVENANCE.md`](PROVENANCE.md): the source policy. No emulator source code is ever consulted.
 - [`AGENTS.md`](AGENTS.md): working rules for contributors and coding assistants.
+- [Feature specification](docs/design/feature-specification.md): what sfes must do, with the requirement IDs (`FND-01`, `EMU-02` …) used across the repo.
+- [Technical design](docs/design/technical-design.md): how it is built. Decisions that refine it are recorded in [`docs/adr/`](docs/adr/).
 
 Outside contributions are not accepted yet (see `PROVENANCE.md`, section 4).
 
