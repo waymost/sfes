@@ -1,0 +1,97 @@
+# release-plz (TDD section 14). Not publishing until M5: crates.io publishing, tags and GitHub
+# releases are off, and the workflow only runs on manual dispatch.
+
+[workspace]
+changelog_config = "cliff.toml"
+changelog_update = false
+dependencies_update = false
+publish = false            # M5: true
+git_tag_enable = false     # M5: true
+git_release_enable = false # M5: true
+semver_check = false       # turned on from the first published version
+pr_labels = ["infra"]
+
+# One workspace tag and one changelog for the whole project, not per crate.
+[[package]]
+name = "sfes"
+changelog_update = true
+changelog_path = "./CHANGELOG.md"
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+version_group = "sfes"
+changelog_include = [
+    "sfes-api",
+    "sfes-movie",
+    "sfes-pool",
+    "sfes-env",
+    "sfes-dataset",
+    "sfes-cheevos",
+    "sfes-snes-cpu",
+    "sfes-snes-spc",
+    "sfes-snes-ppu",
+    "sfes-snes-cart",
+    "sfes-snes-core",
+    "sfes-py",
+    "sfes-capi",
+    "sfes-player",
+]
+
+[[package]]
+name = "sfes-api"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-movie"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-pool"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-env"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-dataset"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-cheevos"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-snes-cpu"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-snes-spc"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-snes-ppu"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-snes-cart"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-snes-core"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-py"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-capi"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-player"
+version_group = "sfes"
+
+[[package]]
+name = "sfes-test-harness"
+release = false

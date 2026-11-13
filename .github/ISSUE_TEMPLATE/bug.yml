@@ -1,0 +1,38 @@
+name: Bug report
+description: Something behaves differently from hardware, crashes, or breaks the API.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never attach a commercial ROM, firmware or BIOS dump. Identify ROMs by SHA-256 instead.
+        Please do not paste or link emulator source code (see PROVENANCE.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: >-
+        The best reproduction is the player's bug bundle (PLY-06) or a movie file. Otherwise, a
+        minimal Rust or Python snippet.
+    validations:
+      required: true
+  - type: input
+    id: rom
+    attributes:
+      label: ROM SHA-256 (if a game is involved)
+  - type: input
+    id: version
+    attributes:
+      label: sfes version or commit
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS, CPU architecture, Rust or Python version

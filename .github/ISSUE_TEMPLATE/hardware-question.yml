@@ -1,0 +1,22 @@
+name: Hardware-behaviour question
+description: Sources disagree or are silent about how the hardware behaves. Resolved by an ADR (PROV-04).
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Behaviour in question
+    validations:
+      required: true
+  - type: textarea
+    id: sources
+    attributes:
+      label: What the sources say
+      description: Cite bibliography ids and sections (e.g. `fullsnes#dma-and-hdma`). Documents only, never emulator code.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence that could decide it
+      description: Test ROMs, hardware measurements, or oracle outputs (name and version).
