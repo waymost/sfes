@@ -219,12 +219,14 @@ let mut snes = Snes::<Fast>::builder(rom)          // rom: Arc<[u8]>
 
 ```rust
 pub trait Bus65816 {
-    fn read(&mut self, addr: Addr24, kind: Access) -> u8; // advances the clock by the region's speed
-    fn write(&mut self, addr: Addr24, value: u8);
-    fn idle(&mut self);                                   // internal-operation cycle
-    fn interrupts(&self) -> Pending;                      // NMI, IRQ, sampled per the 65C816 rules
+    fn read(&mut self, address: Addr24, pins: Pins) -> u8;      // advances the clock by the region's speed
+    fn write(&mut self, address: Addr24, value: u8, pins: Pins);
+    fn idle(&mut self, address: Addr24, pins: Pins);            // internal-operation cycle: no memory access
+    fn interrupts(&self) -> Pending;                            // NMI latch and IRQ level, read once per step
 }
 ```
+
+The core makes exactly one of the three cycle calls for every clock cycle, each with the cycle's address and a `Pins` bitflags value holding the eight output signals the test vectors record (VDA, VPA, VPB, RWB, E, M, X, MLB). A bus that ignores `pins` pays nothing for them after inlining. The bus owns the NMI edge latch and clears it when it sees the vector-pull read of the NMI vector (ADR 0004).
 
 The main CPU's `BusView` and the SA-1's bus inside `sfes-snes-cart` both implement it, so one `Cpu65816` type serves both (MS-01). Static dispatch through `&mut impl Bus65816` keeps every access inlinable.
 
@@ -284,11 +286,11 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
 ### 65C816 (`sfes-snes-cpu`)
 
 - `Cpu65816 { a, x, y, s, d: u16, db, pb: u8, pc: u16, p: Flags, e: bool, run: RunState }`, where `Flags` uses `bitflags` and `RunState` is `Running | Waiting | Stopped`.
-- `step(&mut self, bus: &mut impl Bus65816)` executes one instruction or interrupt: fetch, then one `match opcode` with 256 arms calling small functions.
+- `step(&mut self, bus: &mut impl Bus65816)` executes one instruction or one interrupt entry: fetch, then one `match opcode` with 256 arms calling small functions. A block move advances one byte (7 cycles) per `step`, and a waiting or stopped CPU spends one idle cycle per `step`. `interrupts()` is read once, before the opcode fetch; reset is a separate `reset` method (ADR 0004).
 - Register width uses const generics instead of duplicated code, e.g. `fn lda<const M16: bool>(&mut self, bus: &mut impl Bus65816, mode: Mode)`. The compiler emits an 8-bit and a 16-bit version.
 - Addressing modes are an enum. Each mode's function performs the exact sequence of reads, including dummy reads and internal cycles, because the test vectors check every bus cycle (EMU-02).
 - Decimal mode, the emulation-mode stack and direct-page quirks, and interrupt sampling follow the WDC datasheet, with ADRs where vector results decide an ambiguity.
-- Testing: a `RecordingBus` in the test harness implements `Bus65816` over a sparse 16 MiB map and records `(addr, value, signals)` per cycle, so it compares against the vectors directly.
+- Testing: a `RecordingBus` in the test harness implements `Bus65816` over a sparse 16 MiB map and records `(address, value, pins)` for every cycle, internal cycles included, so the runner compares the address, the value and all eight signals against the vectors directly (ADR 0004).
 
 ### PPU (`sfes-snes-ppu`)
 
@@ -567,7 +569,7 @@ Tests are layered from per-instruction vectors up to Python end-to-end runs; ben
 | Layer | Tooling | Runs |
 | --- | --- | --- |
 | Unit tests | `#[cfg(test)] mod tests` beside the code, run with `cargo nextest` | Every push |
-| CPU and SPC700 vectors | `sfes-test-harness` runner over SingleStepTests JSON, through `RecordingBus` | Every push (cached) |
+| CPU and SPC700 vectors | `sfes-test-harness` runner over SingleStepTests JSON, through `RecordingBus`, comparing every cycle's address, value and signals (ADR 0004) | Every push (cached): the full set on Linux, the first 500 tests per file on macOS and Windows |
 | Test ROMs and own test cartridges | Golden frame, audio and state hashes under `tests/assets/golden/` | Every push |
 | Properties | `proptest`: `load(save(m)) == m`, clone equivalence, pool thread-count independence | Every push |
 | Determinism matrix | Golden hashes on Linux x86-64, macOS arm64, Windows x86-64 and a 32-bit target | Every push |
