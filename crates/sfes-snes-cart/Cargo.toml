@@ -1,0 +1,18 @@
+[package]
+name = "sfes-snes-cart"
+description = "SNES cartridge header detection, boards and coprocessors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[features]
+default = ["std"]
+std = []

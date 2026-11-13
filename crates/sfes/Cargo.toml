@@ -1,0 +1,30 @@
+[package]
+name = "sfes"
+description = "Headless-first, library-first SNES emulator core with cloneable, batchable machines"
+readme = "../../README.md"
+keywords = ["snes", "emulator", "reinforcement-learning", "65c816"]
+categories = ["emulators", "no-std", "science"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sfes-api.workspace = true
+sfes-snes-core = { workspace = true, optional = true }
+sfes-movie = { workspace = true, optional = true }
+sfes-pool = { workspace = true, optional = true }
+sfes-env = { workspace = true, optional = true }
+
+[features]
+default = ["std", "snes"]
+std = ["sfes-api/std", "sfes-snes-core?/std"]
+snes = ["dep:sfes-snes-core"]
+movie = ["std", "dep:sfes-movie"]
+pool = ["std", "dep:sfes-pool"]
+env = ["std", "dep:sfes-env"]

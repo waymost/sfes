@@ -1,0 +1,18 @@
+[package]
+name = "sfes-snes-spc"
+description = "SPC700 audio CPU and S-DSP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[features]
+default = ["std"]
+std = []
