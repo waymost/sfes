@@ -54,5 +54,9 @@ self_named_module_files = "deny"
 wildcard_imports = "deny"
 enum_glob_use = "deny"
 
+# `cargo xtask` hashes gigabytes of test vectors; unoptimized SHA-256 takes minutes.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.test]
 overflow-checks = true

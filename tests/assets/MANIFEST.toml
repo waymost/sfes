@@ -9,3 +9,24 @@
 # sha256 = "…"
 # fetch = false
 # notes = "SingleStepTests 65816, commit …"
+#
+# A directory entry (path ending in `/`) covers every file beneath it and takes no sha256. With
+# `fetch = true` it is a vector set that `cargo xtask vectors fetch` downloads from the git
+# repository at `source_url`, at the pinned `commit`. The hashes of its files are in
+# vectors.lock, written by `cargo xtask vectors lock`.
+
+[[asset]]
+path = "vectors/65816/"
+license = "MIT"
+source_url = "https://github.com/SingleStepTests/65816"
+commit = "307c63f5673c8c6b861c52f71ddb89212a227480"
+fetch = true
+notes = "SingleStepTests 65816 per-instruction vectors (EMU-02). MIT per the repository's LICENSE file."
+
+[[asset]]
+path = "vectors/spc700/"
+license = "MIT"
+source_url = "https://github.com/SingleStepTests/spc700"
+commit = "67d15f492b2740964abd4efd1229e0ec9c342228"
+fetch = true
+notes = "SingleStepTests SPC700 per-instruction vectors (EMU-07). MIT per the repository's LICENSE file."

@@ -4,8 +4,15 @@
 //! `tests/assets/MANIFEST.toml`, either for its exact path (with a matching SHA-256) or for a
 //! directory entry ending in `/` that covers it. Entries with `fetch = true` describe files
 //! downloaded at test time and may be absent; when present they must match their hash.
+//!
+//! A directory entry with `fetch = true` is a vector set downloaded by `cargo xtask vectors
+//! fetch` from `source_url` at `commit`. Its files' hashes live in `tests/assets/vectors.lock`:
+//! every file present must be in the lock with a matching hash.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -14,62 +21,96 @@ use crate::{
     files,
     finding::Finding,
     provenance::{ALLOWED_LICENSES, license_permitted},
+    vectors::{self, Lock},
 };
 
-const ASSETS: &str = "tests/assets";
+/// The asset directory, relative to the workspace root.
+pub(crate) const ASSETS: &str = "tests/assets";
 const MANIFEST: &str = "tests/assets/MANIFEST.toml";
+
+/// Files in the asset directory that describe the assets and are not assets themselves.
+const INDEX_FILES: &[&str] = &["MANIFEST.toml", "vectors.lock"];
+
+/// File names the operating system scatters into directories. They are git-ignored, so they
+/// can never be committed as assets.
+const OS_FILES: &[&str] = &[".DS_Store", "Thumbs.db", "desktop.ini"];
 
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Manifest {
+pub(crate) struct Manifest {
     #[serde(rename = "asset", default)]
-    assets: Vec<Asset>,
+    pub(crate) assets: Vec<Asset>,
+}
+
+impl Manifest {
+    /// Reads and parses `tests/assets/MANIFEST.toml`.
+    pub(crate) fn load(root: &Path) -> Result<Self> {
+        let text = fs::read_to_string(root.join(MANIFEST))
+            .with_context(|| format!("reading {MANIFEST}"))?;
+        toml::from_str::<Self>(&text).with_context(|| format!("parsing {MANIFEST}"))
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Asset {
-    path: String,
-    license: String,
-    #[expect(
-        dead_code,
-        reason = "schema field: parsed so unknown or mistyped fields fail, not read"
-    )]
-    source_url: Option<String>,
-    sha256: Option<String>,
+pub(crate) struct Asset {
+    pub(crate) path: String,
+    pub(crate) license: String,
+    pub(crate) source_url: Option<String>,
+    /// The pinned git commit of a fetched directory entry.
+    pub(crate) commit: Option<String>,
+    pub(crate) sha256: Option<String>,
     #[serde(default)]
-    fetch: bool,
+    pub(crate) fetch: bool,
     #[expect(
         dead_code,
         reason = "schema field: parsed so unknown or mistyped fields fail, not read"
     )]
-    notes: Option<String>,
+    pub(crate) notes: Option<String>,
 }
 
 pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
-    let manifest_text =
-        fs::read_to_string(root.join(MANIFEST)).with_context(|| format!("reading {MANIFEST}"))?;
-    let manifest = toml::from_str::<Manifest>(&manifest_text)
-        .with_context(|| format!("parsing {MANIFEST}"))?;
+    let manifest = Manifest::load(root)?;
+    let lock = Lock::load(root)?;
     let assets_directory = root.join(ASSETS);
-    let mut present = Vec::new();
-    for path in files::walk(&assets_directory, &|_| false)? {
-        let relative = files::display(&assets_directory, &path);
-        if relative != "MANIFEST.toml" {
-            let hash = sha256_hex(&fs::read(&path).with_context(|| format!("reading {relative}"))?);
-            present.push((relative, hash));
-        }
-    }
-    Ok(check(&manifest, &present))
+    let present = hash_tree(&assets_directory, &assets_directory)?;
+    Ok(check(&manifest, &lock, &present))
 }
 
-/// Checks the manifest against the files present, given as `(path relative to tests/assets,
-/// SHA-256 hex)`.
-fn check(manifest: &Manifest, present: &[(String, String)]) -> Vec<Finding> {
+/// Every asset file under `directory`, as `(path relative to assets_directory, SHA-256 hex)`,
+/// sorted by path. A missing directory yields no files.
+pub(crate) fn hash_tree(
+    assets_directory: &Path,
+    directory: &Path,
+) -> Result<Vec<(String, String)>> {
+    let mut present = Vec::new();
+    for path in files::walk(directory, &|_| false)? {
+        let relative = files::display(assets_directory, &path);
+        let name = relative.rsplit('/').next().unwrap_or(&relative);
+        if !INDEX_FILES.contains(&relative.as_str()) && !OS_FILES.contains(&name) {
+            present.push((relative, hash_file(&path)?));
+        }
+    }
+    Ok(present)
+}
+
+fn hash_file(path: &PathBuf) -> Result<String> {
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(sha256_hex(&bytes))
+}
+
+/// Checks the manifest and the lock against the files present, given as `(path relative to
+/// tests/assets, SHA-256 hex)`.
+fn check(manifest: &Manifest, lock: &Lock, present: &[(String, String)]) -> Vec<Finding> {
     let mut findings = Vec::new();
     for asset in &manifest.assets {
         findings.extend(check_entry(asset, present));
     }
+    let sets = vectors::sets(manifest);
+    for set in &sets {
+        findings.extend(vectors::verify_set(set, lock, present, false));
+    }
+    findings.extend(vectors::stale_records(&sets, lock));
     for (path, hash) in present {
         let exact = manifest.assets.iter().find(|asset| asset.path == *path);
         let covered = manifest
@@ -101,7 +142,8 @@ fn check_entry(asset: &Asset, present: &[(String, String)]) -> Vec<Finding> {
     let Asset {
         path,
         license,
-        source_url: _,
+        source_url,
+        commit,
         sha256,
         fetch,
         notes: _,
@@ -120,9 +162,21 @@ fn check_entry(asset: &Asset, present: &[(String, String)]) -> Vec<Finding> {
             "license is not on the PROV-08 list (use an SPDX id, or \"own\" for project-made assets)",
         );
     }
+    let fetched_directory = path.ends_with('/') && *fetch;
+    if commit.is_some() && !fetched_directory {
+        problem("`commit` applies only to directory entries with `fetch = true`");
+    }
     if path.ends_with('/') {
-        if sha256.is_some() || *fetch {
-            problem("directory entries take no sha256 and cannot be fetched");
+        if sha256.is_some() {
+            problem("directory entries take no sha256");
+        }
+        if fetched_directory {
+            if !source_url.as_deref().is_some_and(vectors::is_source_url) {
+                problem("fetched directories need an https:// `source_url`");
+            }
+            if !commit.as_deref().is_some_and(vectors::is_commit) {
+                problem("fetched directories need a `commit` of 40 lower-case hex digits");
+            }
         }
     } else {
         if sha256.is_none() {
@@ -167,7 +221,10 @@ mod tests {
 
     #[test]
     fn empty_manifest_and_tree_pass() {
-        assert_eq!(check(&Manifest::default(), &[]), Vec::<Finding>::new());
+        assert_eq!(
+            check(&Manifest::default(), &Lock::default(), &[]),
+            Vec::<Finding>::new()
+        );
     }
 
     #[test]
@@ -179,7 +236,34 @@ mod tests {
              [[asset]]\npath = \"golden/\"\nlicense = \"own\"\n"
         );
         let files = present(&[("cpu/00.json", b"vector"), ("golden/frame.txt", b"x")]);
-        assert_eq!(check(&manifest(&text), &files), Vec::<Finding>::new());
+        assert_eq!(
+            check(&manifest(&text), &Lock::default(), &files),
+            Vec::<Finding>::new()
+        );
+    }
+
+    #[test]
+    fn fetched_directories_need_a_pin_and_a_lock() {
+        let commit = "307c63f5673c8c6b861c52f71ddb89212a227480";
+        let pinned = format!(
+            "[[asset]]\npath = \"vectors/65816/\"\nlicense = \"MIT\"\nfetch = true\n\
+             source_url = \"https://example.org/65816\"\ncommit = \"{commit}\"\n"
+        );
+        // Well-formed, but nothing is locked yet.
+        let unlocked = check(&manifest(&pinned), &Lock::default(), &[]);
+        assert_eq!(unlocked.len(), 1, "{unlocked:?}");
+        assert!(unlocked[0].to_string().contains("vectors lock"));
+
+        let unpinned = "[[asset]]\npath = \"vectors/65816/\"\nlicense = \"MIT\"\nfetch = true\n\n\
+                        [[asset]]\npath = \"golden/\"\nlicense = \"own\"\ncommit = \"00\"\n";
+        let messages = check(&manifest(unpinned), &Lock::default(), &[])
+            .into_iter()
+            .map(|finding| finding.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        assert!(messages[0].contains("source_url"));
+        assert!(messages[1].contains("commit"));
+        assert!(messages[2].contains("applies only"));
     }
 
     #[test]
@@ -187,7 +271,7 @@ mod tests {
         let text = "[[asset]]\npath = \"rom.sfc\"\nlicense = \"GPL-3.0\"\nsha256 = \"00\"\n\n\
                     [[asset]]\npath = \"gone.json\"\nlicense = \"MIT\"\nsha256 = \"00\"\n";
         let files = present(&[("rom.sfc", b"rom"), ("stray.bin", b"?")]);
-        let messages = check(&manifest(text), &files)
+        let messages = check(&manifest(text), &Lock::default(), &files)
             .into_iter()
             .map(|finding| finding.to_string())
             .collect::<Vec<_>>();

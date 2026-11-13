@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Project automation for sfes: provenance checks and dependency layering"
+description = "Project automation for sfes: provenance checks, test-vector fetching and dependency layering"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
