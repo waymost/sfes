@@ -1,0 +1,38 @@
+# Dependency layering for `cargo xtask deps` (MS-02, TDD sections 2 and 12).
+# Dependencies point one way: apps -> services -> sfes-api <- chip crates. Each workspace crate
+# lists the workspace crates it may depend on (normal and build dependencies). The one declared
+# exception between chip crates is sfes-snes-cart -> sfes-snes-cpu (the SA-1 contains a 65C816).
+
+[policy]
+# Chip and core crates may use only these external crates; anything else needs an ADR.
+restricted = [
+    "sfes-api",
+    "sfes-snes-cart",
+    "sfes-snes-core",
+    "sfes-snes-cpu",
+    "sfes-snes-ppu",
+    "sfes-snes-spc",
+]
+restricted-external = ["bitflags", "blake3", "postcard", "serde", "thiserror"]
+# Licenses only the reference player may use (PROV-08); none may reach another crate.
+player-crates = ["sfes-player"]
+player-only-licenses = ["MPL-2.0", "OFL-1.1", "UFL-1.0"]
+
+[allow]
+sfes-api = []
+sfes-snes-cpu = ["sfes-api"]
+sfes-snes-spc = ["sfes-api"]
+sfes-snes-ppu = ["sfes-api"]
+sfes-snes-cart = ["sfes-api", "sfes-snes-cpu"]
+sfes-snes-core = ["sfes-api", "sfes-snes-cart", "sfes-snes-cpu", "sfes-snes-ppu", "sfes-snes-spc"]
+sfes-movie = ["sfes-api"]
+sfes-pool = ["sfes-api"]
+sfes-env = ["sfes-api", "sfes-movie", "sfes-pool"]
+sfes-dataset = ["sfes-api", "sfes-env", "sfes-movie", "sfes-pool"]
+sfes-cheevos = ["sfes-api"]
+sfes = ["sfes-api", "sfes-dataset", "sfes-env", "sfes-movie", "sfes-pool", "sfes-snes-core"]
+sfes-py = ["sfes", "sfes-api", "sfes-dataset", "sfes-env", "sfes-movie", "sfes-pool", "sfes-snes-core"]
+sfes-capi = ["sfes", "sfes-api", "sfes-movie", "sfes-snes-core"]
+sfes-player = ["sfes", "sfes-api", "sfes-cheevos", "sfes-env", "sfes-movie", "sfes-pool", "sfes-snes-core"]
+sfes-test-harness = ["sfes-api", "sfes-movie", "sfes-snes-cart", "sfes-snes-core", "sfes-snes-cpu", "sfes-snes-ppu", "sfes-snes-spc"]
+xtask = []

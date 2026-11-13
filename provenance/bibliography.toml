@@ -1,0 +1,47 @@
+# Bibliography registry (PROV-02). One entry per source; code cites entries by `id` in
+# `@source:` tags (PROV-03). Checked by `cargo xtask provenance lint`.
+#
+# Fields: id, title, url, license (SPDX id, or "unstated"), redistributable (whether an archived
+# copy may be committed), retrieved (YYYY-MM-DD), version, sha256 (of the retrieved copy), notes.
+
+[[source]]
+id = "fullsnes"
+title = "fullsnes: Nocash SNES Specs (Martin Korth)"
+url = "https://problemkaputt.de/fullsnes.htm"
+license = "unstated"
+redistributable = false
+retrieved = "2026-11-12"
+version = "HTML page last modified 2021-01-28"
+sha256 = "3853b65a7331bf12eea431ff494a2948a1c78ef22f7e819db4b139fd5a79f6c6"
+notes = "Anchors in tags name fullsnes section titles in kebab case, e.g. fullsnes#dma-and-hdma."
+
+[[source]]
+id = "anomie"
+title = "Anomie's SNES Documents"
+url = "https://www.romhacking.net/community/548/"
+license = "unstated"
+redistributable = false
+notes = """
+Register, memory-mapping, timing, SPC700 and S-DSP documents by anomie, linked from the SNESdev \
+wiki. The page refuses automated retrieval; retrieve each document by hand and split this entry \
+into one entry per document (anomie-regs, anomie-memmap, anomie-timing, anomie-spc700, anomie-dsp) \
+with retrieval dates and hashes before first citing it."""
+
+[[source]]
+id = "snesdev-wiki"
+title = "SNESdev Wiki"
+url = "https://snes.nesdev.org/wiki/SNESdev_Wiki"
+license = "CC0-1.0"
+redistributable = true
+retrieved = "2026-11-12"
+notes = "Anchors name the wiki page title, e.g. snesdev-wiki#DMA_registers. Archive cited pages when first used."
+
+[[source]]
+id = "wdc-w65c816s"
+title = "W65C816S 8/16-bit Microprocessor datasheet (Western Design Center)"
+url = "https://www.westerndesigncenter.com/wdc/documentation/w65c816s.pdf"
+license = "unstated"
+redistributable = false
+retrieved = "2026-11-12"
+sha256 = "b9177e1b045d2c8a801d1b23619abb4e5b29b88868fa491df7296dbc0b13447e"
+notes = "Copyright Western Design Center; cite section numbers as anchors, e.g. wdc-w65c816s#7.1."

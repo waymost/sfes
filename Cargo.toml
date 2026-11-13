@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "xtask"]
 exclude = ["fuzz"]
 
 [workspace.package]
@@ -24,6 +24,16 @@ bitflags = { version = "2.13.2", default-features = false, features = ["serde"] 
 blake3 = { version = "1.8.7", default-features = false }
 serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
 thiserror = { version = "2.0.21", default-features = false }
+
+# Tooling (xtask)
+anyhow = "1.0.104"
+cargo_metadata = "0.23.1"
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+regex = "1.13.1"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+syn = { version = "2.0.119", features = ["full", "visit"] }
+toml = "1.2.1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
