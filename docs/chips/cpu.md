@@ -66,6 +66,23 @@ An instruction such as `LDA` exists in an 8-bit and a 16-bit form, chosen by the
 
 Every instruction starts the same way: a read at PBR,PC with VDA and VPA both active, which is how the chip marks an opcode fetch (2.26; cycle 1 of every row of Table 5-7).
 
+## Testing against the vectors
+
+`sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers unchanged, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
+
+```bash
+cargo xtask vectors fetch
+cargo nextest run -p sfes-test-harness
+```
+
+| Variable | Effect |
+| --- | --- |
+| `SFES_VECTORS_DIR` | Where the fetched sets are. Default: `tests/assets/vectors/` |
+| `SFES_REQUIRE_VECTORS=1` | A missing set fails the run. Without it the run is skipped with a message |
+| `SFES_VECTOR_SAMPLE=<n>` | Run only the first `n` tests of each file |
+
+Only the opcodes in the harness's `IMPLEMENTED` list are run. The list is empty until the first instruction family lands (#33) and is deleted when all 256 opcodes exist (#43).
+
 ## Bring-up state
 
 Until milestone M1 closes, two placeholders stand in for missing behaviour. An opcode without a `match` arm stops the processor, and so does a recognized interrupt. Neither is hardware behaviour. The first is removed once all 256 opcodes are implemented (#43), the second with the interrupt sequence (#42).

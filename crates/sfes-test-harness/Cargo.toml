@@ -13,3 +13,8 @@ publish = false
 workspace = true
 
 [dependencies]
+serde = { workspace = true, features = ["std"] }
+serde_json.workspace = true
+sfes-api = { workspace = true, features = ["std"] }
+sfes-snes-cpu = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }

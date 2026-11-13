@@ -30,3 +30,9 @@ source_url = "https://github.com/SingleStepTests/spc700"
 commit = "67d15f492b2740964abd4efd1229e0ec9c342228"
 fetch = true
 notes = "SingleStepTests SPC700 per-instruction vectors (EMU-07). MIT per the repository's LICENSE file."
+
+[[asset]]
+path = "fixtures/sst-65816-format.json"
+license = "own"
+sha256 = "49a448526212f2b48563a1d5d094805d34426cb6316891fa70d32a3a8c13c7c2"
+notes = "Project-made tests in the SingleStepTests 65816 JSON format, for the vector harness's own tests. The values are invented to exercise the parser and the comparison; they describe no instruction."
