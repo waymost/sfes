@@ -1,0 +1,18 @@
+name: Feature request
+description: Suggest a feature or API change.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What do you need to do, and what stops you today?
+    validations:
+      required: true
+  - type: input
+    id: requirement
+    attributes:
+      label: Related spec requirement, if any (e.g. RL-07)
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behaviour
