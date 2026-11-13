@@ -7,6 +7,7 @@ mod deps;
 mod files;
 mod finding;
 mod provenance;
+mod vectors;
 
 use std::{env, path::PathBuf, process::ExitCode};
 
@@ -23,6 +24,8 @@ commands:
   provenance assets    every test asset has a licensed manifest entry (PROV-09)
   provenance commits   [--base <rev>] [--pr-body-file <path>]
                        sign-off on every commit; AI-assisted chip changes reviewed (PROV-06, PROV-07)
+  vectors fetch [set]  download test-vector sets at their pinned commits; verify against the lock
+  vectors lock [set]   download the sets and rewrite tests/assets/vectors.lock
   deps                 workspace dependency layering and player-only licenses (MS-02, PROV-08)";
 
 fn main() -> ExitCode {
@@ -51,6 +54,10 @@ fn run() -> Result<bool> {
                 provenance::commits::run(&root, &options)?,
             )
         }
+        ["vectors", "fetch"] => ("vectors fetch", vectors::fetch(&root, None)?),
+        ["vectors", "fetch", set] => ("vectors fetch", vectors::fetch(&root, Some(set))?),
+        ["vectors", "lock"] => ("vectors lock", vectors::lock(&root, None)?),
+        ["vectors", "lock", set] => ("vectors lock", vectors::lock(&root, Some(set))?),
         ["deps"] => ("deps", deps::run(&root)?),
         _ => {
             eprintln!("{USAGE}");
