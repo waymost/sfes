@@ -37,7 +37,7 @@ If emulator code is seen by accident (a search result, a linked snippet, an assi
   ```
 
 - Tests cite the source of their expected values the same way.
-- `cargo xtask provenance lint` fails CI when a chip-crate file or public hardware function lacks a tag, or a tag names an unknown id.
+- `cargo xtask provenance lint` fails CI when a chip-crate file or any function in one (other than methods of standard-library trait impls) lacks a tag, or a tag names an unknown id.
 - When sources disagree or are silent, an ADR in `docs/adr/` records what each source says, the deciding evidence (test ROM, measurement, oracle output), the decision and its confidence.
 
 ## 3. Oracle firewall (PROV-05)

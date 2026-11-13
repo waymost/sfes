@@ -2,8 +2,10 @@
 //!
 //! In every `crates/sfes-snes-*` Rust file:
 //! - the file's leading comment block carries a tag (the module tag);
-//! - every function with explicit visibility (`pub`, `pub(crate)`, …), every method of a `pub`
-//!   trait, and every `#[test]` function carries a tag in its doc, comment or attribute block;
+//! - every function carries a tag in its doc, comment or attribute block: free functions, impl
+//!   methods, trait methods and `#[test]` functions, private ones included. A pure helper cites
+//!   the source of the behaviour it serves. Methods in an impl of a standard-library trait
+//!   ([`STD_TRAITS`]: conversions, formatting, comparison, operators, …) are exempt;
 //! - every tag names a bibliography id or an existing ADR.
 //!
 //! Tags anywhere else under `crates/` must also name known ids.
@@ -23,6 +25,63 @@ use crate::{
 };
 
 const MARKER: &str = "@source:";
+
+/// Standard-library traits whose impls need no tag on their methods, matched by the last
+/// segment of the trait path.
+const STD_TRAITS: &[&str] = &[
+    "Add",
+    "AddAssign",
+    "AsMut",
+    "AsRef",
+    "BitAnd",
+    "BitAndAssign",
+    "BitOr",
+    "BitOrAssign",
+    "BitXor",
+    "BitXorAssign",
+    "Borrow",
+    "BorrowMut",
+    "Clone",
+    "Debug",
+    "Default",
+    "Deref",
+    "DerefMut",
+    "Display",
+    "Div",
+    "DivAssign",
+    "DoubleEndedIterator",
+    "Drop",
+    "Eq",
+    "Error",
+    "ExactSizeIterator",
+    "Extend",
+    "From",
+    "FromIterator",
+    "FromStr",
+    "Hash",
+    "Index",
+    "IndexMut",
+    "IntoIterator",
+    "Iterator",
+    "LowerHex",
+    "Mul",
+    "MulAssign",
+    "Neg",
+    "Not",
+    "Ord",
+    "PartialEq",
+    "PartialOrd",
+    "Rem",
+    "RemAssign",
+    "Shl",
+    "ShlAssign",
+    "Shr",
+    "ShrAssign",
+    "Sub",
+    "SubAssign",
+    "TryFrom",
+    "UpperHex",
+];
 
 pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
     let (known, mut findings) = bibliography::load(root)?;
@@ -173,7 +232,7 @@ struct Function {
 #[derive(Default)]
 struct Collector {
     functions: Vec<Function>,
-    in_public_trait: bool,
+    in_std_trait_impl: bool,
 }
 
 impl Collector {
@@ -186,46 +245,32 @@ impl Collector {
     }
 }
 
-fn is_explicitly_visible(visibility: &syn::Visibility) -> bool {
-    !matches!(visibility, syn::Visibility::Inherited)
-}
-
-fn is_test(attributes: &[syn::Attribute]) -> bool {
-    attributes.iter().any(|attribute| {
-        attribute
-            .path()
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "test")
-    })
-}
-
 impl<'ast> Visit<'ast> for Collector {
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        if is_explicitly_visible(&item.vis) || is_test(&item.attrs) {
-            self.push(item, &item.sig);
-        }
+        self.push(item, &item.sig);
         syn::visit::visit_item_fn(self, item);
     }
 
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let outer = self.in_std_trait_impl;
+        self.in_std_trait_impl = item
+            .trait_
+            .as_ref()
+            .and_then(|(_, path, _)| path.segments.last())
+            .is_some_and(|segment| STD_TRAITS.contains(&segment.ident.to_string().as_str()));
+        syn::visit::visit_item_impl(self, item);
+        self.in_std_trait_impl = outer;
+    }
+
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        if is_explicitly_visible(&item.vis) || is_test(&item.attrs) {
+        if !self.in_std_trait_impl {
             self.push(item, &item.sig);
         }
         syn::visit::visit_impl_item_fn(self, item);
     }
 
-    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
-        let outer = self.in_public_trait;
-        self.in_public_trait = matches!(item.vis, syn::Visibility::Public(_));
-        syn::visit::visit_item_trait(self, item);
-        self.in_public_trait = outer;
-    }
-
     fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
-        if self.in_public_trait {
-            self.push(item, &item.sig);
-        }
+        self.push(item, &item.sig);
         syn::visit::visit_trait_item_fn(self, item);
     }
 }
@@ -259,7 +304,15 @@ pub fn read() {}
 #[inline]
 pub(crate) fn write() {}
 
+// @source: fullsnes#dma
 fn private_helper() {}
+
+struct Channel;
+
+impl Channel {
+    // @source: fullsnes#dma
+    fn step(&mut self) {}
+}
 
 /// A trait.
 pub trait Bus {
@@ -301,6 +354,67 @@ fn works() {}
                 "10: `works` has no `@source:` tag",
             ]
         );
+    }
+
+    #[test]
+    fn private_functions_need_tags() {
+        let text = "\
+// @source: fullsnes
+
+fn helper() {}
+
+struct Channel;
+
+impl Channel {
+    fn step(&mut self) {
+        fn nested() {}
+    }
+}
+
+trait Private {
+    fn idle(&mut self);
+}
+
+impl Private for Channel {
+    fn idle(&mut self) {}
+}
+";
+        assert_eq!(
+            messages(text),
+            [
+                "3: `helper` has no `@source:` tag",
+                "8: `step` has no `@source:` tag",
+                "9: `nested` has no `@source:` tag",
+                "14: `idle` has no `@source:` tag",
+                "18: `idle` has no `@source:` tag",
+            ]
+        );
+    }
+
+    #[test]
+    fn std_trait_impls_are_exempt() {
+        let text = "\
+// @source: fullsnes
+
+struct Channel;
+
+impl From<u8> for Channel {
+    fn from(_: u8) -> Self {
+        Channel
+    }
+}
+
+impl core::fmt::Display for Channel {
+    fn fmt(&self, _: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        Ok(())
+    }
+}
+
+impl Channel {
+    fn step(&mut self) {}
+}
+";
+        assert_eq!(messages(text), ["18: `step` has no `@source:` tag"]);
     }
 
     #[test]

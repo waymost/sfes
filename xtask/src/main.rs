@@ -18,7 +18,7 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  provenance lint      @source: tags in chip crates name known sources (PROV-03)
+  provenance lint      every chip-crate module and function has a known @source: tag (PROV-03)
   provenance scan      no emulator copyright headers or author names in code (PROV-05)
   provenance assets    every test asset has a licensed manifest entry (PROV-09)
   provenance commits   [--base <rev>] [--pr-body-file <path>]
