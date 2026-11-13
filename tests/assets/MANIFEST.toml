@@ -1,0 +1,11 @@
+# Test-asset manifest (PROV-09). Every file under tests/assets/ needs an entry; checked by
+# `cargo xtask provenance assets`. Assets with no stated license are never committed: they get
+# `fetch = true` and are downloaded at test time by URL and hash.
+#
+# [[asset]]
+# path = "vectors/65816/00.n.json"      # relative to tests/assets/
+# license = "MIT"                       # SPDX id from the PROV-08 list, or "own" for project-made assets
+# source_url = "https://github.com/…"
+# sha256 = "…"
+# fetch = false
+# notes = "SingleStepTests 65816, commit …"

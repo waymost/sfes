@@ -1,0 +1,14 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order is not deterministic; use BTreeMap or an array (FND-02)" },
+    { path = "std::collections::HashSet", reason = "iteration order is not deterministic; use BTreeSet or an array (FND-02)" },
+]
+
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "no wall clock in emulation (FND-02)" },
+    { path = "std::time::SystemTime::now", reason = "no wall clock in emulation (FND-02)" },
+    { path = "core::convert::Into::into", reason = "convert with Type::from(value) (AGENTS.md section 4)" },
+]
