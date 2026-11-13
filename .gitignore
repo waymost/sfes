@@ -1,0 +1,16 @@
+/target/
+**/target/
+
+# Commercial ROMs, firmware and IPL dumps are never committed (PROV-09, QA-04).
+/roms/
+*.sfc
+*.smc
+*.swc
+*.fig
+*.bs
+/firmware/
+
+# Fetched test vectors (cargo xtask vectors fetch)
+/tests/assets/vectors/
+
+.DS_Store
