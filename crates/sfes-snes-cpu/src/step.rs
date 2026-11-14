@@ -5,6 +5,7 @@
 use sfes_api::Addr24;
 
 use crate::{
+    addressing::Mode,
     bus::{Bus65816, Pending, Pins},
     registers::{Cpu65816, Flags, RunState},
 };
@@ -57,15 +58,38 @@ impl Cpu65816 {
         self.run = RunState::Stopped;
     }
 
-    /// Fetches an opcode and executes it.
+    /// Fetches an opcode and executes it. The arms follow the opcode matrix, Table 5-4,
+    /// checked against the opcode columns of Table 5-5.
     // @source: wdc-w65c816s#table-5-4
+    // @source: wdc-w65c816s#table-5-5
     fn instruction(&mut self, bus: &mut impl Bus65816) {
         let opcode = self.fetch_opcode(bus);
-        #[expect(
-            clippy::match_single_binding,
-            reason = "bring-up: each instruction family adds its arms (#33 to #42)"
-        )]
         match opcode {
+            0xA0 => self.ldy(bus, Mode::Immediate),
+            0xA1 => self.lda(bus, Mode::DirectIndexedIndirect),
+            0xA2 => self.ldx(bus, Mode::Immediate),
+            0xA3 => self.lda(bus, Mode::StackRelative),
+            0xA4 => self.ldy(bus, Mode::Direct),
+            0xA5 => self.lda(bus, Mode::Direct),
+            0xA6 => self.ldx(bus, Mode::Direct),
+            0xA7 => self.lda(bus, Mode::DirectIndirectLong),
+            0xA9 => self.lda(bus, Mode::Immediate),
+            0xAC => self.ldy(bus, Mode::Absolute),
+            0xAD => self.lda(bus, Mode::Absolute),
+            0xAE => self.ldx(bus, Mode::Absolute),
+            0xAF => self.lda(bus, Mode::AbsoluteLong),
+            0xB1 => self.lda(bus, Mode::DirectIndirectIndexed),
+            0xB2 => self.lda(bus, Mode::DirectIndirect),
+            0xB3 => self.lda(bus, Mode::StackRelativeIndirectIndexed),
+            0xB4 => self.ldy(bus, Mode::DirectX),
+            0xB5 => self.lda(bus, Mode::DirectX),
+            0xB6 => self.ldx(bus, Mode::DirectY),
+            0xB7 => self.lda(bus, Mode::DirectIndirectLongIndexed),
+            0xB9 => self.lda(bus, Mode::AbsoluteY),
+            0xBC => self.ldy(bus, Mode::AbsoluteX),
+            0xBD => self.lda(bus, Mode::AbsoluteX),
+            0xBE => self.ldx(bus, Mode::AbsoluteY),
+            0xBF => self.lda(bus, Mode::AbsoluteLongX),
             // Bring-up placeholder: an opcode with no arm yet stops the processor. The vector
             // harness only runs opcodes on its implemented list. This arm is deleted once all
             // 256 opcodes have one (#43), so that the compiler proves the match is complete.
@@ -86,7 +110,7 @@ impl Cpu65816 {
 
     /// The 24-bit address of the program counter: the Program Bank Register over PC.
     // @source: wdc-w65c816s#2.9
-    fn program_address(&self) -> Addr24 {
+    pub(crate) fn program_address(&self) -> Addr24 {
         Addr24::from_bank_offset(self.pbr, self.pc)
     }
 }

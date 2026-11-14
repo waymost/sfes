@@ -37,13 +37,6 @@ bitflags::bitflags! {
 impl Flags {
     /// Sets N from the sign bit of `value` and Z from whether it is zero.
     // @source: wdc-w65c816s#table-2-1
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "bring-up: first used by the load instructions (#33)"
-        )
-    )]
     pub(crate) fn set_negative_zero<W: Width>(&mut self, value: W) {
         let value = value.to_u16();
         self.set(Self::N, value & W::SIGN != 0);
@@ -159,7 +152,7 @@ impl Cpu65816 {
         not(test),
         expect(
             dead_code,
-            reason = "bring-up: first used by the load instructions (#33)"
+            reason = "bring-up: first used by the store instructions (#34)"
         )
     )]
     pub(crate) fn accumulator<W: Width>(&self) -> W {
@@ -168,13 +161,6 @@ impl Cpu65816 {
 
     /// Stores `value` in the accumulator. An 8-bit store leaves B alone.
     // @source: wdc-w65c816s#2.4
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "bring-up: first used by the load instructions (#33)"
-        )
-    )]
     pub(crate) fn set_accumulator<W: Width>(&mut self, value: W) {
         self.a = value.store_in(self.a);
     }
