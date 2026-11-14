@@ -61,22 +61,30 @@ pub struct State {
 }
 
 impl State {
-    /// A running processor holding exactly these register values. Nothing is normalized:
-    /// the emulation-mode vectors start with stack pointers outside page 1, and the core
-    /// under test must cope with what it is given.
+    /// A running processor holding these register values. One value is adjusted: in
+    /// emulation mode the high byte of S becomes `01`. The emulation-mode vectors start with
+    /// stack pointers outside page 1, which the processor cannot hold, and expect the
+    /// instruction to behave as if S were in page 1 (ADR 0005). Everything else is loaded
+    /// unchanged.
     #[must_use]
     pub fn processor(&self) -> Cpu65816 {
+        let emulation = self.e != 0;
+        let s = if emulation {
+            0x0100 | (self.s & 0x00FF)
+        } else {
+            self.s
+        };
         Cpu65816 {
             a: self.a,
             x: self.x,
             y: self.y,
-            s: self.s,
+            s,
             d: self.d,
             dbr: self.dbr,
             pbr: self.pbr,
             pc: self.pc,
             p: Flags::from_bits_retain(self.p),
-            e: self.e != 0,
+            e: emulation,
             run: RunState::Running,
         }
     }
@@ -283,8 +291,9 @@ mod tests {
     }
 
     // @source: sst-65816
+    // @source: adr-0005
     #[test]
-    fn the_processor_takes_the_register_values_unchanged() {
+    fn the_processor_takes_the_register_values_with_s_in_page_1_in_emulation_mode() {
         let state = State {
             pc: 0x1234,
             s: 0x91C8,
@@ -299,7 +308,9 @@ mod tests {
             ram: Vec::new(),
         };
         let processor = state.processor();
-        assert_eq!(processor.s, 0x91C8, "S is not forced into page 1");
+        assert_eq!(processor.s, 0x01C8);
+        let native = State { e: 0, ..state };
+        assert_eq!(native.processor().s, 0x91C8);
         assert_eq!(processor.p.bits(), 0x77);
         assert!(processor.e);
         assert_eq!(processor.run, RunState::Running);

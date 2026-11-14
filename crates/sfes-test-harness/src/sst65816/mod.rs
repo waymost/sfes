@@ -29,7 +29,11 @@ use crate::vectors::Config;
 /// The opcodes the core implements so far. Only their files are run. Each instruction-family
 /// issue adds its opcodes; the list is deleted with the bring-up scaffolding (#43), after
 /// which every file runs.
-pub const IMPLEMENTED: &[u8] = &[];
+pub const IMPLEMENTED: &[u8] = &[
+    // LDA, LDX and LDY in every addressing mode (#33).
+    0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA9, 0xAC, 0xAD, 0xAE, 0xAF, 0xB1, 0xB2, 0xB3,
+    0xB4, 0xB5, 0xB6, 0xB7, 0xB9, 0xBC, 0xBD, 0xBE, 0xBF,
+];
 
 /// The set's files, relative to the vector directory.
 const SET_DIRECTORY: &str = "65816/v1";

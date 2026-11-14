@@ -16,6 +16,8 @@ mod bus;
 mod instructions;
 mod registers;
 mod step;
+#[cfg(test)]
+mod testing;
 mod width;
 
 pub use crate::{

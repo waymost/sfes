@@ -66,9 +66,65 @@ An instruction such as `LDA` exists in an 8-bit and a 16-bit form, chosen by the
 
 Every instruction starts the same way: a read at PBR,PC with VDA and VPA both active, which is how the chip marks an opcode fetch (2.26; cycle 1 of every row of Table 5-7).
 
+## Addressing modes
+
+An addressing mode is the part of an instruction that finds its operand. The crate has one function per mode, in [`addressing/`](../../crates/sfes-snes-cpu/src/addressing/mod.rs). Each function performs the bus cycles of its row in the datasheet's Table 5-7, from cycle 2 up to the cycle before the data, and returns an `Operand`: the address of the data's low byte and the address of its high byte. `read_operand` then reads one byte for an 8-bit operand, or two for a 16-bit one (note 1 of the table). The modes are the `Mode` enum, named as in Table 5-6.
+
+Three kinds of cycle appear. In the table below **P** is a program byte (read at PBR,PC with VPA active), **D** a data byte (VDA active) and **I** an internal cycle, where the chip drives an address but no memory is accessed (ADR 0004). Every instruction starts with the opcode fetch, which is not shown.
+
+| Mode | Syntax | Row | Cycles after the opcode | Data address |
+| --- | --- | --- | --- | --- |
+| Immediate | `#` | 18 | none | the next one or two program bytes |
+| Absolute | `a` | 1a | P P | DBR : address |
+| Absolute indexed | `a,x` `a,y` | 6a, 7 | P P (I) | DBR : address, plus X or Y |
+| Absolute long | `al` | 4a | P P P | the 24-bit address |
+| Absolute long indexed | `al,x` | 5 | P P P | the 24-bit address plus X |
+| Direct | `d` | 10a | P (I) | 0 : D + offset |
+| Direct indexed | `d,x` `d,y` | 16a, 17 | P (I) I | 0 : D + offset + X or Y |
+| Direct indirect | `(d)` | 12 | P (I) D D | DBR : pointer |
+| Direct indexed indirect | `(d,x)` | 11 | P (I) I D D | DBR : pointer, read at D + offset + X |
+| Direct indirect indexed | `(d),y` | 13 | P (I) D D (I) | DBR : pointer, plus Y |
+| Direct indirect long | `[d]` | 15 | P (I) D D D | the 24-bit pointer |
+| Direct indirect long indexed | `[d],y` | 14 | P (I) D D D | the 24-bit pointer plus Y |
+| Stack relative | `d,s` | 23 | P I | 0 : S + offset |
+| Stack relative indirect indexed | `(d,s),y` | 24 | P I D D I | DBR : pointer, plus Y |
+
+The cycles in parentheses are optional:
+
+- **Direct modes** spend an internal cycle after the offset when the low byte of D is not zero (note 2).
+- **`a,x`, `a,y` and `(d),y`** spend an internal cycle when adding the index crosses a page boundary, or when the index registers are 16 bits wide (note 4, for instructions that read). The chip has added only the low bytes at that point, so the cycle's address is the base address with the index's low byte added to its low byte and no carry (the table's "DBR,AAH,AAL+XL"; datasheet 7.5). `al,x` and `[d],y` have no such cycle.
+
+The internal cycles that are not optional repeat the address of the last program byte, except the last one of `(d,s),y`, which repeats the address of the pointer's high byte.
+
+### Where addresses wrap
+
+A 16-bit operand's high byte is at "the next address", and what that means depends on the mode. The datasheet's caveats 7.1 to 7.3 give the rules, and section 5 of the 6502.org tutorial (`6502org-65c816-opcodes`) spells them out with examples, which the unit tests use.
+
+- **Data reached through DBR or a long address** continues into the next bank: with DBR `12`, a 16-bit `LDA $FFFF` reads `12FFFF` and `130000`. Adding X or Y to such an address also carries into the bank (7.3).
+- **Direct and stack-relative addresses stay in bank 0**: the sum is taken in 16 bits, and `00FFFF` is followed by `000000` (7.1, 7.2.1). This holds for data and for the pointers of the indirect modes.
+- **The program counter stays in its bank**, so an immediate operand at `FFFF` continues at `0000` of the same bank (2.10).
+- **In emulation mode with the low byte of D zero, the direct page wraps at its page boundary**, as the zero page of a 65C02 does: `LDA $FE,X` with D `FF00` and X `0A` reads `00FF08`. This covers `d,x`, `d,y` and the pointers of `(d)`, `(d,x)` and `(d),y`. The pointers of `[d]` and `[d],y` are the exception and run on into the next page (7.2.1, 7.2.2). With the low byte of D not zero there is no page wrapping at all (7.2.3).
+- **Stack-relative addresses are a plain 16-bit sum in both modes.** In emulation mode S is in page 1 and the sum may leave it. The datasheet's 7.1 can be read otherwise; ADR 0005 records the decision and the vectors that support it.
+
+## Loads: LDA, LDX, LDY
+
+The loads copy memory to a register and set N and Z from the value (Table 5-5: "M → A", flags `N . . . . . Z .`). They are in [`instructions/load_store.rs`](../../crates/sfes-snes-cpu/src/instructions/load_store.rs).
+
+| Instruction | Width from | Modes (opcodes) |
+| --- | --- | --- |
+| LDA | M flag | `#` A9, `a` AD, `al` AF, `d` A5, `(d)` B2, `[d]` A7, `a,x` BD, `al,x` BF, `a,y` B9, `d,x` B5, `(d,x)` A1, `(d),y` B1, `[d],y` B7, `d,s` A3, `(d,s),y` B3 |
+| LDX | X flag | `#` A2, `a` AE, `d` A6, `a,y` BE, `d,y` B6 |
+| LDY | X flag | `#` A0, `a` AC, `d` A4, `a,x` BC, `d,x` B4 |
+
+An 8-bit LDA changes only A; the B accumulator keeps its value (2.4). An 8-bit LDX or LDY leaves the register's high byte zero (2.7). N is bit 7 of an 8-bit value and bit 15 of a 16-bit one.
+
+All 25 opcodes pass every test of their vector files in both modes.
+
 ## Testing against the vectors
 
-`sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers unchanged, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
+`sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
+
+The registers are loaded unchanged, with one exception. The emulation-mode tests start with a stack pointer outside page 1, a state the chip cannot be in (datasheet 2.11), and expect the instruction to behave as if S were in page 1. The harness therefore sets the high byte of S to `01` for those tests ([ADR 0005](../adr/0005-emulation-mode-stack-in-the-vectors.md)).
 
 ```bash
 cargo xtask vectors fetch
@@ -83,7 +139,7 @@ cargo nextest run -p sfes-test-harness
 
 CI caches the set, requires it, and runs all of it on Linux and the first 500 tests of each file on macOS and Windows.
 
-Only the opcodes in the harness's `IMPLEMENTED` list are run. The list is empty until the first instruction family lands (#33) and is deleted when all 256 opcodes exist (#43).
+Only the opcodes in the harness's `IMPLEMENTED` list are run. Each instruction family adds its opcodes, and the list is deleted when all 256 exist (#43).
 
 ## Bring-up state
 

@@ -290,7 +290,7 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
 - Register width uses const generics instead of duplicated code, e.g. `fn lda<const M16: bool>(&mut self, bus: &mut impl Bus65816, mode: Mode)`. The compiler emits an 8-bit and a 16-bit version.
 - Addressing modes are an enum. Each mode's function performs the exact sequence of reads, including dummy reads and internal cycles, because the test vectors check every bus cycle (EMU-02).
 - Decimal mode, the emulation-mode stack and direct-page quirks, and interrupt sampling follow the WDC datasheet, with ADRs where vector results decide an ambiguity.
-- Testing: a `RecordingBus` in the test harness implements `Bus65816` over a sparse 16 MiB map and records `(address, value, pins)` for every cycle, internal cycles included, so the runner compares the address, the value and all eight signals against the vectors directly (ADR 0004).
+- Testing: a `RecordingBus` in the test harness implements `Bus65816` over a sparse 16 MiB map and records `(address, value, pins)` for every cycle, internal cycles included, so the runner compares the address, the value and all eight signals against the vectors directly (ADR 0004). The emulation-mode vectors start with a stack pointer outside page 1, which the chip cannot hold, so the harness sets the high byte of S to `01` before such a test (ADR 0005).
 
 ### PPU (`sfes-snes-ppu`)
 

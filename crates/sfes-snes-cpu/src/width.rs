@@ -9,14 +9,13 @@
 // @source: wdc-w65c816s#2.4
 pub(crate) trait Width: Copy {
     /// The sign bit of this width, as a 16-bit mask.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "bring-up: first used by the load instructions (#33)"
-        )
-    )]
     const SIGN: u16;
+
+    /// A value read from the bus, low byte first. `high` performs the second bus cycle and
+    /// is called only at 16 bits, so an 8-bit operand costs one cycle and a 16-bit operand
+    /// two (note 1 of Table 5-7).
+    // @source: wdc-w65c816s#table-5-7-note-1
+    fn from_bytes(low: u8, high: impl FnOnce() -> u8) -> Self;
 
     /// The low part of a 16-bit register at this width.
     // @source: wdc-w65c816s#2.4
@@ -34,6 +33,11 @@ pub(crate) trait Width: Copy {
 
 impl Width for u8 {
     const SIGN: u16 = 0x0080;
+
+    // @source: wdc-w65c816s#table-5-7-note-1
+    fn from_bytes(low: u8, _high: impl FnOnce() -> u8) -> Self {
+        low
+    }
 
     // @source: wdc-w65c816s#2.4
     fn from_register(register: u16) -> Self {
@@ -53,6 +57,11 @@ impl Width for u8 {
 
 impl Width for u16 {
     const SIGN: u16 = 0x8000;
+
+    // @source: wdc-w65c816s#table-5-7-note-1
+    fn from_bytes(low: u8, high: impl FnOnce() -> u8) -> Self {
+        Self::from_le_bytes([low, high()])
+    }
 
     // @source: wdc-w65c816s#2.4
     fn from_register(register: u16) -> Self {
@@ -81,6 +90,22 @@ mod tests {
         assert_eq!(0xCD_u8.store_in(0x12AB), 0x12CD);
         assert_eq!(0xCD_u8.to_u16(), 0x00CD);
         assert_eq!(<u8 as Width>::SIGN, 0x0080);
+    }
+
+    // @source: wdc-w65c816s#table-5-7-note-1
+    #[test]
+    fn only_a_sixteen_bit_value_takes_the_second_byte() {
+        let mut calls = 0;
+        let narrow = <u8 as Width>::from_bytes(0x34, || {
+            calls += 1;
+            0x12
+        });
+        assert_eq!((narrow, calls), (0x34, 0));
+        let wide = <u16 as Width>::from_bytes(0x34, || {
+            calls += 1;
+            0x12
+        });
+        assert_eq!((wide, calls), (0x1234, 1));
     }
 
     // @source: wdc-w65c816s#2.4
