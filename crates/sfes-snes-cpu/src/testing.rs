@@ -11,7 +11,7 @@ use crate::{
     registers::{Cpu65816, Flags},
 };
 
-/// One bus cycle as a test states it: its kind, from the VDA and VPA signals, and its
+/// One bus cycle as a test states it: its kind, from the RWB, VDA and VPA signals, and its
 /// address.
 // @source: wdc-w65c816s#2.26
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,6 +24,8 @@ pub(crate) enum Cycle {
     Data(u32),
     /// Neither active: an internal operation.
     Internal(u32),
+    /// RWB low: a write of the value at the address.
+    Write(u32, u8),
 }
 
 /// Memory that reads as zero where nothing was stored, with a record of every cycle.
@@ -44,6 +46,12 @@ impl TestBus {
             self.memory.insert(address & Addr24::MASK, *byte);
         }
     }
+
+    /// The byte at `address`: zero where nothing was stored or written.
+    // @source: adr-0004
+    pub(crate) fn byte(&self, address: u32) -> u8 {
+        self.memory.get(&address).copied().unwrap_or(0)
+    }
 }
 
 impl Bus65816 for TestBus {
@@ -58,12 +66,15 @@ impl Bus65816 for TestBus {
         };
         self.cycles.push(cycle);
         self.pins.push(pins);
-        self.memory.get(&address.get()).copied().unwrap_or(0)
+        self.byte(address.get())
     }
 
     // @source: adr-0004
     fn write(&mut self, address: Addr24, value: u8, pins: Pins) {
-        panic!("unexpected write of {value:#04X} to {address:?} with {pins:?}");
+        assert!(!pins.contains(Pins::RWB), "a write has RWB low");
+        self.cycles.push(Cycle::Write(address.get(), value));
+        self.pins.push(pins);
+        self.memory.insert(address.get(), value);
     }
 
     // @source: adr-0004

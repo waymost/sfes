@@ -17,6 +17,11 @@ pub(crate) trait Width: Copy {
     // @source: wdc-w65c816s#table-5-7-note-1
     fn from_bytes(low: u8, high: impl FnOnce() -> u8) -> Self;
 
+    /// The value as bytes to write, low byte first: the low byte, and the high byte at 16
+    /// bits only (note 1 of Table 5-7).
+    // @source: wdc-w65c816s#table-5-7-note-1
+    fn to_bytes(self) -> (u8, Option<u8>);
+
     /// The low part of a 16-bit register at this width.
     // @source: wdc-w65c816s#2.4
     fn from_register(register: u16) -> Self;
@@ -37,6 +42,11 @@ impl Width for u8 {
     // @source: wdc-w65c816s#table-5-7-note-1
     fn from_bytes(low: u8, _high: impl FnOnce() -> u8) -> Self {
         low
+    }
+
+    // @source: wdc-w65c816s#table-5-7-note-1
+    fn to_bytes(self) -> (u8, Option<u8>) {
+        (self, None)
     }
 
     // @source: wdc-w65c816s#2.4
@@ -61,6 +71,12 @@ impl Width for u16 {
     // @source: wdc-w65c816s#table-5-7-note-1
     fn from_bytes(low: u8, high: impl FnOnce() -> u8) -> Self {
         Self::from_le_bytes([low, high()])
+    }
+
+    // @source: wdc-w65c816s#table-5-7-note-1
+    fn to_bytes(self) -> (u8, Option<u8>) {
+        let [low, high] = self.to_le_bytes();
+        (low, Some(high))
     }
 
     // @source: wdc-w65c816s#2.4
@@ -106,6 +122,13 @@ mod tests {
             0x12
         });
         assert_eq!((wide, calls), (0x1234, 1));
+    }
+
+    // @source: wdc-w65c816s#table-5-7-note-1
+    #[test]
+    fn only_a_sixteen_bit_value_has_a_second_byte_to_write() {
+        assert_eq!(0x34_u8.to_bytes(), (0x34, None));
+        assert_eq!(0x1234_u16.to_bytes(), (0x34, Some(0x12)));
     }
 
     // @source: wdc-w65c816s#2.4

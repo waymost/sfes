@@ -59,6 +59,81 @@ pub(crate) enum Mode {
     StackRelativeIndirectIndexed,
 }
 
+impl Mode {
+    /// The memory address mode, or `None` for immediate data, which is not in memory the
+    /// instruction can write.
+    // @source: wdc-w65c816s#table-5-6
+    const fn address(self) -> Option<Address> {
+        let address = match self {
+            Self::Immediate => return None,
+            Self::Absolute => Address::Absolute,
+            Self::AbsoluteX => Address::AbsoluteX,
+            Self::AbsoluteY => Address::AbsoluteY,
+            Self::AbsoluteLong => Address::AbsoluteLong,
+            Self::AbsoluteLongX => Address::AbsoluteLongX,
+            Self::Direct => Address::Direct,
+            Self::DirectX => Address::DirectX,
+            Self::DirectY => Address::DirectY,
+            Self::DirectIndirect => Address::DirectIndirect,
+            Self::DirectIndexedIndirect => Address::DirectIndexedIndirect,
+            Self::DirectIndirectIndexed => Address::DirectIndirectIndexed,
+            Self::DirectIndirectLong => Address::DirectIndirectLong,
+            Self::DirectIndirectLongIndexed => Address::DirectIndirectLongIndexed,
+            Self::StackRelative => Address::StackRelative,
+            Self::StackRelativeIndirectIndexed => Address::StackRelativeIndirectIndexed,
+        };
+        Some(address)
+    }
+}
+
+/// The addressing modes whose operand is in memory: every [`Mode`] but immediate. The store
+/// instructions take one of these, so that a store to immediate data cannot be written.
+// @source: wdc-w65c816s#table-5-6
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum Address {
+    /// `a`
+    Absolute,
+    /// `a,x`
+    AbsoluteX,
+    /// `a,y`
+    AbsoluteY,
+    /// `al`
+    AbsoluteLong,
+    /// `al,x`
+    AbsoluteLongX,
+    /// `d`
+    Direct,
+    /// `d,x`
+    DirectX,
+    /// `d,y`
+    DirectY,
+    /// `(d)`
+    DirectIndirect,
+    /// `(d,x)`
+    DirectIndexedIndirect,
+    /// `(d),y`
+    DirectIndirectIndexed,
+    /// `[d]`
+    DirectIndirectLong,
+    /// `[d],y`
+    DirectIndirectLongIndexed,
+    /// `d,s`
+    StackRelative,
+    /// `(d,s),y`
+    StackRelativeIndirectIndexed,
+}
+
+/// Whether the instruction reads or writes its operand. Only the optional indexing cycle of
+/// note 4 depends on it: a write always spends it.
+// @source: wdc-w65c816s#table-5-7-note-4
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Access {
+    /// The data cycles read.
+    Read,
+    /// The data cycles write.
+    Write,
+}
+
 /// Where a data operand is: the address of its low byte and, for 16-bit data, of its high
 /// byte.
 // @source: wdc-w65c816s#3.5
@@ -105,25 +180,48 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7
     // @source: wdc-w65c816s#table-5-7-note-1
     pub(crate) fn read_operand<W: Width>(&mut self, bus: &mut impl Bus65816, mode: Mode) -> W {
-        let operand = match mode {
-            Mode::Immediate => return self.immediate(bus),
-            Mode::Absolute => self.absolute(bus),
-            Mode::AbsoluteX => self.absolute_indexed(bus, self.x),
-            Mode::AbsoluteY => self.absolute_indexed(bus, self.y),
-            Mode::AbsoluteLong => self.absolute_long(bus),
-            Mode::AbsoluteLongX => self.absolute_long_x(bus),
-            Mode::Direct => self.direct(bus),
-            Mode::DirectX => self.direct_indexed(bus, self.x),
-            Mode::DirectY => self.direct_indexed(bus, self.y),
-            Mode::DirectIndirect => self.direct_indirect(bus),
-            Mode::DirectIndexedIndirect => self.direct_indexed_indirect(bus),
-            Mode::DirectIndirectIndexed => self.direct_indirect_indexed(bus),
-            Mode::DirectIndirectLong => self.direct_indirect_long(bus),
-            Mode::DirectIndirectLongIndexed => self.direct_indirect_long_indexed(bus),
-            Mode::StackRelative => self.stack_relative(bus),
-            Mode::StackRelativeIndirectIndexed => self.stack_relative_indirect_indexed(bus),
+        let Some(address) = mode.address() else {
+            return self.immediate(bus);
         };
+        let operand = self.operand(bus, address, Access::Read);
         self.read_data(bus, operand)
+    }
+
+    /// Runs the cycles of `address` after the opcode fetch and writes `value` at width `W`:
+    /// the same rows as the reads, with RWB low in the data cycles.
+    // @source: wdc-w65c816s#table-5-7
+    // @source: wdc-w65c816s#table-5-7-note-1
+    pub(crate) fn write_operand<W: Width>(
+        &mut self,
+        bus: &mut impl Bus65816,
+        address: Address,
+        value: W,
+    ) {
+        let operand = self.operand(bus, address, Access::Write);
+        self.write_data(bus, operand, value);
+    }
+
+    /// The cycles of `address` from cycle 2 up to the first data cycle, and where the data
+    /// is.
+    // @source: wdc-w65c816s#table-5-7
+    fn operand(&mut self, bus: &mut impl Bus65816, address: Address, access: Access) -> Operand {
+        match address {
+            Address::Absolute => self.absolute(bus),
+            Address::AbsoluteX => self.absolute_indexed(bus, self.x, access),
+            Address::AbsoluteY => self.absolute_indexed(bus, self.y, access),
+            Address::AbsoluteLong => self.absolute_long(bus),
+            Address::AbsoluteLongX => self.absolute_long_x(bus),
+            Address::Direct => self.direct(bus),
+            Address::DirectX => self.direct_indexed(bus, self.x),
+            Address::DirectY => self.direct_indexed(bus, self.y),
+            Address::DirectIndirect => self.direct_indirect(bus),
+            Address::DirectIndexedIndirect => self.direct_indexed_indirect(bus),
+            Address::DirectIndirectIndexed => self.direct_indirect_indexed(bus, access),
+            Address::DirectIndirectLong => self.direct_indirect_long(bus),
+            Address::DirectIndirectLongIndexed => self.direct_indirect_long_indexed(bus),
+            Address::StackRelative => self.stack_relative(bus),
+            Address::StackRelativeIndirectIndexed => self.stack_relative_indirect_indexed(bus),
+        }
     }
 
     /// The data cycles that end a read instruction: "Data Low" and, for 16-bit data, "Data
@@ -136,10 +234,31 @@ impl Cpu65816 {
         W::from_bytes(low, || self.read_byte(bus, high))
     }
 
+    /// The data cycles that end a write instruction: "Data Low" and, for 16-bit data, "Data
+    /// High", in that order, each with VDA active and RWB low.
+    // @source: wdc-w65c816s#table-5-7-1a
+    // @source: wdc-w65c816s#table-5-7-note-1
+    // @source: wdc-w65c816s#2.23
+    fn write_data<W: Width>(&self, bus: &mut impl Bus65816, operand: Operand, value: W) {
+        let Operand { low, high } = operand;
+        let (low_byte, high_byte) = value.to_bytes();
+        self.write_byte(bus, low, low_byte);
+        if let Some(high_byte) = high_byte {
+            self.write_byte(bus, high, high_byte);
+        }
+    }
+
     /// One data-address cycle: a read with VDA active and VPA inactive.
     // @source: wdc-w65c816s#2.26
     fn read_byte(&self, bus: &mut impl Bus65816, address: Addr24) -> u8 {
         bus.read(address, Pins::VDA | Pins::RWB | self.status_pins())
+    }
+
+    /// One data-address write cycle: VDA active, VPA inactive, RWB low.
+    // @source: wdc-w65c816s#2.26
+    // @source: wdc-w65c816s#2.23
+    fn write_byte(&self, bus: &mut impl Bus65816, address: Addr24, value: u8) {
+        bus.write(address, value, Pins::VDA | self.status_pins());
     }
 
     /// One program-address cycle: reads the operand byte at PBR,PC with VPA active and VDA
@@ -178,18 +297,25 @@ impl Cpu65816 {
     }
 
     /// The optional cycle of the indexed rows (cycle 3a of rows 6a and 7, cycle 4a of row
-    /// 13), then the indexed address. The cycle is added when the index crosses a page
-    /// boundary or the index registers are 16 bits wide (note 4, for a read). Only the low
-    /// byte has been added when it runs, so its address is the base with the index's low
-    /// byte added to its low byte and no carry: "DBR,AAH,AAL+XL".
+    /// 13), then the indexed address. Note 4 adds the cycle "for indexing across page
+    /// boundaries, or write, or X=0": always for a write, and for a read when the index
+    /// crosses a page boundary or the index registers are 16 bits wide. Only the low byte has
+    /// been added when it runs, so its address is the base with the index's low byte added to
+    /// its low byte and no carry: "DBR,AAH,AAL+XL".
     // @source: wdc-w65c816s#table-5-7-6a
     // @source: wdc-w65c816s#table-5-7-note-4
     // @source: wdc-w65c816s#7.5
-    fn index_data_address(&self, bus: &mut impl Bus65816, base: u16, index: u16) -> Addr24 {
+    fn index_data_address(
+        &self,
+        bus: &mut impl Bus65816,
+        base: u16,
+        index: u16,
+        access: Access,
+    ) -> Addr24 {
         let [base_low, base_high] = base.to_le_bytes();
         let [index_low, _] = index.to_le_bytes();
         let (low, page_crossed) = base_low.overflowing_add(index_low);
-        if page_crossed || !self.p.contains(Flags::X) {
+        if access == Access::Write || page_crossed || !self.p.contains(Flags::X) {
             let partial = u16::from_le_bytes([low, base_high]);
             self.internal(bus, Addr24::from_bank_offset(self.dbr, partial));
         }

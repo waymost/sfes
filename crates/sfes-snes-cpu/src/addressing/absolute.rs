@@ -8,7 +8,7 @@
 use sfes_api::Addr24;
 
 use crate::{
-    addressing::{Operand, indexed},
+    addressing::{Access, Operand, indexed},
     bus::Bus65816,
     registers::Cpu65816,
 };
@@ -23,14 +23,19 @@ impl Cpu65816 {
     }
 
     /// Rows 6a (`a,x`) and 7 (`a,y`), cycles 2 to 3a: fetches "AAL" and "AAH", then runs the
-    /// optional internal cycle of note 4. The data is at DBR,AA plus the index register, a
-    /// sum that carries into the bank.
+    /// optional internal cycle of note 4, which a write always spends. The data is at DBR,AA
+    /// plus the index register, a sum that carries into the bank.
     // @source: wdc-w65c816s#table-5-7-6a
     // @source: wdc-w65c816s#table-5-7-7
     // @source: wdc-w65c816s#7.3
-    pub(super) fn absolute_indexed(&mut self, bus: &mut impl Bus65816, index: u16) -> Operand {
+    pub(super) fn absolute_indexed(
+        &mut self,
+        bus: &mut impl Bus65816,
+        index: u16,
+        access: Access,
+    ) -> Operand {
         let base = self.fetch_address(bus);
-        Operand::spanning_banks(self.index_data_address(bus, base, index))
+        Operand::spanning_banks(self.index_data_address(bus, base, index, access))
     }
 
     /// Row 4a, cycles 2 to 4: fetches "AAL", "AAH" and the bank "AAB". The data is at AAB,AA.

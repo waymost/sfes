@@ -16,7 +16,7 @@
 use sfes_api::Addr24;
 
 use crate::{
-    addressing::{Operand, indexed},
+    addressing::{Access, Operand, indexed},
     bus::Bus65816,
     registers::Cpu65816,
 };
@@ -63,14 +63,18 @@ impl Cpu65816 {
     }
 
     /// Row 13, cycles 2 to 4a: the offset, the optional cycle, the pointer at 0,D+DO, and
-    /// the optional internal cycle of note 4. The data is at DBR,AA plus Y, a sum that
-    /// carries into the bank.
+    /// the optional internal cycle of note 4, which a write always spends. The data is at
+    /// DBR,AA plus Y, a sum that carries into the bank.
     // @source: wdc-w65c816s#table-5-7-13
     // @source: wdc-w65c816s#3.5.13
-    pub(super) fn direct_indirect_indexed(&mut self, bus: &mut impl Bus65816) -> Operand {
+    pub(super) fn direct_indirect_indexed(
+        &mut self,
+        bus: &mut impl Bus65816,
+        access: Access,
+    ) -> Operand {
         let offset = self.fetch_direct_offset(bus);
         let pointer = self.read_pointer(bus, self.direct_address(offset, 0));
-        Operand::spanning_banks(self.index_data_address(bus, pointer, self.y))
+        Operand::spanning_banks(self.index_data_address(bus, pointer, self.y, access))
     }
 
     /// Row 15, cycles 2 to 5: the offset, the optional cycle, and the 24-bit pointer "AAL",
