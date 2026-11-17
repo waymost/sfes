@@ -4,3 +4,4 @@
 //! During bring-up the families arrive with issues #33 to #42.
 
 mod load_store;
+mod logic;

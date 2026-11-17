@@ -133,6 +133,35 @@ The stores write a register, or zero for STZ, to memory and change no flag (Tabl
 
 An 8-bit STA writes A and leaves memory above it alone; a 16-bit one writes C. Table 5-5's STA row has no `a,y` entry; the opcode matrix (Table 5-4) and row 7 of Table 5-7 both list STA `a,y` as 99, and the vectors exercise it. All 24 opcodes pass every test of their vector files in both modes, the emulation-mode stack-relative ones included under ADR 0005.
 
+## Logic and bit tests: ORA, AND, EOR, BIT, TSB, TRB
+
+All six work at the accumulator's width, set by the M flag. They are in [`instructions/logic.rs`](../../crates/sfes-snes-cpu/src/instructions/logic.rs).
+
+| Instruction | Operation (Table 5-5) | Flags | Modes (opcodes) |
+| --- | --- | --- | --- |
+| ORA | A V M → A | N Z | `#` 09, `a` 0D, `al` 0F, `d` 05, `(d)` 12, `[d]` 07, `a,x` 1D, `al,x` 1F, `a,y` 19, `d,x` 15, `(d,x)` 01, `(d),y` 11, `[d],y` 17, `d,s` 03, `(d,s),y` 13 |
+| AND | A ^ M → A | N Z | the same modes at 2x: 29, 2D, 2F, 25, 32, 27, 3D, 3F, 39, 35, 21, 31, 37, 23, 33 |
+| EOR | A xv M → A | N Z | the same modes at 4x: 49, 4D, 4F, 45, 52, 47, 5D, 5F, 59, 55, 41, 51, 57, 43, 53 |
+| BIT | A ^ M, result discarded | N V Z; Z only for `#` | `#` 89, `a` 2C, `d` 24, `a,x` 3C, `d,x` 34 |
+| TSB | A V M → M | Z | `a` 0C, `d` 04 |
+| TRB | blank in Table 5-5; the manual: M AND NOT A → M | Z | `a` 1C, `d` 14 |
+
+ORA, AND and EOR set N and Z from the result; an 8-bit result leaves B alone. BIT and the two test-and-change instructions set Z from A AND M without keeping it. BIT's N and V take the top two bits of the data itself (bits 7 and 6, or 15 and 14), not of the AND, and immediate BIT leaves them alone (Table 5-5 note 2; the manual's BIT entry).
+
+### Read-modify-write
+
+TSB and TRB are the first read-modify-write instructions; the shifts and increments of #37 use the same path, `modify_operand` in [`addressing/modify.rs`](../../crates/sfes-snes-cpu/src/addressing/modify.rs). After the addressing cycles (with the note-4 indexing cycle always spent, as for a write) come the data cycles of rows 1d and 10b:
+
+1. read the low byte, then the high byte for 16-bit data;
+2. one modify cycle at the address of the last byte read;
+3. write the high byte (16-bit data only), then the low byte.
+
+MLB is active on all of these cycles and on no other, which is the "last three or five cycles" of datasheet 2.19. In native mode the modify cycle is internal. In emulation mode RWB is low in it (note 17), and the unmodified byte is written back before the result.
+
+Table 5-7 prints the modify cycle at AA+1 for both widths. With 8-bit data the vectors put it at AA, the byte that was read, and they are the only source for the value written in emulation mode. [ADR 0006](../adr/0006-read-modify-write-modify-cycle.md) records both.
+
+All 54 opcodes pass every test of their vector files in both modes.
+
 ## Testing against the vectors
 
 `sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
