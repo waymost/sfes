@@ -11,6 +11,7 @@
 mod absolute;
 mod direct;
 mod immediate;
+mod modify;
 mod stack;
 
 use sfes_api::Addr24;
