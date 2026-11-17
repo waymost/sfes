@@ -3,5 +3,6 @@
 //!
 //! During bring-up the families arrive with issues #33 to #42.
 
+mod arithmetic;
 mod load_store;
 mod logic;
