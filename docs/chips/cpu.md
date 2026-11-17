@@ -162,6 +162,26 @@ Table 5-7 prints the modify cycle at AA+1 for both widths. With 8-bit data the v
 
 All 54 opcodes pass every test of their vector files in both modes.
 
+## Arithmetic and compares: ADC, SBC, CMP, CPX, CPY
+
+They are in [`instructions/arithmetic.rs`](../../crates/sfes-snes-cpu/src/instructions/arithmetic.rs).
+
+| Instruction | Operation (Table 5-5) | Width from | Flags | Modes (opcodes) |
+| --- | --- | --- | --- | --- |
+| ADC | A+M+C → A | M flag | N V Z C | the 15 modes of ORA at 6x: `#` 69, `a` 6D, `al` 6F, `d` 65, `(d)` 72, `[d]` 67, `a,x` 7D, `al,x` 7F, `a,y` 79, `d,x` 75, `(d,x)` 61, `(d),y` 71, `[d],y` 77, `d,s` 63, `(d,s),y` 73 |
+| SBC | A – M – (C) → A | M flag | N V Z C | the same modes at Ex: E9, ED, EF, E5, F2, E7, FD, FF, F9, F5, E1, F1, F7, E3, F3 |
+| CMP | A-M | M flag | N Z C | the same modes at Cx: C9, CD, CF, C5, D2, C7, DD, DF, D9, D5, C1, D1, D7, C3, D3 |
+| CPX | X-M | X flag | N Z C | `#` E0, `a` EC, `d` E4 |
+| CPY | Y-M | X flag | N Z C | `#` C0, `a` CC, `d` C4 |
+
+**Binary mode.** ADC adds the data and the carry. SBC subtracts the data and one more when the carry is clear, which is the same as adding the complement of the data and the carry; C is set when no borrow was needed. V is signed overflow: the two operands of the addition have the same sign and the result does not.
+
+**Compares** subtract without the carry, always in binary, and keep only N, Z and C: C is set when the register is greater than or equal to the data. V and the register are unchanged.
+
+**Decimal mode** (D set) changes ADC and SBC only, and adds no cycles (Table 7-1). The arithmetic is done one 4-bit digit at a time from the lowest: an ADC digit sum above 9 has 6 added and carries; an SBC digit difference below 0 has 6 subtracted and borrows. N, Z and C mean what they mean in binary mode. The documents disagree on V: the datasheet calls it valid in decimal mode, the manual says it is not correct, and neither defines it. The core computes it as in binary mode on the result before the top digit is adjusted, which matches every vector; the same steps applied to hex digits A to F match the vectors too. [ADR 0007](../adr/0007-decimal-mode-arithmetic.md) records the rules and the evidence.
+
+All 51 opcodes pass every test of their vector files in both modes, including the 300,090 decimal-mode ADC and SBC tests.
+
 ## Testing against the vectors
 
 `sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
