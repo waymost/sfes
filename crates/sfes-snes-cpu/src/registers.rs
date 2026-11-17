@@ -148,13 +148,6 @@ impl Cpu65816 {
 
     /// The accumulator at width `W`: A for `u8`, C for `u16`.
     // @source: wdc-w65c816s#2.4
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "bring-up: first used by the store instructions (#34)"
-        )
-    )]
     pub(crate) fn accumulator<W: Width>(&self) -> W {
         W::from_register(self.a)
     }

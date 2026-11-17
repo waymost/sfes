@@ -1,8 +1,8 @@
 // @source: wdc-w65c816s#table-5-5
-//! Loads: LDA, LDX and LDY. (The stores arrive with #34.)
+//! Loads (LDA, LDX, LDY) and stores (STA, STX, STY, STZ). The stores change no flag.
 
 use crate::{
-    addressing::Mode,
+    addressing::{Address, Mode},
     bus::Bus65816,
     registers::{Cpu65816, Flags},
     width::Width,
@@ -64,10 +64,59 @@ impl Cpu65816 {
     }
 }
 
+impl Cpu65816 {
+    /// STA: stores the accumulator, A when the M flag is set and C otherwise.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.4
+    pub(crate) fn sta(&mut self, bus: &mut impl Bus65816, address: Address) {
+        if self.p.contains(Flags::M) {
+            self.write_operand(bus, address, self.accumulator::<u8>());
+        } else {
+            self.write_operand(bus, address, self.accumulator::<u16>());
+        }
+    }
+
+    /// STX: stores X, 8 bits wide when the X flag is set and 16 bits otherwise.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.7
+    pub(crate) fn stx(&mut self, bus: &mut impl Bus65816, address: Address) {
+        self.store_index(bus, address, self.x);
+    }
+
+    /// STY: stores Y, 8 bits wide when the X flag is set and 16 bits otherwise.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.7
+    pub(crate) fn sty(&mut self, bus: &mut impl Bus65816, address: Address) {
+        self.store_index(bus, address, self.y);
+    }
+
+    /// STZ: stores zero, 8 bits wide when the M flag is set and 16 bits otherwise.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.4
+    pub(crate) fn stz(&mut self, bus: &mut impl Bus65816, address: Address) {
+        if self.p.contains(Flags::M) {
+            self.write_operand(bus, address, 0_u8);
+        } else {
+            self.write_operand(bus, address, 0_u16);
+        }
+    }
+
+    /// Stores an index register's value at the width the X flag selects.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.7
+    fn store_index(&mut self, bus: &mut impl Bus65816, address: Address, register: u16) {
+        if self.p.contains(Flags::X) {
+            self.write_operand(bus, address, <u8 as Width>::from_register(register));
+        } else {
+            self.write_operand(bus, address, register);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{native, run};
+    use crate::testing::{Cycle, emulation, native, run};
 
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-w65c816s#2.4
@@ -119,5 +168,80 @@ mod tests {
         run(&mut cpu, &[0xA0, 0x01], &[]);
         assert_eq!((cpu.y, cpu.pc), (0x0001, 0x8004));
         assert_eq!(cpu.p, Flags::X);
+    }
+
+    // @source: wdc-w65c816s#table-5-7-1a
+    // @source: wdc-w65c816s#2.4
+    #[test]
+    fn sta_writes_a_or_c_low_byte_first_and_changes_no_flag() {
+        let mut cpu = native(Flags::M | Flags::Z);
+        cpu.a = 0x1234;
+        cpu.dbr = 0x7E;
+        let bus = run(&mut cpu, &[0x8D, 0x00, 0x20], &[]);
+        assert_eq!(bus.cycles[3..], [Cycle::Write(0x7E_2000, 0x34)]);
+        assert_eq!(cpu.p, Flags::M | Flags::Z);
+
+        let mut cpu = native(Flags::empty());
+        cpu.a = 0x1234;
+        cpu.dbr = 0x7E;
+        let bus = run(&mut cpu, &[0x8D, 0xFF, 0xFF], &[]);
+        assert_eq!(
+            bus.cycles[3..],
+            [Cycle::Write(0x7E_FFFF, 0x34), Cycle::Write(0x7F_0000, 0x12)]
+        );
+    }
+
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.7
+    #[test]
+    fn stx_and_sty_take_their_width_from_the_x_flag() {
+        let mut cpu = native(Flags::X);
+        cpu.x = 0x0056;
+        let bus = run(&mut cpu, &[0x86, 0x10], &[]);
+        assert_eq!(bus.cycles[2..], [Cycle::Write(0x00_0010, 0x56)]);
+
+        let mut cpu = native(Flags::M);
+        cpu.y = 0xABCD;
+        let bus = run(&mut cpu, &[0x84, 0x10], &[]);
+        assert_eq!(
+            bus.cycles[2..],
+            [Cycle::Write(0x00_0010, 0xCD), Cycle::Write(0x00_0011, 0xAB)]
+        );
+    }
+
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.4
+    #[test]
+    fn stz_writes_zero_at_the_accumulator_width() {
+        let mut cpu = emulation();
+        cpu.a = 0xFFFF;
+        let bus = run(&mut cpu, &[0x64, 0x10], &[(0x00_0010, &[0xFF, 0xFF])]);
+        assert_eq!(bus.cycles[2..], [Cycle::Write(0x00_0010, 0x00)]);
+        assert_eq!(bus.byte(0x00_0011), 0xFF);
+    }
+
+    // @source: wdc-w65c816s#table-5-7-6a
+    // @source: wdc-w65c816s#table-5-7-note-4
+    #[test]
+    fn an_indexed_store_always_spends_the_indexing_cycle() {
+        // 8-bit index registers and no page crossing: a read would skip the cycle.
+        let mut cpu = native(Flags::M | Flags::X);
+        cpu.dbr = 0x34;
+        cpu.x = 0x01;
+        cpu.a = 0x99;
+        let bus = run(&mut cpu, &[0x9D, 0x00, 0x56], &[]);
+        assert_eq!(
+            bus.cycles[3..],
+            [Cycle::Internal(0x34_5601), Cycle::Write(0x34_5601, 0x99)]
+        );
+
+        let mut cpu = native(Flags::M | Flags::X);
+        cpu.y = 0x01;
+        cpu.a = 0x99;
+        let bus = run(&mut cpu, &[0x91, 0x20], &[(0x00_0020, &[0x00, 0x56])]);
+        assert_eq!(
+            bus.cycles[4..],
+            [Cycle::Internal(0x00_5601), Cycle::Write(0x00_5601, 0x99)]
+        );
     }
 }

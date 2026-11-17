@@ -68,7 +68,7 @@ Every instruction starts the same way: a read at PBR,PC with VDA and VPA both ac
 
 ## Addressing modes
 
-An addressing mode is the part of an instruction that finds its operand. The crate has one function per mode, in [`addressing/`](../../crates/sfes-snes-cpu/src/addressing/mod.rs). Each function performs the bus cycles of its row in the datasheet's Table 5-7, from cycle 2 up to the cycle before the data, and returns an `Operand`: the address of the data's low byte and the address of its high byte. `read_operand` then reads one byte for an 8-bit operand, or two for a 16-bit one (note 1 of the table). The modes are the `Mode` enum, named as in Table 5-6.
+An addressing mode is the part of an instruction that finds its operand. The crate has one function per mode, in [`addressing/`](../../crates/sfes-snes-cpu/src/addressing/mod.rs). Each function performs the bus cycles of its row in the datasheet's Table 5-7, from cycle 2 up to the cycle before the data, and returns an `Operand`: the address of the data's low byte and the address of its high byte. `read_operand` then reads one byte for an 8-bit operand, or two for a 16-bit one (note 1 of the table), and `write_operand` writes them, low byte first. The modes are the `Mode` enum, named as in Table 5-6; `Address` is the same list without immediate, so a store to immediate data cannot be written.
 
 Three kinds of cycle appear. In the table below **P** is a program byte (read at PBR,PC with VPA active), **D** a data byte (VDA active) and **I** an internal cycle, where the chip drives an address but no memory is accessed (ADR 0004). Every instruction starts with the opcode fetch, which is not shown.
 
@@ -92,7 +92,7 @@ Three kinds of cycle appear. In the table below **P** is a program byte (read at
 The cycles in parentheses are optional:
 
 - **Direct modes** spend an internal cycle after the offset when the low byte of D is not zero (note 2).
-- **`a,x`, `a,y` and `(d),y`** spend an internal cycle when adding the index crosses a page boundary, or when the index registers are 16 bits wide (note 4, for instructions that read). The chip has added only the low bytes at that point, so the cycle's address is the base address with the index's low byte added to its low byte and no carry (the table's "DBR,AAH,AAL+XL"; datasheet 7.5). `al,x` and `[d],y` have no such cycle.
+- **`a,x`, `a,y` and `(d),y`** spend an internal cycle "for indexing across page boundaries, or write, or X=0" (note 4): a write always spends it, and a read spends it when adding the index crosses a page boundary or the index registers are 16 bits wide. The chip has added only the low bytes at that point, so the cycle's address is the base address with the index's low byte added to its low byte and no carry (the table's "DBR,AAH,AAL+XL"; datasheet 7.5). `al,x` and `[d],y` have no such cycle.
 
 The internal cycles that are not optional repeat the address of the last program byte, except the last one of `(d,s),y`, which repeats the address of the pointer's high byte.
 
@@ -119,6 +119,19 @@ The loads copy memory to a register and set N and Z from the value (Table 5-5: "
 An 8-bit LDA changes only A; the B accumulator keeps its value (2.4). An 8-bit LDX or LDY leaves the register's high byte zero (2.7). N is bit 7 of an 8-bit value and bit 15 of a 16-bit one.
 
 All 25 opcodes pass every test of their vector files in both modes.
+
+## Stores: STA, STX, STY, STZ
+
+The stores write a register, or zero for STZ, to memory and change no flag (Table 5-5: "A → M", "00 → M", flags all unchanged). They use the same Table 5-7 rows as the loads, with RWB low in the data cycles; 16-bit data is written low byte first, as the rows list "Data Low" before "Data High". The only other difference is the indexing cycle of note 4, which a store always spends. They are in [`instructions/load_store.rs`](../../crates/sfes-snes-cpu/src/instructions/load_store.rs).
+
+| Instruction | Width from | Modes (opcodes) |
+| --- | --- | --- |
+| STA | M flag | `a` 8D, `al` 8F, `d` 85, `(d)` 92, `[d]` 87, `a,x` 9D, `al,x` 9F, `a,y` 99, `d,x` 95, `(d,x)` 81, `(d),y` 91, `[d],y` 97, `d,s` 83, `(d,s),y` 93 |
+| STX | X flag | `a` 8E, `d` 86, `d,y` 96 |
+| STY | X flag | `a` 8C, `d` 84, `d,x` 94 |
+| STZ | M flag | `a` 9C, `d` 64, `a,x` 9E, `d,x` 74 |
+
+An 8-bit STA writes A and leaves memory above it alone; a 16-bit one writes C. Table 5-5's STA row has no `a,y` entry; the opcode matrix (Table 5-4) and row 7 of Table 5-7 both list STA `a,y` as 99, and the vectors exercise it. All 24 opcodes pass every test of their vector files in both modes, the emulation-mode stack-relative ones included under ADR 0005.
 
 ## Testing against the vectors
 

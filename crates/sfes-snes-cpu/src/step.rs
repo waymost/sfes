@@ -5,7 +5,7 @@
 use sfes_api::Addr24;
 
 use crate::{
-    addressing::Mode,
+    addressing::{Address, Mode},
     bus::{Bus65816, Pending, Pins},
     registers::{Cpu65816, Flags, RunState},
 };
@@ -65,6 +65,30 @@ impl Cpu65816 {
     fn instruction(&mut self, bus: &mut impl Bus65816) {
         let opcode = self.fetch_opcode(bus);
         match opcode {
+            0x64 => self.stz(bus, Address::Direct),
+            0x74 => self.stz(bus, Address::DirectX),
+            0x81 => self.sta(bus, Address::DirectIndexedIndirect),
+            0x83 => self.sta(bus, Address::StackRelative),
+            0x84 => self.sty(bus, Address::Direct),
+            0x85 => self.sta(bus, Address::Direct),
+            0x86 => self.stx(bus, Address::Direct),
+            0x87 => self.sta(bus, Address::DirectIndirectLong),
+            0x8C => self.sty(bus, Address::Absolute),
+            0x8D => self.sta(bus, Address::Absolute),
+            0x8E => self.stx(bus, Address::Absolute),
+            0x8F => self.sta(bus, Address::AbsoluteLong),
+            0x91 => self.sta(bus, Address::DirectIndirectIndexed),
+            0x92 => self.sta(bus, Address::DirectIndirect),
+            0x93 => self.sta(bus, Address::StackRelativeIndirectIndexed),
+            0x94 => self.sty(bus, Address::DirectX),
+            0x95 => self.sta(bus, Address::DirectX),
+            0x96 => self.stx(bus, Address::DirectY),
+            0x97 => self.sta(bus, Address::DirectIndirectLongIndexed),
+            0x99 => self.sta(bus, Address::AbsoluteY),
+            0x9C => self.stz(bus, Address::Absolute),
+            0x9D => self.sta(bus, Address::AbsoluteX),
+            0x9E => self.stz(bus, Address::AbsoluteX),
+            0x9F => self.sta(bus, Address::AbsoluteLongX),
             0xA0 => self.ldy(bus, Mode::Immediate),
             0xA1 => self.lda(bus, Mode::DirectIndexedIndirect),
             0xA2 => self.ldx(bus, Mode::Immediate),
