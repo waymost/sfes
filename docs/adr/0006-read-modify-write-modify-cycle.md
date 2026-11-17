@@ -36,4 +36,4 @@ The rule lives in `modify_operand` (`crates/sfes-snes-cpu/src/addressing/modify.
 
 - In emulation mode the bus sees the unmodified value written before the result. A memory-mapped register with side effects on writes sees two writes. That matters to `sfes-snes-core` at M2, and is why the value is part of this decision and not left as a detail of the harness.
 - The confidence on the value is medium: it rests on the vectors alone, whose generator is undocumented. A hardware test that shows a different value in the emulation-mode modify cycle reopens this ADR.
-- The indexed rows (6b and 16b) arrive with #37 and are expected to follow the same rule; if their vectors disagree, this ADR is amended there.
+- The indexed rows (6b and 16b) arrived with #37 and follow the same rule: the 48 files of the 24 memory-form opcodes of ASL, LSR, ROL, ROR, INC and DEC (`06` to `fe`, both modes) pass with `modify_operand` unchanged.
