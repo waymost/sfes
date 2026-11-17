@@ -150,7 +150,7 @@ ORA, AND and EOR set N and Z from the result; an 8-bit result leaves B alone. BI
 
 ### Read-modify-write
 
-TSB and TRB are the first read-modify-write instructions; the shifts and increments of #37 use the same path, `modify_operand` in [`addressing/modify.rs`](../../crates/sfes-snes-cpu/src/addressing/modify.rs). After the addressing cycles (with the note-4 indexing cycle always spent, as for a write) come the data cycles of rows 1d and 10b:
+TSB, TRB and the memory forms of the shifts, rotates, increments and decrements share one path, `modify_operand` in [`addressing/modify.rs`](../../crates/sfes-snes-cpu/src/addressing/modify.rs). After the addressing cycles (with the note-4 indexing cycle always spent, as for a write) come the data cycles of rows 1d, 6b, 10b and 16b:
 
 1. read the low byte, then the high byte for 16-bit data;
 2. one modify cycle at the address of the last byte read;
@@ -181,6 +181,25 @@ They are in [`instructions/arithmetic.rs`](../../crates/sfes-snes-cpu/src/instru
 **Decimal mode** (D set) changes ADC and SBC only, and adds no cycles (Table 7-1). The arithmetic is done one 4-bit digit at a time from the lowest: an ADC digit sum above 9 has 6 added and carries; an SBC digit difference below 0 has 6 subtracted and borrows. N, Z and C mean what they mean in binary mode. The documents disagree on V: the datasheet calls it valid in decimal mode, the manual says it is not correct, and neither defines it. The core computes it as in binary mode on the result before the top digit is adjusted, which matches every vector; the same steps applied to hex digits A to F match the vectors too. [ADR 0007](../adr/0007-decimal-mode-arithmetic.md) records the rules and the evidence.
 
 All 51 opcodes pass every test of their vector files in both modes, including the 300,090 decimal-mode ADC and SBC tests.
+
+## Shifts, rotates, increments: ASL, LSR, ROL, ROR, INC, DEC, INX, INY, DEX, DEY
+
+They are in [`instructions/shift.rs`](../../crates/sfes-snes-cpu/src/instructions/shift.rs). One `Modify` enum holds the six operations on a value; the instruction picks where the value lives.
+
+| Instruction | Operation | Flags | Accumulator | `d` | `a` | `d,x` | `a,x` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ASL | shift left, 0 into bit 0, top bit to C | N Z C | 0A | 06 | 0E | 16 | 1E |
+| LSR | shift right, 0 into the top bit, bit 0 to C | N (always 0) Z C | 4A | 46 | 4E | 56 | 5E |
+| ROL | rotate left through C | N Z C | 2A | 26 | 2E | 36 | 3E |
+| ROR | rotate right through C | N Z C | 6A | 66 | 6E | 76 | 7E |
+| INC | add one | N Z | 1A | E6 | EE | F6 | FE |
+| DEC | subtract one | N Z | 3A | C6 | CE | D6 | DE |
+
+The "top bit" is bit 7 or bit 15 by the M flag. The accumulator forms change A or C, keeping B in 8-bit mode, and take two cycles: the opcode and one internal cycle at PBR,PC+1 (row 8). The memory forms are read-modify-write (above), so their `a,x` form always spends the indexing cycle (row 6b).
+
+INX, INY, DEX and DEY (E8, C8, CA, 88) add or subtract one at the width the X flag selects and set N and Z; an 8-bit result leaves the register's high byte zero. They are implied instructions of two cycles (row 19a). Table 5-5 prints DEX's operation as "X-1 → A"; the destination is X, as the tutorial (6.1.1.3) says and the vectors confirm.
+
+All 34 opcodes pass every test of their vector files in both modes.
 
 ## Testing against the vectors
 

@@ -289,6 +289,15 @@ impl Cpu65816 {
         bus.idle(address, Pins::RWB | self.status_pins());
     }
 
+    /// The internal cycle of the one-byte accumulator and implied rows (cycle 2 of rows 8 and
+    /// 19a), at "PBR,PC+1": the address after the opcode, which the program counter already
+    /// holds.
+    // @source: wdc-w65c816s#table-5-7-8
+    // @source: wdc-w65c816s#table-5-7-19a
+    pub(crate) fn internal_at_program_counter(&self, bus: &mut impl Bus65816) {
+        self.internal(bus, self.program_address());
+    }
+
     /// An internal-operation cycle at the address of the last program byte fetched. Table
     /// 5-7 prints it as "PBR,PC+1" in the two-byte rows, counting from the opcode's address.
     // @source: wdc-w65c816s#table-5-7-10a

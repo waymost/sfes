@@ -6,3 +6,6 @@
 mod arithmetic;
 mod load_store;
 mod logic;
+mod shift;
+
+pub(crate) use shift::Modify;
