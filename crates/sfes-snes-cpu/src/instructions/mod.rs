@@ -8,6 +8,7 @@ mod flow;
 mod load_store;
 mod logic;
 mod shift;
+mod stack;
 
 pub(crate) use flow::Condition;
 pub(crate) use shift::Modify;
