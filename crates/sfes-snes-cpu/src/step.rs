@@ -536,4 +536,73 @@ mod tests {
             assert_eq!((cpu.pbr, cpu.pc, cpu.run), (0, 0xDBDB, RunState::Running));
         }
     }
+
+    /// Bytes from a fixed xorshift generator, so a test's memory is arbitrary but the same on
+    /// every run.
+    // @source: adr-0004
+    fn arbitrary_bytes(seed: u64, count: usize) -> Vec<u8> {
+        let mut state = seed;
+        (0..count)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state.to_le_bytes()[0]
+            })
+            .collect::<Vec<_>>()
+    }
+
+    /// Runs `steps` steps on `bus`, resetting the processor whenever it halts so that it
+    /// keeps executing.
+    // @source: adr-0004
+    // @source: adr-0011
+    fn drive(cpu: &mut Cpu65816, bus: &mut crate::testing::TestBus, steps: usize) {
+        for _ in 0..steps {
+            if cpu.run == RunState::Running {
+                cpu.step(bus);
+            } else {
+                cpu.reset(bus);
+            }
+        }
+    }
+
+    /// A bus whose banks `00`, `12` and `7E` hold arbitrary bytes from `seed`.
+    // @source: adr-0004
+    fn arbitrary_bus(seed: u64) -> crate::testing::TestBus {
+        let mut bus = crate::testing::TestBus::default();
+        for bank in [0x00_u8, 0x12, 0x7E] {
+            let bytes = arbitrary_bytes(seed ^ u64::from(bank), 0x1_0000);
+            bus.store(u32::from(bank) << 16, &bytes);
+        }
+        bus
+    }
+
+    /// A clone is the snapshot (FND-01): a cloned processor stepped on an identical bus makes
+    /// the same bus calls, with the same addresses, signals and written values, and ends in
+    /// the same state as the original. A step's only inputs are the processor's fields and
+    /// the bus (ADR 0004).
+    // @source: adr-0004
+    #[test]
+    fn a_clone_runs_exactly_like_its_original() {
+        // Compiles only if the processor is `Clone + Send`.
+        // @source: adr-0004
+        const fn clone_and_send<T: Clone + Send>() {}
+        clone_and_send::<Cpu65816>();
+
+        for (seed, emulation) in [(0x5EED_0001, true), (0x5EED_0002, false)] {
+            // Run a while first, so the clone is taken from an arbitrary state.
+            let mut original = cpu_at(0x12, 0x8000);
+            original.set_emulation(emulation);
+            drive(&mut original, &mut arbitrary_bus(seed), 1_000);
+
+            let mut clone = original.clone();
+            let mut original_bus = arbitrary_bus(seed.rotate_left(32));
+            let mut clone_bus = arbitrary_bus(seed.rotate_left(32));
+            drive(&mut original, &mut original_bus, 20_000);
+            drive(&mut clone, &mut clone_bus, 20_000);
+            assert_eq!(clone_bus.cycles, original_bus.cycles);
+            assert_eq!(clone_bus.pins, original_bus.pins);
+            assert_eq!(clone, original);
+        }
+    }
 }

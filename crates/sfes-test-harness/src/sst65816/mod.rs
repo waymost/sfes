@@ -26,40 +26,6 @@ pub use crate::sst65816::{
 };
 use crate::vectors::Config;
 
-/// The opcodes the core implements so far. Only their files are run. Each instruction-family
-/// issue adds its opcodes; the list is deleted with the bring-up scaffolding (#43), after
-/// which every file runs.
-pub const IMPLEMENTED: &[u8] = &[
-    // Interrupts and run states (#42).
-    0x00, 0x02, 0x40, 0xCB, 0xDB, // Block moves (#41).
-    0x44, 0x54, // Transfers, flags and mode (#40).
-    0x18, 0x1B, 0x38, 0x3B, 0x42, 0x58, 0x5B, 0x78, 0x7B, 0x8A, 0x98, 0x9A, 0x9B, 0xA8, 0xAA, 0xB8,
-    0xBA, 0xBB, 0xC2, 0xD8, 0xE2, 0xEA, 0xEB, 0xF8, 0xFB,
-    // Pushes, pulls, PEA, PEI and PER (#39).
-    0x08, 0x0B, 0x28, 0x2B, 0x48, 0x4B, 0x5A, 0x62, 0x68, 0x7A, 0x8B, 0xAB, 0xD4, 0xDA, 0xF4, 0xFA,
-    // Branches, jumps, calls and returns (#38).
-    0x10, 0x20, 0x22, 0x30, 0x4C, 0x50, 0x5C, 0x60, 0x6B, 0x6C, 0x70, 0x7C, 0x80, 0x82, 0x90, 0xB0,
-    0xD0, 0xDC, 0xF0, 0xFC,
-    // ASL, LSR, ROL, ROR, INC, DEC, INX, INY, DEX and DEY (#37).
-    0x06, 0x0A, 0x0E, 0x16, 0x1A, 0x1E, 0x26, 0x2A, 0x2E, 0x36, 0x3A, 0x3E, 0x46, 0x4A, 0x4E, 0x56,
-    0x5E, 0x66, 0x6A, 0x6E, 0x76, 0x7E, 0x88, 0xC6, 0xC8, 0xCA, 0xCE, 0xD6, 0xDE, 0xE6, 0xE8, 0xEE,
-    0xF6, 0xFE, // ADC, SBC, CMP, CPX and CPY in every addressing mode (#36).
-    0x61, 0x63, 0x65, 0x67, 0x69, 0x6D, 0x6F, 0x71, 0x72, 0x73, 0x75, 0x77, 0x79, 0x7D, 0x7F, 0xC0,
-    0xC1, 0xC3, 0xC4, 0xC5, 0xC7, 0xC9, 0xCC, 0xCD, 0xCF, 0xD1, 0xD2, 0xD3, 0xD5, 0xD7, 0xD9, 0xDD,
-    0xDF, 0xE0, 0xE1, 0xE3, 0xE4, 0xE5, 0xE7, 0xE9, 0xEC, 0xED, 0xEF, 0xF1, 0xF2, 0xF3, 0xF5, 0xF7,
-    0xF9, 0xFD, 0xFF, // ORA, AND, EOR, BIT, TSB and TRB in every addressing mode (#35).
-    0x01, 0x03, 0x04, 0x05, 0x07, 0x09, 0x0C, 0x0D, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x19,
-    0x1C, 0x1D, 0x1F, 0x21, 0x23, 0x24, 0x25, 0x27, 0x29, 0x2C, 0x2D, 0x2F, 0x31, 0x32, 0x33, 0x34,
-    0x35, 0x37, 0x39, 0x3C, 0x3D, 0x3F, 0x41, 0x43, 0x45, 0x47, 0x49, 0x4D, 0x4F, 0x51, 0x52, 0x53,
-    0x55, 0x57, 0x59, 0x5D, 0x5F, 0x89,
-    // STA, STX, STY and STZ in every addressing mode (#34).
-    0x64, 0x74, 0x81, 0x83, 0x84, 0x85, 0x86, 0x87, 0x8C, 0x8D, 0x8E, 0x8F, 0x91, 0x92, 0x93, 0x94,
-    0x95, 0x96, 0x97, 0x99, 0x9C, 0x9D, 0x9E, 0x9F,
-    // LDA, LDX and LDY in every addressing mode (#33).
-    0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA9, 0xAC, 0xAD, 0xAE, 0xAF, 0xB1, 0xB2, 0xB3,
-    0xB4, 0xB5, 0xB6, 0xB7, 0xB9, 0xBC, 0xBD, 0xBE, 0xBF,
-];
-
 /// The set's files, relative to the vector directory.
 const SET_DIRECTORY: &str = "65816/v1";
 
@@ -71,9 +37,9 @@ pub enum SetReport {
         /// Where the set was looked for.
         directory: PathBuf,
     },
-    /// The files of the listed opcodes were run.
+    /// The files were run.
     Ran {
-        /// How many opcodes were listed.
+        /// How many opcodes were run.
         opcodes: usize,
         /// How many tests ran.
         tests: usize,
@@ -103,11 +69,6 @@ impl SetReport {
                 crate::vectors::REQUIRE_VARIABLE,
             ),
             Self::Ran {
-                opcodes: 0,
-                tests: _,
-                failures: _,
-            } => "0 of 256 opcodes are implemented: no 65816 vector file was run.".to_owned(),
-            Self::Ran {
                 opcodes,
                 tests,
                 failures,
@@ -126,14 +87,21 @@ impl SetReport {
     }
 }
 
-/// Runs the native-mode and emulation-mode files of each listed opcode, spread over the
-/// machine's cores. Each file stops at its first failing test.
+/// Runs all 512 files of the set: the native-mode and emulation-mode file of every opcode,
+/// spread over the machine's cores. Each file stops at its first failing test.
 ///
 /// # Errors
 ///
 /// Returns a [`RunError`] when the set is missing and `config.required` is set, or when a
-/// file of a listed opcode cannot be read or parsed.
-pub fn run_set(config: &Config, opcodes: &[u8]) -> Result<SetReport, RunError> {
+/// file cannot be read or parsed.
+pub fn run_set(config: &Config) -> Result<SetReport, RunError> {
+    let opcodes = (0..=u8::MAX).collect::<Vec<_>>();
+    run_opcodes(config, &opcodes)
+}
+
+/// Runs the native-mode and emulation-mode files of each listed opcode, as [`run_set`] does
+/// for all of them.
+fn run_opcodes(config: &Config, opcodes: &[u8]) -> Result<SetReport, RunError> {
     let directory = config.directory.join(SET_DIRECTORY);
     if !directory.is_dir() {
         return if config.required {
@@ -210,7 +178,7 @@ mod tests {
     #[test]
     fn a_missing_set_is_skipped_with_a_message() {
         let directory = env::temp_dir().join("sfes-harness-no-such-directory");
-        let report = run_set(&config(directory, false), &[0xA9]).unwrap();
+        let report = run_opcodes(&config(directory, false), &[0xA9]).unwrap();
         assert!(matches!(report, SetReport::Skipped { .. }));
         assert!(report.passed());
         let summary = report.summary();
@@ -225,28 +193,15 @@ mod tests {
     #[test]
     fn a_missing_set_is_an_error_when_required() {
         let directory = env::temp_dir().join("sfes-harness-no-such-directory");
-        let error = run_set(&config(directory, true), &[]).unwrap_err();
+        let error = run_opcodes(&config(directory, true), &[]).unwrap_err();
         assert!(matches!(error, RunError::Missing { .. }), "{error}");
-    }
-
-    // @source: sst-65816
-    #[test]
-    fn an_empty_opcode_list_runs_nothing_and_says_so() {
-        let directory = empty_set("empty-list");
-        let report = run_set(&config(directory.clone(), true), &[]).unwrap();
-        fs::remove_dir_all(directory).unwrap();
-        assert!(report.passed());
-        assert_eq!(
-            report.summary(),
-            "0 of 256 opcodes are implemented: no 65816 vector file was run."
-        );
     }
 
     // @source: sst-65816
     #[test]
     fn a_listed_opcode_with_no_file_is_an_error() {
         let directory = empty_set("no-file");
-        let result = run_set(&config(directory.clone(), false), &[0xA9]);
+        let result = run_opcodes(&config(directory.clone(), false), &[0xA9]);
         fs::remove_dir_all(directory).unwrap();
         let Err(RunError::Read { path, .. }) = result else {
             panic!("expected a read error, got {result:?}");
@@ -278,14 +233,5 @@ mod tests {
             "1 of 256 opcodes, 10001 tests, 1 failing files.\n\
              a9.n.json: test \"a9 n 1\": register a: expected 0x0001, got 0x0002"
         );
-    }
-
-    // @source: sst-65816
-    #[test]
-    fn the_implemented_list_has_no_duplicates() {
-        let mut opcodes = IMPLEMENTED.to_vec();
-        opcodes.sort_unstable();
-        opcodes.dedup();
-        assert_eq!(opcodes.len(), IMPLEMENTED.len());
     }
 }
