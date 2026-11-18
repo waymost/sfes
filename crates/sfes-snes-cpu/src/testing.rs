@@ -117,11 +117,24 @@ pub(crate) fn emulation() -> Cpu65816 {
 /// one step, and returns the bus with its record.
 // @source: adr-0004
 pub(crate) fn run(cpu: &mut Cpu65816, program: &[u8], memory: &[(u32, &[u8])]) -> TestBus {
+    run_steps(cpu, program, memory, 1)
+}
+
+/// As [`run`], but runs `steps` steps: a block move takes one per byte (ADR 0004).
+// @source: adr-0004
+pub(crate) fn run_steps(
+    cpu: &mut Cpu65816,
+    program: &[u8],
+    memory: &[(u32, &[u8])],
+    steps: usize,
+) -> TestBus {
     let mut bus = TestBus::default();
     bus.store(cpu.program_address().get(), program);
     for (address, bytes) in memory {
         bus.store(*address, bytes);
     }
-    cpu.step(&mut bus);
+    for _ in 0..steps {
+        cpu.step(&mut bus);
+    }
     bus
 }
