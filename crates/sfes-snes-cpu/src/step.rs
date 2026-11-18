@@ -92,8 +92,10 @@ impl Cpu65816 {
             0x15 => self.ora(bus, Mode::DirectX),
             0x16 => self.modify_memory(bus, Address::DirectX, Modify::ShiftLeft),
             0x17 => self.ora(bus, Mode::DirectIndirectLongIndexed),
+            0x18 => self.set_flag(bus, Flags::C, false),
             0x19 => self.ora(bus, Mode::AbsoluteY),
             0x1A => self.modify_accumulator(bus, Modify::Increment),
+            0x1B => self.tcs(bus),
             0x1C => self.trb(bus, Address::Absolute),
             0x1D => self.ora(bus, Mode::AbsoluteX),
             0x1E => self.modify_memory(bus, Address::AbsoluteX, Modify::ShiftLeft),
@@ -122,13 +124,16 @@ impl Cpu65816 {
             0x35 => self.and(bus, Mode::DirectX),
             0x36 => self.modify_memory(bus, Address::DirectX, Modify::RotateLeft),
             0x37 => self.and(bus, Mode::DirectIndirectLongIndexed),
+            0x38 => self.set_flag(bus, Flags::C, true),
             0x39 => self.and(bus, Mode::AbsoluteY),
             0x3A => self.modify_accumulator(bus, Modify::Decrement),
+            0x3B => self.tsc(bus),
             0x3C => self.bit(bus, Mode::AbsoluteX),
             0x3D => self.and(bus, Mode::AbsoluteX),
             0x3E => self.modify_memory(bus, Address::AbsoluteX, Modify::RotateLeft),
             0x3F => self.and(bus, Mode::AbsoluteLongX),
             0x41 => self.eor(bus, Mode::DirectIndexedIndirect),
+            0x42 => self.wdm(bus),
             0x43 => self.eor(bus, Mode::StackRelative),
             0x45 => self.eor(bus, Mode::Direct),
             0x46 => self.modify_memory(bus, Address::Direct, Modify::ShiftRight),
@@ -148,8 +153,10 @@ impl Cpu65816 {
             0x55 => self.eor(bus, Mode::DirectX),
             0x56 => self.modify_memory(bus, Address::DirectX, Modify::ShiftRight),
             0x57 => self.eor(bus, Mode::DirectIndirectLongIndexed),
+            0x58 => self.set_flag(bus, Flags::I, false),
             0x59 => self.eor(bus, Mode::AbsoluteY),
             0x5A => self.phy(bus),
+            0x5B => self.tcd(bus),
             0x5C => self.jmp_long(bus),
             0x5D => self.eor(bus, Mode::AbsoluteX),
             0x5E => self.modify_memory(bus, Address::AbsoluteX, Modify::ShiftRight),
@@ -178,8 +185,10 @@ impl Cpu65816 {
             0x75 => self.adc(bus, Mode::DirectX),
             0x76 => self.modify_memory(bus, Address::DirectX, Modify::RotateRight),
             0x77 => self.adc(bus, Mode::DirectIndirectLongIndexed),
+            0x78 => self.set_flag(bus, Flags::I, true),
             0x79 => self.adc(bus, Mode::AbsoluteY),
             0x7A => self.ply(bus),
+            0x7B => self.tdc(bus),
             0x7C => self.jmp_indexed_indirect(bus),
             0x7D => self.adc(bus, Mode::AbsoluteX),
             0x7E => self.modify_memory(bus, Address::AbsoluteX, Modify::RotateRight),
@@ -194,6 +203,7 @@ impl Cpu65816 {
             0x87 => self.sta(bus, Address::DirectIndirectLong),
             0x88 => self.dey(bus),
             0x89 => self.bit(bus, Mode::Immediate),
+            0x8A => self.txa(bus),
             0x8B => self.phb(bus),
             0x8C => self.sty(bus, Address::Absolute),
             0x8D => self.sta(bus, Address::Absolute),
@@ -207,7 +217,10 @@ impl Cpu65816 {
             0x95 => self.sta(bus, Address::DirectX),
             0x96 => self.stx(bus, Address::DirectY),
             0x97 => self.sta(bus, Address::DirectIndirectLongIndexed),
+            0x98 => self.tya(bus),
             0x99 => self.sta(bus, Address::AbsoluteY),
+            0x9A => self.txs(bus),
+            0x9B => self.txy(bus),
             0x9C => self.stz(bus, Address::Absolute),
             0x9D => self.sta(bus, Address::AbsoluteX),
             0x9E => self.stz(bus, Address::AbsoluteX),
@@ -220,7 +233,9 @@ impl Cpu65816 {
             0xA5 => self.lda(bus, Mode::Direct),
             0xA6 => self.ldx(bus, Mode::Direct),
             0xA7 => self.lda(bus, Mode::DirectIndirectLong),
+            0xA8 => self.tay(bus),
             0xA9 => self.lda(bus, Mode::Immediate),
+            0xAA => self.tax(bus),
             0xAB => self.plb(bus),
             0xAC => self.ldy(bus, Mode::Absolute),
             0xAD => self.lda(bus, Mode::Absolute),
@@ -234,13 +249,17 @@ impl Cpu65816 {
             0xB5 => self.lda(bus, Mode::DirectX),
             0xB6 => self.ldx(bus, Mode::DirectY),
             0xB7 => self.lda(bus, Mode::DirectIndirectLongIndexed),
+            0xB8 => self.set_flag(bus, Flags::V, false),
             0xB9 => self.lda(bus, Mode::AbsoluteY),
+            0xBA => self.tsx(bus),
+            0xBB => self.tyx(bus),
             0xBC => self.ldy(bus, Mode::AbsoluteX),
             0xBD => self.lda(bus, Mode::AbsoluteX),
             0xBE => self.ldx(bus, Mode::AbsoluteY),
             0xBF => self.lda(bus, Mode::AbsoluteLongX),
             0xC0 => self.cpy(bus, Mode::Immediate),
             0xC1 => self.cmp(bus, Mode::DirectIndexedIndirect),
+            0xC2 => self.rep(bus),
             0xC3 => self.cmp(bus, Mode::StackRelative),
             0xC4 => self.cpy(bus, Mode::Direct),
             0xC5 => self.cmp(bus, Mode::Direct),
@@ -261,6 +280,7 @@ impl Cpu65816 {
             0xD5 => self.cmp(bus, Mode::DirectX),
             0xD6 => self.modify_memory(bus, Address::DirectX, Modify::Decrement),
             0xD7 => self.cmp(bus, Mode::DirectIndirectLongIndexed),
+            0xD8 => self.set_flag(bus, Flags::D, false),
             0xD9 => self.cmp(bus, Mode::AbsoluteY),
             0xDA => self.phx(bus),
             0xDC => self.jml_indirect(bus),
@@ -269,6 +289,7 @@ impl Cpu65816 {
             0xDF => self.cmp(bus, Mode::AbsoluteLongX),
             0xE0 => self.cpx(bus, Mode::Immediate),
             0xE1 => self.sbc(bus, Mode::DirectIndexedIndirect),
+            0xE2 => self.sep(bus),
             0xE3 => self.sbc(bus, Mode::StackRelative),
             0xE4 => self.cpx(bus, Mode::Direct),
             0xE5 => self.sbc(bus, Mode::Direct),
@@ -276,6 +297,8 @@ impl Cpu65816 {
             0xE7 => self.sbc(bus, Mode::DirectIndirectLong),
             0xE8 => self.inx(bus),
             0xE9 => self.sbc(bus, Mode::Immediate),
+            0xEA => self.nop(bus),
+            0xEB => self.xba(bus),
             0xEC => self.cpx(bus, Mode::Absolute),
             0xED => self.sbc(bus, Mode::Absolute),
             0xEE => self.modify_memory(bus, Address::Absolute, Modify::Increment),
@@ -288,8 +311,10 @@ impl Cpu65816 {
             0xF5 => self.sbc(bus, Mode::DirectX),
             0xF6 => self.modify_memory(bus, Address::DirectX, Modify::Increment),
             0xF7 => self.sbc(bus, Mode::DirectIndirectLongIndexed),
+            0xF8 => self.set_flag(bus, Flags::D, true),
             0xF9 => self.sbc(bus, Mode::AbsoluteY),
             0xFA => self.plx(bus),
+            0xFB => self.xce(bus),
             0xFC => self.jsr_indexed_indirect(bus),
             0xFD => self.sbc(bus, Mode::AbsoluteX),
             0xFE => self.modify_memory(bus, Address::AbsoluteX, Modify::Increment),
@@ -333,7 +358,8 @@ mod tests {
     }
 
     /// A bus that returns one fixed byte, reports fixed interrupt requests and records every
-    /// cycle.
+    /// cycle. The byte is `DB` (STP), an opcode with no arm yet, so the instruction stops at
+    /// the opcode fetch.
     #[derive(Default)]
     struct TestBus {
         pending: Pending,
@@ -344,7 +370,7 @@ mod tests {
         // @source: adr-0004
         fn read(&mut self, address: Addr24, pins: Pins) -> u8 {
             self.cycles.push(Cycle::Read(address.get(), pins));
-            0x42
+            0xDB
         }
 
         // @source: adr-0004
