@@ -6,7 +6,7 @@ Working rules for every contributor to sfes, human or coding assistant. Read [`P
 
 - Work only inside this checkout. No emulator source code exists on any path you can read, and none may be fetched, pasted, quoted or recalled into a prompt or answer.
 - Implement hardware behaviour **from the cited document section or the test vectors**, never from "how emulator X does it". If you notice you are recalling another emulator's code, stop, say so, and log it in [`provenance/exposures.md`](provenance/exposures.md).
-- Tag every chip-crate module, every function in a chip crate (helpers and private functions included; only methods of standard-library trait impls are exempt), and every test with its source:
+- Tag every chip-crate module, every function in a chip crate (helpers and private functions included; only methods of standard-library trait impls are exempt), and every test in a chip crate or `sfes-test-harness` with its source. Tests of tooling and plumbing whose expected values come from no document (`xtask`, `sfes-api`) need no tag:
 
   ```rust
   // @source: fullsnes#dma-and-hdma

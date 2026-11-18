@@ -55,7 +55,7 @@ Two methods keep the registers consistent with the flags:
 
 ## Operand width
 
-An instruction such as `LDA` exists in an 8-bit and a 16-bit form, chosen by the M or X flag. The crate writes it once, generic over the private `Width` trait (`u8` and `u16`), and the opcode `match` picks the width. The compiler emits both versions.
+An instruction such as `LDA` exists in an 8-bit and a 16-bit form, chosen by the M or X flag. The crate writes it once, generic over the private `Width` trait (`u8` and `u16`), and the `at_width!` macro in `width.rs` picks `u8` or `u16` from the flag. The compiler emits both versions.
 
 ## The bus and one step
 
@@ -68,7 +68,7 @@ Every instruction starts the same way: a read at PBR,PC with VDA and VPA both ac
 
 ## Addressing modes
 
-An addressing mode is the part of an instruction that finds its operand. The crate has one function per mode, in [`addressing/`](../../crates/sfes-snes-cpu/src/addressing/mod.rs). Each function performs the bus cycles of its row in the datasheet's Table 5-7, from cycle 2 up to the cycle before the data, and returns an `Operand`: the address of the data's low byte and the address of its high byte. `read_operand` then reads one byte for an 8-bit operand, or two for a 16-bit one (note 1 of the table), and `write_operand` writes them, low byte first. The modes are the `Mode` enum, named as in Table 5-6; `Address` is the same list without immediate, so a store to immediate data cannot be written.
+An addressing mode is the part of an instruction that finds its operand. The crate has one function per mode, in [`addressing/`](../../crates/sfes-snes-cpu/src/addressing/mod.rs). Each function performs the bus cycles of its row in the datasheet's Table 5-7, from cycle 2 up to the cycle before the data, and returns an `Operand`: the address of the data's low byte and the address of its high byte. `read_operand` then reads one byte for an 8-bit operand, or two for a 16-bit one (note 1 of the table), and `write_operand` writes them, low byte first. The memory modes are the `Address` enum, named as in Table 5-6, and a read takes a `Mode`: `Mode::Immediate` or `Mode::Memory(Address)`. The stores and read-modify-write instructions take an `Address`, so a write to immediate data cannot be written.
 
 Three kinds of cycle appear. In the table below **P** is a program byte (read at PBR,PC with VPA active), **D** a data byte (VDA active) and **I** an internal cycle, where the chip drives an address but no memory is accessed (ADR 0004). Every instruction starts with the opcode fetch, which is not shown.
 
@@ -106,9 +106,13 @@ A 16-bit operand's high byte is at "the next address", and what that means depen
 - **In emulation mode with the low byte of D zero, the direct page wraps at its page boundary**, as the zero page of a 65C02 does: `LDA $FE,X` with D `FF00` and X `0A` reads `00FF08`. This covers `d,x`, `d,y` and the pointers of `(d)`, `(d,x)` and `(d),y`. The pointers of `[d]` and `[d],y` are the exception and run on into the next page (7.2.1, 7.2.2). With the low byte of D not zero there is no page wrapping at all (7.2.3).
 - **Stack-relative addresses are a plain 16-bit sum in both modes.** In emulation mode S is in page 1 and the sum may leave it. The datasheet's 7.1 can be read otherwise; ADR 0005 records the decision and the vectors that support it.
 
-## Loads: LDA, LDX, LDY
+## Loads and stores: LDA, LDX, LDY, STA, STX, STY, STZ
 
-The loads copy memory to a register and set N and Z from the value (Table 5-5: "M → A", flags `N . . . . . Z .`). They are in [`instructions/load_store.rs`](../../crates/sfes-snes-cpu/src/instructions/load_store.rs).
+Both are in [`instructions/load_store.rs`](../../crates/sfes-snes-cpu/src/instructions/load_store.rs).
+
+### Loads
+
+The loads copy memory to a register and set N and Z from the value (Table 5-5: "M → A", flags `N . . . . . Z .`).
 
 | Instruction | Width from | Modes (opcodes) |
 | --- | --- | --- |
@@ -120,9 +124,9 @@ An 8-bit LDA changes only A; the B accumulator keeps its value (2.4). An 8-bit L
 
 All 25 opcodes pass every test of their vector files in both modes.
 
-## Stores: STA, STX, STY, STZ
+### Stores
 
-The stores write a register, or zero for STZ, to memory and change no flag (Table 5-5: "A → M", "00 → M", flags all unchanged). They use the same Table 5-7 rows as the loads, with RWB low in the data cycles; 16-bit data is written low byte first, as the rows list "Data Low" before "Data High". The only other difference is the indexing cycle of note 4, which a store always spends. They are in [`instructions/load_store.rs`](../../crates/sfes-snes-cpu/src/instructions/load_store.rs).
+The stores write a register, or zero for STZ, to memory and change no flag (Table 5-5: "A → M", "00 → M", flags all unchanged). They use the same Table 5-7 rows as the loads, with RWB low in the data cycles; 16-bit data is written low byte first, as the rows list "Data Low" before "Data High". The only other difference is the indexing cycle of note 4, which a store always spends.
 
 | Instruction | Width from | Modes (opcodes) |
 | --- | --- | --- |
@@ -197,7 +201,7 @@ They are in [`instructions/shift.rs`](../../crates/sfes-snes-cpu/src/instruction
 
 The "top bit" is bit 7 or bit 15 by the M flag. The accumulator forms change A or C, keeping B in 8-bit mode, and take two cycles: the opcode and one internal cycle at PBR,PC+1 (row 8). The memory forms are read-modify-write (above), so their `a,x` form always spends the indexing cycle (row 6b).
 
-INX, INY, DEX and DEY (E8, C8, CA, 88) add or subtract one at the width the X flag selects and set N and Z; an 8-bit result leaves the register's high byte zero. They are implied instructions of two cycles (row 19a). Table 5-5 prints DEX's operation as "X-1 → A"; the destination is X, as the tutorial (6.1.1.3) says and the vectors confirm.
+INX, INY, DEX and DEY (E8, C8, CA, 88) add or subtract one at the width the X flag selects and set N and Z; an 8-bit result leaves the register's high byte zero. They are implied instructions of two cycles (row 19a). Table 5-5 prints DEX's operation as "X-1 → A"; the destination is X, as the manual, the tutorial (6.1.1.3) and the vectors agree ([ADR 0012](../adr/0012-misprinted-dex-and-tay-entries.md)).
 
 All 34 opcodes pass every test of their vector files in both modes.
 
@@ -273,7 +277,7 @@ The transfers and XBA are in [`instructions/transfer.rs`](../../crates/sfes-snes
 | NOP | EA | 19a | 2 | nothing |
 | WDM | 42 | (Table 5-4) | 2 | nothing; skips its second byte |
 
-A transfer copies the whole 16-bit source, and the destination's width decides what is kept (datasheet 7.20). So TAX with an 8-bit accumulator and 16-bit index registers copies B and A into X, TXA into an 8-bit accumulator leaves B alone, and an 8-bit index register takes only the low byte, keeping its high byte zero. TCD, TDC and TSC are 16 bits wide whatever the M flag, and set N and Z from all 16 bits. TXS and TCS set no flags; in emulation mode S keeps `01` as its high byte (7.21), while in native mode with 8-bit index registers TXS puts the stack in page 0. XBA sets N and Z from the new low byte only, whatever the M flag (tutorial 6.10.3).
+A transfer copies the whole 16-bit source, and the destination's width decides what is kept (datasheet 7.20). So TAX with an 8-bit accumulator and 16-bit index registers copies B and A into X, TXA into an 8-bit accumulator leaves B alone, and an 8-bit index register takes only the low byte, keeping its high byte zero. TCD, TDC and TSC are 16 bits wide whatever the M flag, and set N and Z from all 16 bits. TXS and TCS set no flags; in emulation mode S keeps `01` as its high byte (7.21), while in native mode with 8-bit index registers TXS puts the stack in page 0. XBA sets N and Z from the new low byte only, whatever the M flag (tutorial 6.10.3). TAY is `A8`: Table 5-5 prints `AB`, which is PLB, and the manual's TAY entry prints the TAX opcode `AA` ([ADR 0012](../adr/0012-misprinted-dex-and-tay-entries.md)).
 
 REP and SEP fetch their operand and then spend an internal cycle at the operand's address (note 1). Every change of P goes through `set_status`, so in emulation mode M and X stay set (7.8.3.1), and setting X clears the high bytes of X and Y (2.7). XCE goes through `set_emulation`: entering emulation mode sets M and X, puts S in page 1 and clears the index high bytes, keeping B (7.10); entering native mode leaves M and X set. A change of E, M or X shows on the signals from the next instruction's opcode fetch; every cycle of REP, SEP and XCE reports the old values, as the vectors record.
 
@@ -383,3 +387,8 @@ The opcode `match` in `step.rs` has one arm for each of the 256 opcodes and no c
 - the two runs must make the same bus calls, with the same addresses, signals and written values, and end in equal states.
 
 This holds because a step reads nothing but the processor's fields and the bus (ADR 0004).
+
+## Notes for M2
+
+- The crate calls no observer. `Observer::on_instruction` (and `on_interrupt`) are called from `sfes-snes-core`, which owns the bus view and sees each step from outside; `Cpu65816::step` stays free of observer parameters.
+- The crate's interrupt kinds (BRK, COP, NMI, IRQ) are private. `sfes_api::Interrupt` names only the hardware ones, NMI and IRQ, and the core maps between them when it reports an interrupt.
