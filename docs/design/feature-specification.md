@@ -136,7 +136,7 @@ Provenance is a published feature, not a background policy: every behaviour in t
 
 **PROV-02 Bibliography registry.** `provenance/bibliography.toml` MUST hold one entry per source: stable ID (e.g. `fullsnes`), title, URL, version or retrieval date, license, and the SHA-256 of an archived copy where redistribution is allowed.
 
-**PROV-03 Source tags in code.** Every module in a chip crate and every function implementing hardware behaviour MUST carry at least one tag, e.g. `// @source: fullsnes#dma-and-hdma` or `// @source: adr-0012`.
+**PROV-03 Source tags in code.** Every module in a chip crate and every function implementing hardware behaviour MUST carry at least one tag, e.g. `// @source: fullsnes#snesdmatransfers` or `// @source: adr-0012`.
 
 - A CI lint MUST fail when a chip-crate file or public hardware function lacks a tag, or a tag names an unknown bibliography ID.
 - Tests MUST also cite the source of their expected values.

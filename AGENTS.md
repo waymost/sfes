@@ -9,7 +9,7 @@ Working rules for every contributor to sfes, human or coding assistant. Read [`P
 - Tag every chip-crate module, every function in a chip crate (helpers and private functions included; only methods of standard-library trait impls are exempt), and every test in a chip crate or `sfes-test-harness` with its source. Tests of tooling and plumbing whose expected values come from no document (`xtask`, `sfes-api`) need no tag:
 
   ```rust
-  // @source: fullsnes#dma-and-hdma
+  // @source: fullsnes#snesdmatransfers
   // @source: adr-0012
   ```
 

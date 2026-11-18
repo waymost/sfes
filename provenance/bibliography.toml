@@ -13,7 +13,18 @@ redistributable = false
 retrieved = "2026-11-12"
 version = "HTML page last modified 2021-01-28"
 sha256 = "3853b65a7331bf12eea431ff494a2948a1c78ef22f7e819db4b139fd5a79f6c6"
-notes = "Anchors in tags name fullsnes section titles in kebab case, e.g. fullsnes#dma-and-hdma."
+notes = """
+Anchors are the document's own HTML anchor names, as in its table of contents and in links such as fullsnes.htm#snesdmatransfers: \
+fullsnes#snesdmatransfers, fullsnes#snesppucolormath, fullsnes#snestiminghvevents. A browser's "save page" rewrites the HTML (tags, charset \
+meta, tbody), so the reading copy is the file as served, which matches sha256. Vetted 2026-11-18 for M2 (issue #71): every section on the \
+I/O map, memory, DMA and HDMA, PPU, maths, controllers (I/O ports and joypad), cartridge header, PCBs, ROM-image headers and interleave, LoROM \
+and HiROM mapping, unpredictable things, timings, CPU and PPU pinouts and the Xboo WRAM boot was read; none quotes emulator source code. \
+Its formulas (e.g. the Mode 7 matrix and the BGnHOFS write-twice rule) are the author's own notation. The auto-joypad passage in \
+#snescontrollersioportsautomaticreading quotes anomie-timing: cite anomie-timing for it. Some passages draw on Nintendo's development manuals \
+(the all-caps notes under SETINI in #snesppucontrol, the book2.pdf references in #snescartridgepcbs, the ExHiROM file ordering in \
+#snescartridgeromimageinterleave); the project owner decided on 2026-11-18 that they may be cited through fullsnes. RESTRICTED: the \
+"Boot ROM Disassembly" listing in #snesapumaincpucommunicationport is a disassembly of Nintendo's IPL firmware and is not a usable source \
+(see provenance/exposures.md, 2026-11-18); the uploader protocol above it remains usable."""
 
 [[source]]
 id = "anomie-regs"
@@ -25,7 +36,11 @@ retrieved = "2026-11-12"
 version = "Revision 1157, 2007-07-12"
 sha256 = "19dfdf3f1c206655b8ede11bcd6dc053e36634f876819e40bb39cfb88a237dfd"
 notes = """
-File regs.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors name section titles in kebab case, e.g. anomie-regs#hdma."""
+File regs.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors: a register entry is its address as \
+printed at the start of the entry, in lower case (anomie-regs#2100, anomie-regs#210d, anomie-regs#43x0, anomie-regs#43xa). A section is the \
+path of its headings from the top, each in kebab case, joined by `/` (anomie-regs#sprites, anomie-regs#backgrounds/mode-7, \
+anomie-regs#rendering-the-screen/mosaic). Kebab case lower-cases the heading, writes `&` as `and`, drops parenthesised text and other \
+punctuation, and joins words with `-`."""
 
 [[source]]
 id = "anomie-memmap"
@@ -37,7 +52,9 @@ retrieved = "2026-11-12"
 version = "Revision 1160, 2008-12-21"
 sha256 = "955ad18c3336fb4c6c01c54cc4a26d7bf270482d0d11b28ea048ffd7990b4bfe"
 notes = """
-File memmap.txt. Retrieved by hand by the project owner (the page refuses automated retrieval)."""
+File memmap.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors: the path of headings from the \
+top, each in kebab case as for anomie-regs, joined by `/`: anomie-memmap#hardware/data-bus, anomie-memmap#hardware/address-bus-a, \
+anomie-memmap#hardware/address-bus-b, anomie-memmap#memory-map."""
 
 [[source]]
 id = "anomie-timing"
@@ -49,7 +66,10 @@ retrieved = "2026-11-12"
 version = "Revision 1160, 2008-12-21"
 sha256 = "a26b6a8899146601c05be5e79777d7b9ab5857732699e8b78ac2c67080877f9e"
 notes = """
-File timing.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors name section titles in kebab case, e.g. anomie-timing#dma."""
+File timing.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors: the path of headings from the \
+top, each in kebab case as for anomie-regs, joined by `/`. The top level is the chip part (S-CPU (5A22) becomes s-cpu): \
+anomie-timing#s-cpu/clocks-and-refresh, anomie-timing#s-cpu/dma, anomie-timing#s-cpu/registers, anomie-timing#s-ppu/registers, \
+anomie-timing#s-ppu/detailed-renderer-timing, anomie-timing#s-apu/spc700."""
 
 [[source]]
 id = "anomie-spc700"
@@ -87,7 +107,10 @@ url = "https://snes.nesdev.org/wiki/SNESdev_Wiki"
 license = "CC0-1.0"
 redistributable = true
 retrieved = "2026-11-12"
-notes = "Anchors name the wiki page title, e.g. snesdev-wiki#DMA_registers. Archive cited pages when first used."
+notes = """
+Anchors name the wiki page title as in its URL, e.g. snesdev-wiki#DMA_registers. A page is archived when first cited: its HTML as \
+served, saved as provenance/archive/snesdev-wiki/<page title>.html, with the retrieval date and SHA-256 recorded in the PR. Each page is \
+vetted for quoted emulator code when first read."""
 
 [[source]]
 id = "wdc-w65c816s"

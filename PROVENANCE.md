@@ -32,7 +32,7 @@ If emulator code is seen by accident (a search result, a linked snippet, an assi
 - Every module in a chip crate (`sfes-snes-*`) and every function in one carries at least one tag naming a bibliography id or an ADR. Only methods of standard-library trait impls are exempt:
 
   ```rust
-  // @source: fullsnes#dma-and-hdma
+  // @source: fullsnes#snesdmatransfers
   // @source: adr-0012
   ```
 
