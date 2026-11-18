@@ -36,6 +36,8 @@ pub(crate) struct TestBus {
     pub(crate) cycles: Vec<Cycle>,
     /// The full signals of each cycle, in order.
     pub(crate) pins: Vec<Pins>,
+    /// The interrupt requests the bus reports.
+    pub(crate) pending: Pending,
 }
 
 impl TestBus {
@@ -89,7 +91,7 @@ impl Bus65816 for TestBus {
 
     // @source: adr-0004
     fn interrupts(&self) -> Pending {
-        Pending::default()
+        self.pending
     }
 }
 
