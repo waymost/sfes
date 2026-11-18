@@ -371,8 +371,15 @@ cargo nextest run -p sfes-test-harness
 
 CI caches the set, requires it, and runs all of it on Linux and the first 500 tests of each file on macOS and Windows.
 
-Only the opcodes in the harness's `IMPLEMENTED` list are run. It now holds all 256, and it is deleted with the rest of the bring-up scaffolding (#43).
+The harness runs all 512 files, the native-mode and emulation-mode file of every opcode. No opcode is skipped.
 
-## Bring-up state
+## Completeness and cloning
 
-Both bring-up placeholders are gone. Every opcode has a `match` arm, so the compiler checks that the match is complete, and a recognized interrupt runs the hardware sequence. The harness's `IMPLEMENTED` list remains until #43 removes it.
+The opcode `match` in `step.rs` has one arm for each of the 256 opcodes and no catch-all arm, so the compiler checks that every opcode is handled. The bring-up scaffolding is gone: the catch-all arm that stopped the processor on an unknown opcode was removed in #42, and the harness's `IMPLEMENTED` list in #43.
+
+`Cpu65816` is `Clone + Send`, and a clone is a snapshot (FND-01). The test `a_clone_runs_exactly_like_its_original` in `step.rs` checks this:
+- it fills three banks with fixed pseudo-random bytes and runs a processor 1,000 steps, so the clone is taken from an arbitrary state;
+- it then runs the processor and its clone for 20,000 steps each, on two buses that start the same, resetting whenever one halts;
+- the two runs must make the same bus calls, with the same addresses, signals and written values, and end in equal states.
+
+This holds because a step reads nothing but the processor's fields and the bus (ADR 0004).
