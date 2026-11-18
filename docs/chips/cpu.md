@@ -255,6 +255,32 @@ PEA reads no memory at its operand, and PEI reads the 16-bit value at the direct
 
 All 16 opcodes pass every test of their vector files in both modes.
 
+## Transfers, flags and mode
+
+The transfers and XBA are in [`instructions/transfer.rs`](../../crates/sfes-snes-cpu/src/instructions/transfer.rs); the flag instructions, REP, SEP, XCE, NOP and WDM in [`instructions/status.rs`](../../crates/sfes-snes-cpu/src/instructions/status.rs).
+
+| Instruction | Opcode | Row | Cycles | Effect |
+| --- | --- | --- | --- | --- |
+| TAX TAY TSX TXY TYX | AA A8 BA 9B BB | 19a | 2 | into X or Y at the X width; N, Z |
+| TXA TYA | 8A 98 | 19a | 2 | into A or C at the M width; N, Z |
+| TCD TDC TSC | 5B 7B 3B | 19a | 2 | 16 bits whatever M; N, Z |
+| TXS TCS | 9A 1B | 19a | 2 | into S; no flags |
+| XBA | EB | 19b | 3 | swap B and A; N, Z from the new A |
+| CLC CLD CLI CLV | 18 D8 58 B8 | 19a | 2 | clear C, D, I or V |
+| SEC SED SEI | 38 F8 78 | 19a | 2 | set C, D or I |
+| REP SEP | C2 E2 | 18 | 3 | clear or set the P bits named by the operand |
+| XCE | FB | 19a | 2 | exchange C and E |
+| NOP | EA | 19a | 2 | nothing |
+| WDM | 42 | (Table 5-4) | 2 | nothing; skips its second byte |
+
+A transfer copies the whole 16-bit source, and the destination's width decides what is kept (datasheet 7.20). So TAX with an 8-bit accumulator and 16-bit index registers copies B and A into X, TXA into an 8-bit accumulator leaves B alone, and an 8-bit index register takes only the low byte, keeping its high byte zero. TCD, TDC and TSC are 16 bits wide whatever the M flag, and set N and Z from all 16 bits. TXS and TCS set no flags; in emulation mode S keeps `01` as its high byte (7.21), while in native mode with 8-bit index registers TXS puts the stack in page 0. XBA sets N and Z from the new low byte only, whatever the M flag (tutorial 6.10.3).
+
+REP and SEP fetch their operand and then spend an internal cycle at the operand's address (note 1). Every change of P goes through `set_status`, so in emulation mode M and X stay set (7.8.3.1), and setting X clears the high bytes of X and Y (2.7). XCE goes through `set_emulation`: entering emulation mode sets M and X, puts S in page 1 and clears the index high bytes, keeping B (7.10); entering native mode leaves M and X set. A change of E, M or X shows on the signals from the next instruction's opcode fetch; every cycle of REP, SEP and XCE reports the old values, as the vectors record.
+
+WDM is two bytes and two cycles (Table 5-4) and does nothing (7.16). Its second cycle is internal, at the address of the byte it skips: the tutorial calls it a read, but the vectors record neither VDA nor VPA ([ADR 0010](../adr/0010-wdm-second-cycle.md)).
+
+All 25 opcodes pass every test of their vector files in both modes.
+
 ## Testing against the vectors
 
 `sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
