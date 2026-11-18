@@ -15,6 +15,7 @@ mod modify;
 mod stack;
 
 use sfes_api::Addr24;
+pub(crate) use stack::StackWrap;
 
 use crate::{
     bus::{Bus65816, Pins},
@@ -251,14 +252,14 @@ impl Cpu65816 {
 
     /// One data-address cycle: a read with VDA active and VPA inactive.
     // @source: wdc-w65c816s#2.26
-    fn read_byte(&self, bus: &mut impl Bus65816, address: Addr24) -> u8 {
+    pub(crate) fn read_byte(&self, bus: &mut impl Bus65816, address: Addr24) -> u8 {
         bus.read(address, Pins::VDA | Pins::RWB | self.status_pins())
     }
 
     /// One data-address write cycle: VDA active, VPA inactive, RWB low.
     // @source: wdc-w65c816s#2.26
     // @source: wdc-w65c816s#2.23
-    fn write_byte(&self, bus: &mut impl Bus65816, address: Addr24, value: u8) {
+    pub(crate) fn write_byte(&self, bus: &mut impl Bus65816, address: Addr24, value: u8) {
         bus.write(address, value, Pins::VDA | self.status_pins());
     }
 
@@ -266,7 +267,7 @@ impl Cpu65816 {
     /// inactive, and increments the program counter within the program bank.
     // @source: wdc-w65c816s#2.26
     // @source: wdc-w65c816s#2.10
-    fn fetch(&mut self, bus: &mut impl Bus65816) -> u8 {
+    pub(crate) fn fetch(&mut self, bus: &mut impl Bus65816) -> u8 {
         let pins = Pins::VPA | Pins::RWB | self.status_pins();
         let value = bus.read(self.program_address(), pins);
         self.pc = self.pc.wrapping_add(1);
@@ -275,7 +276,7 @@ impl Cpu65816 {
 
     /// Cycles 2 and 3 of the absolute rows: fetches the 16-bit address "AAL", "AAH".
     // @source: wdc-w65c816s#table-5-7-1a
-    fn fetch_address(&mut self, bus: &mut impl Bus65816) -> u16 {
+    pub(crate) fn fetch_address(&mut self, bus: &mut impl Bus65816) -> u16 {
         let low = self.fetch(bus);
         let high = self.fetch(bus);
         u16::from_le_bytes([low, high])
@@ -285,7 +286,7 @@ impl Cpu65816 {
     /// processor drives `address`, but no memory access takes place (ADR 0004).
     // @source: wdc-w65c816s#2.26
     // @source: adr-0004
-    fn internal(&self, bus: &mut impl Bus65816, address: Addr24) {
+    pub(crate) fn internal(&self, bus: &mut impl Bus65816, address: Addr24) {
         bus.idle(address, Pins::RWB | self.status_pins());
     }
 
@@ -301,7 +302,7 @@ impl Cpu65816 {
     /// An internal-operation cycle at the address of the last program byte fetched. Table
     /// 5-7 prints it as "PBR,PC+1" in the two-byte rows, counting from the opcode's address.
     // @source: wdc-w65c816s#table-5-7-10a
-    fn internal_at_last_fetch(&self, bus: &mut impl Bus65816) {
+    pub(crate) fn internal_at_last_fetch(&self, bus: &mut impl Bus65816) {
         let address = Addr24::from_bank_offset(self.pbr, self.pc.wrapping_sub(1));
         self.internal(bus, address);
     }

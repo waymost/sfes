@@ -47,5 +47,5 @@ Surveyed: the 25 emulation-mode files of the load instructions, 250,000 tests.
 
 - A test's initial state is no longer loaded bit for bit. The vectors' own final states show the adjustment is what their generator assumed.
 - The same adjustment serves the later families. If a `.e` file of another instruction expects a final S outside page 1, this ADR is revisited in that issue.
-- The emulation-mode stack rules for pushes and pulls (which instructions wrap in page 1 and which do not) are not decided here; they belong to the stack and call issues (#38, #39).
+- The emulation-mode stack rules for pushes and pulls (which instructions wrap in page 1 and which do not) are not decided here; they belong to the stack and call issues (#38, #39). ADR 0008 decides them.
 - We revisit decision 2 if a hardware test shows stack-relative addresses confined to page 1 in emulation mode.

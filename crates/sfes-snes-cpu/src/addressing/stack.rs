@@ -1,6 +1,14 @@
 // @source: wdc-w65c816s#3.5.23
 // @source: wdc-w65c816s#3.5.24
-//! Stack-relative addressing: an unsigned 8-bit offset from the stack pointer, in bank 0.
+// @source: wdc-w65c816s#7.1
+// @source: adr-0008
+//! The stack: pushes and pulls, and stack-relative addressing (an unsigned 8-bit offset from
+//! the stack pointer). The stack is always in bank 0.
+//!
+//! In emulation mode S is in page 1. Most instructions keep their stack accesses there, so S
+//! wraps in its low byte; the instructions that datasheet 7.1 lists (JSL, JSR (a,x), RTL,
+//! and from #39 PEA, PEI, PER, PHD and PLD) step S as a 16-bit value while they run and may
+//! leave page 1, and the high byte of S returns to `01` when they end (ADR 0008).
 
 use sfes_api::Addr24;
 
@@ -10,7 +18,74 @@ use crate::{
     registers::Cpu65816,
 };
 
+/// How S steps between the bytes of a push or pull in emulation mode. In native mode both
+/// are 16-bit steps in bank 0.
+// @source: wdc-w65c816s#7.1
+// @source: adr-0008
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StackWrap {
+    /// S wraps in its low byte and stays in page 1.
+    PageOne,
+    /// S steps as a 16-bit value and may leave page 1 (the instructions of 7.1).
+    BankZero,
+}
+
 impl Cpu65816 {
+    /// Writes `value` at 0,S, then decrements S: a stack write cycle of the "Stack s" rows,
+    /// with VDA active and RWB low.
+    // @source: wdc-w65c816s#table-5-7-1c
+    // @source: wdc-w65c816s#3.5.21
+    // @source: adr-0008
+    pub(crate) fn push(&mut self, bus: &mut impl Bus65816, value: u8, wrap: StackWrap) {
+        self.write_byte(bus, self.stack_address(), value);
+        self.s = self.stack_step(wrap, false);
+    }
+
+    /// Increments S, then reads the byte at 0,S: a stack read cycle with VDA active.
+    // @source: wdc-w65c816s#table-5-7-22h
+    // @source: wdc-w65c816s#3.5.21
+    // @source: adr-0008
+    pub(crate) fn pull(&mut self, bus: &mut impl Bus65816, wrap: StackWrap) -> u8 {
+        self.s = self.stack_step(wrap, true);
+        self.read_byte(bus, self.stack_address())
+    }
+
+    /// 0,S: the address the stack pointer names.
+    // @source: wdc-w65c816s#2.11
+    pub(crate) fn stack_address(&self) -> Addr24 {
+        Addr24::from_bank_offset(0, self.s)
+    }
+
+    /// Puts the high byte of S back to `01` in emulation mode, at the end of an instruction
+    /// that stepped S as a 16-bit value. Native mode leaves S alone.
+    // @source: wdc-w65c816s#2.11
+    // @source: adr-0008
+    pub(crate) fn restore_stack_page(&mut self) {
+        if self.e {
+            self.s = 0x0100 | (self.s & 0x00FF);
+        }
+    }
+
+    /// S after one step up (`up`) or down.
+    // @source: wdc-w65c816s#7.1
+    // @source: adr-0008
+    fn stack_step(&self, wrap: StackWrap, up: bool) -> u16 {
+        let step = |value: u16| {
+            if up {
+                value.wrapping_add(1)
+            } else {
+                value.wrapping_sub(1)
+            }
+        };
+        if self.e && wrap == StackWrap::PageOne {
+            let [low, _] = self.s.to_le_bytes();
+            let [low, _] = step(u16::from(low)).to_le_bytes();
+            u16::from_le_bytes([low, 0x01])
+        } else {
+            step(self.s)
+        }
+    }
+
     /// Row 23, cycles 2 and 3: fetches the offset "SO", then an internal cycle at the
     /// offset's own address. The data is at 0,S+SO, a 16-bit sum that stays in bank 0.
     // @source: wdc-w65c816s#table-5-7-23
