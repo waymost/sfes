@@ -1,6 +1,12 @@
 # The 65C816 CPU (`sfes-snes-cpu`)
 
-This page explains the SNES's main processor and how the crate models it (QA-08). It grows with each instruction family during milestone M1. Every statement about the chip cites its source: the W65C816S datasheet (`wdc-w65c816s` in [`provenance/bibliography.toml`](../../provenance/bibliography.toml)) or an ADR.
+This page explains the SNES's main processor and how the crate models it (QA-08). It was written family by family during milestone M1 and covers the whole chip as built. Every statement about the chip cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
+
+- the W65C816S datasheet (`wdc-w65c816s`): numbers such as "2.25" or "7.13" are its sections, and "row 22a" or "note 4" are rows and notes of its Table 5-7;
+- the WDC manual *Programming the 65816* (`wdc-65816-manual`), cited as "the manual";
+- the 6502.org 65C816 opcodes tutorial (`6502org-65c816-opcodes`), cited as "the tutorial";
+- the SingleStepTests vectors (`sst-65816`), which are evidence, not a specification;
+- the project's ADRs, listed under [Decisions](#decisions).
 
 ## What the chip is
 
@@ -65,6 +71,25 @@ An instruction such as `LDA` exists in an 8-bit and a 16-bit form, chosen by the
 - **Step.** `Cpu65816::step` runs one instruction, one interrupt entry, one byte of a block move, or one idle cycle while waiting or stopped. It reads the interrupt requests once, before the opcode fetch.
 
 Every instruction starts the same way: a read at PBR,PC with VDA and VPA both active, which is how the chip marks an opcode fetch (2.26; cycle 1 of every row of Table 5-7).
+
+## Timing
+
+A cycle is one period of PHI2, the clock input (2.22), and each row of Table 5-7 lists one line per cycle. The core counts no time. It makes one bus call per cycle, and the bus advances the machine's clock by whatever that cycle costs (ADR 0004). How long a cycle lasts is therefore the machine's decision: for the SNES, `sfes-snes-core` settles it in M2.
+
+The number of cycles follows from the mode and the flags. Table 3-1 and the notes of Table 5-7 give the rules, and the sections below give each family's counts:
+
+| Condition | Cycles | Source |
+| --- | --- | --- |
+| 16-bit data (M = 0 or X = 0) | +1; immediate data also takes one more byte | note 1; Table 3-1 note 3 |
+| Low byte of D not zero, in direct modes | +1 | note 2 |
+| `a,x`, `a,y`, `(d),y`: a write, a page crossing, or 16-bit index registers | +1 | note 4 |
+| Branch taken | +1 | note 5 |
+| Branch taken across a page in emulation mode | +1 more | note 6 |
+| Interrupt entry in emulation mode (no PBR push) | −1 | note 7 |
+| Read-modify-write | +2 for M = 1, +3 for M = 0, over a plain read | Table 3-1 note 5 |
+| REP, SEP | always 3 | note 1, note 8 |
+
+The vectors check every cycle's address and signals, not just the count, so each extra cycle's address is fixed too. The sections below say where each one points.
 
 ## Addressing modes
 
@@ -388,7 +413,41 @@ The opcode `match` in `step.rs` has one arm for each of the 256 opcodes and no c
 
 This holds because a step reads nothing but the processor's fields and the bus (ADR 0004).
 
+## Decisions
+
+The documents left these points open or got them wrong. Each ADR quotes the sources, names the vectors that decided it, and states its confidence.
+
+| ADR | Decision | Confidence |
+| --- | --- | --- |
+| [0004](../adr/0004-per-cycle-bus-contract.md) | One bus call per cycle with all eight signals; what one `step` covers; interrupts sampled once per step | high; medium for interrupt sampling and the halted steps |
+| [0005](../adr/0005-emulation-mode-stack-in-the-vectors.md) | The harness puts S in page 1 for emulation-mode vectors; stack-relative addresses are a plain 16-bit sum | high; medium for stack-relative addresses in emulation mode |
+| [0006](../adr/0006-read-modify-write-modify-cycle.md) | The modify cycle's address, and the value written in emulation mode | high for the address; medium for the value |
+| [0007](../adr/0007-decimal-mode-arithmetic.md) | Decimal-mode ADC and SBC, V included | high for valid BCD; medium for V and digits above 9 |
+| [0008](../adr/0008-emulation-stack-in-calls-and-indexed-jump-pointers.md) | Which instructions leave page 1 in emulation mode; the `(a,x)` pointer cycles are data cycles | high |
+| [0009](../adr/0009-emulation-stack-in-plb.md) | PLB leaves page 1 in emulation mode | medium |
+| [0010](../adr/0010-wdm-second-cycle.md) | WDM's second cycle is internal | high |
+| [0011](../adr/0011-reset-and-halted-cycles.md) | The reset sequence, halted cycles, WAI wake-up, DBR kept by interrupts | medium for reset; high for the rest |
+| [0012](../adr/0012-misprinted-dex-and-tay-entries.md) | The misprinted DEX and TAY entries | high |
+
+ADRs 0001 to 0003 predate M1 and cover the machine as a whole.
+
+## M1 exit criteria
+
+The milestone's exit criterion is EMU-02 (feature specification, section 3). It is met.
+
+| Criterion | Result |
+| --- | --- |
+| All 256 opcodes match the vectors in native and emulation mode | All 512 files pass: 5,080,400 tests, none failing. CI runs the full set on Linux and the first 500 tests of each file on macOS and Windows, with missing vectors treated as a failure. |
+| Including the cycle-by-cycle bus record | Every cycle's address, value and all eight signals are compared (ADR 0004). |
+| Interrupts, WAI and STP covered by separate tests | The project's own tests in `instructions/interrupt.rs` and `step.rs` cover NMI and IRQ in both modes, NMI before IRQ, a masked IRQ, BRK, COP, RTI, WAI woken into the handler and past it, STP, and reset from the stopped and waiting states. BRK, COP, RTI, WAI and STP also pass their vector files. ABORT is not modelled (ADR 0004). |
+
+Two details differ from EMU-02's wording:
+- **Test counts.** EMU-02 expects 10,000 tests per file. The MVN and MVP files hold 100 each, but each test is a whole move of up to 1,000 bytes. Every other file holds 10,000.
+- **Storage.** EMU-02 allows committing the vectors. They are fetched instead, at a pinned commit and checked against `tests/assets/vectors.lock`, because the set is 2.6 GB (technical design, section 13).
+
 ## Notes for M2
 
 - The crate calls no observer. `Observer::on_instruction` (and `on_interrupt`) are called from `sfes-snes-core`, which owns the bus view and sees each step from outside; `Cpu65816::step` stays free of observer parameters.
 - The crate's interrupt kinds (BRK, COP, NMI, IRQ) are private. `sfes_api::Interrupt` names only the hardware ones, NMI and IRQ, and the core maps between them when it reports an interrupt.
+- The bus owns the NMI edge latch, and decides how late in an instruction a changed NMI or IRQ line is still seen at the next boundary. `sfes-snes-core` settles that with its own ADR and timing tests (ADR 0004). The latch is bus state, so it is cloned and serialized with the bus, and the SA-1's bus needs its own.
+- The machine decides how long RESB is held low and calls `reset` when it rises. Reset reads three bytes in page 1 of bank 0; the SNES bus must say whether any read there has side effects (ADR 0011).
