@@ -201,6 +201,33 @@ INX, INY, DEX and DEY (E8, C8, CA, 88) add or subtract one at the width the X fl
 
 All 34 opcodes pass every test of their vector files in both modes.
 
+## Branches, jumps, calls and returns
+
+They are in [`instructions/flow.rs`](../../crates/sfes-snes-cpu/src/instructions/flow.rs); the stack pushes and pulls they use are in [`addressing/stack.rs`](../../crates/sfes-snes-cpu/src/addressing/stack.rs).
+
+| Instruction | Opcode | Row | Cycles | Effect |
+| --- | --- | --- | --- | --- |
+| BPL BMI BVC BVS BRA BCC BCS BNE BEQ | 10 30 50 70 80 90 B0 D0 F0 | 20 | 2, +1 taken, +1 more in emulation mode across a page | PC + signed 8-bit offset |
+| BRL | 82 | 21 | 4 | PC + 16-bit offset |
+| JMP a | 4C | 1b | 3 | PC = operand |
+| JMP al (JML) | 5C | 4b | 4 | PBR:PC = operand |
+| JMP (a) | 6C | 3b | 5 | PC = word at 0,AA |
+| JML (a) | DC | 3a | 6 | PBR:PC = long at 0,AA |
+| JMP (a,x) | 7C | 2a | 6 | PC = word at PBR,AA+X |
+| JSR a | 20 | 1c | 6 | push PC-1, PC = operand |
+| JSR (a,x) | FC | 2b | 8 | push PC-1, PC = word at PBR,AA+X |
+| JSL al | 22 | 4c | 8 | push PBR and PC-1, PBR:PC = operand |
+| RTS | 60 | 22h | 6 | pull PC, add one |
+| RTL | 6B | 22i | 6 | pull PC and PBR, add one to PC |
+
+The branch conditions are those of Table 5-5. A branch's extra cycles both repeat the address of the offset byte; the page test compares the destination with the address of the next instruction. Every new program counter wraps in its bank; only the long forms change PBR. A call pushes the address of its own last byte, high byte first, and a return adds one to what it pulls. That address wraps in the bank: a JSL at `12FFFD` pushes `12`, `00`, `00`, and an RTL that pulls `FF`, `FF`, `12` continues at `120000` (tutorial 6.2.2.1 and 6.2.2.2).
+
+The pointers of `JMP (a)` and `JML (a)` are in bank 0 and wrap at its end. (`JML (a)` is the datasheet's name for DC; the WDC manual and the 6502.org tutorial write it `JMP [a]`, because its pointer is 24 bits.) The `(a,x)` pointer is in the program bank and wraps there. Table 5-7 marks its two reads with VPA, but the vectors record them as data cycles (VDA), and the core follows the vectors.
+
+**The stack in emulation mode.** S is in page 1, and a push or pull that runs past the page edge wraps inside the page, except in the instructions that datasheet 7.1 lists. Of those, JSL, JSR (a,x) and RTL are here: they step S as a 16-bit value, so a JSL with S at `0100` writes `0100`, `00FF` and `00FE`, and when they end the high byte of S goes back to `01`. [ADR 0008](../adr/0008-emulation-stack-in-calls-and-indexed-jump-pointers.md) records both points.
+
+All 20 opcodes pass every test of their vector files in both modes.
+
 ## Testing against the vectors
 
 `sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
