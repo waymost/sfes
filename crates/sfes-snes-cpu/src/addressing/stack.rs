@@ -14,9 +14,10 @@
 use sfes_api::Addr24;
 
 use crate::{
-    addressing::{Operand, indexed},
+    addressing::{Direction, Operand, indexed},
     bus::Bus65816,
     registers::Cpu65816,
+    width::Width,
 };
 
 /// How S steps between the bytes of a push or pull in emulation mode. In native mode both
@@ -40,7 +41,7 @@ impl Cpu65816 {
     // @source: adr-0008
     pub(crate) fn push(&mut self, bus: &mut impl Bus65816, value: u8, wrap: StackWrap) {
         self.write_byte(bus, self.stack_address(), value);
-        self.s = self.stack_step(wrap, false);
+        self.step_stack(wrap, Direction::Down);
     }
 
     /// Increments S, then reads the byte at 0,S: a stack read cycle with VDA active.
@@ -48,8 +49,34 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#3.5.21
     // @source: adr-0008
     pub(crate) fn pull(&mut self, bus: &mut impl Bus65816, wrap: StackWrap) -> u8 {
-        self.s = self.stack_step(wrap, true);
+        self.step_stack(wrap, Direction::Up);
         self.read_byte(bus, self.stack_address())
+    }
+
+    /// Pushes `value`: "REG High" at 0,S when it is 16 bits wide (cycle 3a of row 22c), then
+    /// "REG Low". Every multi-byte push writes its high byte first.
+    // @source: wdc-w65c816s#table-5-7-22c
+    // @source: wdc-w65c816s#table-5-7-note-1
+    pub(crate) fn push_value<W: Width>(
+        &mut self,
+        bus: &mut impl Bus65816,
+        value: W,
+        wrap: StackWrap,
+    ) {
+        let (low, high) = value.to_bytes();
+        if let Some(high) = high {
+            self.push(bus, high, wrap);
+        }
+        self.push(bus, low, wrap);
+    }
+
+    /// Pulls a value of width `W`: "REG Low" at 0,S+1, then, when 16 bits wide, "REG High"
+    /// at 0,S+2 (cycles 4 and 4a of row 22b). Every multi-byte pull reads its low byte first.
+    // @source: wdc-w65c816s#table-5-7-22b
+    // @source: wdc-w65c816s#table-5-7-note-1
+    pub(crate) fn pull_value<W: Width>(&mut self, bus: &mut impl Bus65816, wrap: StackWrap) -> W {
+        let low = self.pull(bus, wrap);
+        W::from_bytes(low, || self.pull(bus, wrap))
     }
 
     /// 0,S: the address the stack pointer names.
@@ -58,33 +85,26 @@ impl Cpu65816 {
         Addr24::from_bank_offset(0, self.s)
     }
 
-    /// Puts the high byte of S back to `01` in emulation mode, at the end of an instruction
-    /// that stepped S as a 16-bit value. Native mode leaves S alone.
+    /// Puts the high byte of S back to `01` in emulation mode: at the end of an instruction
+    /// that stepped S as a 16-bit value, after a page-1 step, and on entering emulation mode.
+    /// Native mode leaves S alone.
     // @source: wdc-w65c816s#2.11
+    // @source: wdc-w65c816s#7.10
     // @source: adr-0008
-    pub(crate) fn restore_stack_page(&mut self) {
+    pub(crate) const fn restore_stack_page(&mut self) {
         if self.e {
             self.s = 0x0100 | (self.s & 0x00FF);
         }
     }
 
-    /// S after one step up (`up`) or down.
+    /// Steps S by one in `direction`. With [`StackWrap::PageOne`] in emulation mode the step
+    /// wraps in the low byte and S stays in page 1; otherwise it is a 16-bit step.
     // @source: wdc-w65c816s#7.1
     // @source: adr-0008
-    fn stack_step(&self, wrap: StackWrap, up: bool) -> u16 {
-        let step = |value: u16| {
-            if up {
-                value.wrapping_add(1)
-            } else {
-                value.wrapping_sub(1)
-            }
-        };
-        if self.e && wrap == StackWrap::PageOne {
-            let [low, _] = self.s.to_le_bytes();
-            let [low, _] = step(u16::from(low)).to_le_bytes();
-            u16::from_le_bytes([low, 0x01])
-        } else {
-            step(self.s)
+    pub(crate) fn step_stack(&mut self, wrap: StackWrap, direction: Direction) {
+        self.s = direction.step(self.s);
+        if wrap == StackWrap::PageOne {
+            self.restore_stack_page();
         }
     }
 

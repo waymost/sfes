@@ -12,7 +12,7 @@ use crate::{
     addressing::Address,
     bus::Bus65816,
     registers::{Cpu65816, Flags},
-    width::Width,
+    width::{Width, at_width},
 };
 
 /// The operation of a shift, rotate, increment or decrement.
@@ -68,15 +68,11 @@ impl Cpu65816 {
     // @source: 6502org-65c816-opcodes#6.1.3
     pub(crate) fn modify_accumulator(&mut self, bus: &mut impl Bus65816, operation: Modify) {
         self.internal_at_program_counter(bus);
-        if self.p.contains(Flags::M) {
-            let value = self.accumulator::<u8>();
+        at_width!(self.p, Flags::M, W => {
+            let value = self.accumulator::<W>();
             let result = operation.apply(&mut self.p, value);
             self.set_accumulator(result);
-        } else {
-            let value = self.accumulator::<u16>();
-            let result = operation.apply(&mut self.p, value);
-            self.set_accumulator(result);
-        }
+        });
     }
 
     /// The memory form: the operation on the operand at `address`, by the M flag, as a
@@ -91,15 +87,11 @@ impl Cpu65816 {
         address: Address,
         operation: Modify,
     ) {
-        if self.p.contains(Flags::M) {
-            self.modify_operand::<u8>(bus, address, |cpu, value| {
+        at_width!(self.p, Flags::M, W => {
+            self.modify_operand::<W>(bus, address, |cpu, value| {
                 operation.apply(&mut cpu.p, value)
             });
-        } else {
-            self.modify_operand::<u16>(bus, address, |cpu, value| {
-                operation.apply(&mut cpu.p, value)
-            });
-        }
+        });
     }
 
     /// INX: "X+1 → X", at the width the X flag selects.
@@ -116,10 +108,13 @@ impl Cpu65816 {
         self.y = self.modify_index(bus, self.y, Modify::Increment);
     }
 
-    /// DEX: X minus one, at the width the X flag selects. (Table 5-5 prints "X-1 → A"; the
-    /// destination is X, as the tutorial and the vectors agree.)
+    /// DEX: "X-1 → X", at the width the X flag selects. Table 5-5 prints the destination as
+    /// A, a misprint (ADR 0012).
     // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#table-5-7-19a
+    // @source: wdc-65816-manual#chapter-18-dex
     // @source: 6502org-65c816-opcodes#6.1.1.3
+    // @source: adr-0012
     pub(crate) fn dex(&mut self, bus: &mut impl Bus65816) {
         self.x = self.modify_index(bus, self.x, Modify::Decrement);
     }
@@ -138,12 +133,9 @@ impl Cpu65816 {
     // @source: 6502org-65c816-opcodes#6.1.1.3
     fn modify_index(&mut self, bus: &mut impl Bus65816, register: u16, operation: Modify) -> u16 {
         self.internal_at_program_counter(bus);
-        if self.p.contains(Flags::X) {
-            let value = <u8 as Width>::from_register(register);
-            operation.apply(&mut self.p, value).to_u16()
-        } else {
-            operation.apply(&mut self.p, register)
-        }
+        at_width!(self.p, Flags::X, W => {
+            operation.apply(&mut self.p, W::from_register(register)).to_u16()
+        })
     }
 }
 

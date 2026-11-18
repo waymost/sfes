@@ -4,17 +4,17 @@ use std::fmt::{self, Display, Formatter};
 
 use sfes_snes_cpu::{Cpu65816, Flags, Pins, RunState};
 
-/// The signal letters of a cycle's third field, in order, with the flag each one stands for.
-/// A signal that is not active is written `-`, except RWB, which is `w`.
-const SIGNALS: [(char, Pins); 8] = [
-    ('d', Pins::VDA),
-    ('p', Pins::VPA),
-    ('v', Pins::VPB),
-    ('r', Pins::RWB),
-    ('e', Pins::E),
-    ('m', Pins::M),
-    ('x', Pins::X),
-    ('l', Pins::MLB),
+/// The signals of a cycle's third field, in order: the letter written when the signal is
+/// active, the letter written when it is not (`-`, except `w` for RWB), and its flag.
+const SIGNALS: [(char, char, Pins); 8] = [
+    ('d', '-', Pins::VDA),
+    ('p', '-', Pins::VPA),
+    ('v', '-', Pins::VPB),
+    ('r', 'w', Pins::RWB),
+    ('e', '-', Pins::E),
+    ('m', '-', Pins::M),
+    ('x', '-', Pins::X),
+    ('l', '-', Pins::MLB),
 ];
 
 /// One test: the state before an instruction, the state after it and its bus cycles.
@@ -163,8 +163,7 @@ fn parse_signals(signals: &str) -> Result<Pins, CycleError> {
         return Err(error());
     }
     let mut pins = Pins::empty();
-    for (character, (letter, flag)) in signals.chars().zip(SIGNALS) {
-        let inactive = if flag == Pins::RWB { 'w' } else { '-' };
+    for (character, (letter, inactive, flag)) in signals.chars().zip(SIGNALS) {
         if character == letter {
             pins |= flag;
         } else if character != inactive {
@@ -179,13 +178,11 @@ fn parse_signals(signals: &str) -> Result<Pins, CycleError> {
 pub fn signal_string(pins: Pins) -> String {
     SIGNALS
         .iter()
-        .map(|&(letter, flag)| {
+        .map(|&(letter, inactive, flag)| {
             if pins.contains(flag) {
                 letter
-            } else if flag == Pins::RWB {
-                'w'
             } else {
-                '-'
+                inactive
             }
         })
         .collect::<String>()

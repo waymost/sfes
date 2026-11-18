@@ -4,6 +4,28 @@
 //! the M and X flags. An instruction is written once, generic over [`Width`], and the opcode
 //! `match` picks `u8` or `u16`.
 
+/// Runs `$body` with the type `$width` set to `u8` when `$flag` is set in `$flags`, and to
+/// `u16` otherwise: the one place where an instruction's M or X flag picks its width.
+///
+/// ```ignore
+/// at_width!(self.p, Flags::M, W => self.load_accumulator::<W>(bus, mode))
+/// ```
+// @source: wdc-w65c816s#2.4
+// @source: wdc-w65c816s#2.7
+macro_rules! at_width {
+    ($flags:expr, $flag:expr, $width:ident => $body:expr) => {
+        if $flags.contains($flag) {
+            type $width = u8;
+            $body
+        } else {
+            type $width = u16;
+            $body
+        }
+    };
+}
+
+pub(crate) use at_width;
+
 /// An operand width, `u8` or `u16`. The trait is private to the crate, so nothing else can
 /// implement it.
 // @source: wdc-w65c816s#2.4
