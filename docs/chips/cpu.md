@@ -281,6 +281,27 @@ WDM is two bytes and two cycles (Table 5-4) and does nothing (7.16). Its second 
 
 All 25 opcodes pass every test of their vector files in both modes.
 
+## Block moves: MVN, MVP
+
+MVN (`54`) and MVP (`44`) copy C plus one bytes from the source bank at X to the destination bank at Y. The first operand byte is the destination bank and the second the source bank (3.5.9); assemblers write them the other way round. The 16-bit C is used whatever the M flag.
+
+One `step` moves one byte in the seven cycles of Table 5-7 rows 9a and 9b (ADR 0004):
+
+| Cycle | Address | What |
+| --- | --- | --- |
+| 1 | PBR,PC | opcode |
+| 2 | PBR,PC+1 | destination bank |
+| 3 | PBR,PC+2 | source bank |
+| 4 | source bank,X | read the byte |
+| 5 | destination bank,Y | write it |
+| 6, 7 | destination bank,Y | internal |
+
+After the byte, DBR holds the destination bank (7.18), X and Y step by one (up for MVN, down for MVP), and C decrements. While C is not `FFFF` the program counter goes back to the opcode, so the next step fetches all three bytes again, and an interrupt taken between two bytes pushes the instruction's own address and resumes the move on RTI (manual, chapter 18). After the last byte the program counter is past the instruction.
+
+X and Y wrap within the bank. With the X flag set (always, in emulation mode) their high bytes stay zero, so both blocks lie in the first 256 bytes of their banks and the indexes wrap from `FF` to `00` (7.8.3.2). The source and destination banks are used in emulation mode too.
+
+Both opcodes pass every test of their vector files in both modes. The set has 100 tests per file for these two, each a whole move of 4 to 1,000 bytes; the harness steps once per byte.
+
 ## Testing against the vectors
 
 `sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
