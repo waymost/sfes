@@ -102,7 +102,7 @@ notes = """
 Copyright Western Design Center, all rights reserved: the PDF and any text extracted from it stay outside the repo. Anchor forms, always using the numbers \
 printed in the document: a section is its number (wdc-w65c816s#2.20, wdc-w65c816s#3.5.11); a table or figure is `table-` or `figure-` plus its number \
 (wdc-w65c816s#table-5-4, wdc-w65c816s#figure-2-1); a row of Table 5-7, Instruction Operation, adds the row label printed in its Address Mode column \
-(wdc-w65c816s#table-5-7-1a, wdc-w65c816s#table-5-7-22d); a numbered note under Table 5-7 is wdc-w65c816s#table-5-7-note-4. Code that implements a per-cycle \
+(wdc-w65c816s#table-5-7-1a, wdc-w65c816s#table-5-7-22d); a numbered note under a table adds `-note-` and its number (wdc-w65c816s#table-5-7-note-4, wdc-w65c816s#table-5-5-note-2). Code that implements a per-cycle \
 sequence cites the Table 5-7 row, not the table as a whole."""
 
 [[source]]
