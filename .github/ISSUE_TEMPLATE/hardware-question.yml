@@ -12,7 +12,7 @@ body:
     id: sources
     attributes:
       label: What the sources say
-      description: Cite bibliography ids and sections (e.g. `fullsnes#dma-and-hdma`). Documents only, never emulator code.
+      description: Cite bibliography ids and sections (e.g. `fullsnes#snesdmatransfers`). Documents only, never emulator code.
     validations:
       required: true
   - type: textarea
