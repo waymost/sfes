@@ -5,7 +5,7 @@ use crate::{
     addressing::{Address, Mode},
     bus::Bus65816,
     registers::{Cpu65816, Flags},
-    width::Width,
+    width::{Width, at_width},
 };
 
 impl Cpu65816 {
@@ -14,33 +14,51 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-w65c816s#2.4
     pub(crate) fn lda(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        if self.p.contains(Flags::M) {
-            self.load_accumulator::<u8>(bus, mode);
-        } else {
-            self.load_accumulator::<u16>(bus, mode);
-        }
+        at_width!(self.p, Flags::M, W => self.load_accumulator::<W>(bus, mode));
     }
 
     /// LDX: loads X from memory, 8 bits wide when the X flag is set and 16 bits otherwise.
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-w65c816s#2.7
     pub(crate) fn ldx(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        self.x = if self.p.contains(Flags::X) {
-            self.load_index::<u8>(bus, mode)
-        } else {
-            self.load_index::<u16>(bus, mode)
-        };
+        self.x = at_width!(self.p, Flags::X, W => self.load_index::<W>(bus, mode));
     }
 
     /// LDY: loads Y from memory, 8 bits wide when the X flag is set and 16 bits otherwise.
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-w65c816s#2.7
     pub(crate) fn ldy(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        self.y = if self.p.contains(Flags::X) {
-            self.load_index::<u8>(bus, mode)
-        } else {
-            self.load_index::<u16>(bus, mode)
-        };
+        self.y = at_width!(self.p, Flags::X, W => self.load_index::<W>(bus, mode));
+    }
+
+    /// STA: stores the accumulator, A when the M flag is set and C otherwise.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.4
+    pub(crate) fn sta(&mut self, bus: &mut impl Bus65816, address: Address) {
+        at_width!(self.p, Flags::M, W => {
+            self.write_operand(bus, address, self.accumulator::<W>());
+        });
+    }
+
+    /// STX: stores X, 8 bits wide when the X flag is set and 16 bits otherwise.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.7
+    pub(crate) fn stx(&mut self, bus: &mut impl Bus65816, address: Address) {
+        self.store_index(bus, address, self.x);
+    }
+
+    /// STY: stores Y, 8 bits wide when the X flag is set and 16 bits otherwise.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.7
+    pub(crate) fn sty(&mut self, bus: &mut impl Bus65816, address: Address) {
+        self.store_index(bus, address, self.y);
+    }
+
+    /// STZ: stores zero, 8 bits wide when the M flag is set and 16 bits otherwise.
+    // @source: wdc-w65c816s#table-5-5
+    // @source: wdc-w65c816s#2.4
+    pub(crate) fn stz(&mut self, bus: &mut impl Bus65816, address: Address) {
+        at_width!(self.p, Flags::M, W => self.write_operand(bus, address, W::from_register(0)));
     }
 
     /// "M → A" at width `W`, setting N and Z from the value. An 8-bit load leaves the B
@@ -62,54 +80,14 @@ impl Cpu65816 {
         self.p.set_negative_zero(value);
         value.to_u16()
     }
-}
-
-impl Cpu65816 {
-    /// STA: stores the accumulator, A when the M flag is set and C otherwise.
-    // @source: wdc-w65c816s#table-5-5
-    // @source: wdc-w65c816s#2.4
-    pub(crate) fn sta(&mut self, bus: &mut impl Bus65816, address: Address) {
-        if self.p.contains(Flags::M) {
-            self.write_operand(bus, address, self.accumulator::<u8>());
-        } else {
-            self.write_operand(bus, address, self.accumulator::<u16>());
-        }
-    }
-
-    /// STX: stores X, 8 bits wide when the X flag is set and 16 bits otherwise.
-    // @source: wdc-w65c816s#table-5-5
-    // @source: wdc-w65c816s#2.7
-    pub(crate) fn stx(&mut self, bus: &mut impl Bus65816, address: Address) {
-        self.store_index(bus, address, self.x);
-    }
-
-    /// STY: stores Y, 8 bits wide when the X flag is set and 16 bits otherwise.
-    // @source: wdc-w65c816s#table-5-5
-    // @source: wdc-w65c816s#2.7
-    pub(crate) fn sty(&mut self, bus: &mut impl Bus65816, address: Address) {
-        self.store_index(bus, address, self.y);
-    }
-
-    /// STZ: stores zero, 8 bits wide when the M flag is set and 16 bits otherwise.
-    // @source: wdc-w65c816s#table-5-5
-    // @source: wdc-w65c816s#2.4
-    pub(crate) fn stz(&mut self, bus: &mut impl Bus65816, address: Address) {
-        if self.p.contains(Flags::M) {
-            self.write_operand(bus, address, 0_u8);
-        } else {
-            self.write_operand(bus, address, 0_u16);
-        }
-    }
 
     /// Stores an index register's value at the width the X flag selects.
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-w65c816s#2.7
     fn store_index(&mut self, bus: &mut impl Bus65816, address: Address, register: u16) {
-        if self.p.contains(Flags::X) {
-            self.write_operand(bus, address, <u8 as Width>::from_register(register));
-        } else {
-            self.write_operand(bus, address, register);
-        }
+        at_width!(self.p, Flags::X, W => {
+            self.write_operand(bus, address, W::from_register(register));
+        });
     }
 }
 

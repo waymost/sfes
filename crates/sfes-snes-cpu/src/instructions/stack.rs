@@ -18,7 +18,7 @@ use crate::{
     addressing::StackWrap,
     bus::Bus65816,
     registers::{Cpu65816, Flags},
-    width::Width,
+    width::{Width, at_width},
 };
 
 impl Cpu65816 {
@@ -29,13 +29,10 @@ impl Cpu65816 {
     // @source: 6502org-65c816-opcodes#6.8.2
     pub(crate) fn pha(&mut self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
-        if self.p.contains(Flags::M) {
-            let value = self.accumulator::<u8>();
+        at_width!(self.p, Flags::M, W => {
+            let value = self.accumulator::<W>();
             self.push_value(bus, value, StackWrap::PageOne);
-        } else {
-            let value = self.accumulator::<u16>();
-            self.push_value(bus, value, StackWrap::PageOne);
-        }
+        });
     }
 
     /// PHX: pushes X, at the width the X flag selects.
@@ -109,15 +106,11 @@ impl Cpu65816 {
     // @source: 6502org-65c816-opcodes#6.8.2
     pub(crate) fn pla(&mut self, bus: &mut impl Bus65816) {
         self.pull_internal_cycles(bus);
-        if self.p.contains(Flags::M) {
-            let value = self.pull_value::<u8>(bus, StackWrap::PageOne);
+        at_width!(self.p, Flags::M, W => {
+            let value = self.pull_value::<W>(bus, StackWrap::PageOne);
             self.p.set_negative_zero(value);
             self.set_accumulator(value);
-        } else {
-            let value = self.pull_value::<u16>(bus, StackWrap::PageOne);
-            self.p.set_negative_zero(value);
-            self.set_accumulator(value);
-        }
+        });
     }
 
     /// PLX: pulls X at the width the X flag selects, and sets N and Z from it.
@@ -230,12 +223,9 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7-note-1
     fn push_index(&mut self, bus: &mut impl Bus65816, register: u16) {
         self.internal_at_program_counter(bus);
-        if self.p.contains(Flags::X) {
-            let value = <u8 as Width>::from_register(register);
-            self.push_value(bus, value, StackWrap::PageOne);
-        } else {
-            self.push_value(bus, register, StackWrap::PageOne);
-        }
+        at_width!(self.p, Flags::X, W => {
+            self.push_value(bus, W::from_register(register), StackWrap::PageOne);
+        });
     }
 
     /// PLX and PLY: the register at the width the X flag selects, setting N and Z. The high
@@ -244,15 +234,11 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7-note-1
     fn pull_index(&mut self, bus: &mut impl Bus65816) -> u16 {
         self.pull_internal_cycles(bus);
-        if self.p.contains(Flags::X) {
-            let value = self.pull_value::<u8>(bus, StackWrap::PageOne);
+        at_width!(self.p, Flags::X, W => {
+            let value = self.pull_value::<W>(bus, StackWrap::PageOne);
             self.p.set_negative_zero(value);
             value.to_u16()
-        } else {
-            let value = self.pull_value::<u16>(bus, StackWrap::PageOne);
-            self.p.set_negative_zero(value);
-            value
-        }
+        })
     }
 
     /// Cycles 2 and 3 of row 22b: two internal cycles at PBR,PC+1.
@@ -260,27 +246,6 @@ impl Cpu65816 {
     fn pull_internal_cycles(&self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
         self.internal_at_program_counter(bus);
-    }
-
-    /// Pushes `value`: "REG High" at 0,S when it is 16 bits wide (cycle 3a of row 22c), then
-    /// "REG Low".
-    // @source: wdc-w65c816s#table-5-7-22c
-    // @source: wdc-w65c816s#table-5-7-note-1
-    fn push_value<W: Width>(&mut self, bus: &mut impl Bus65816, value: W, wrap: StackWrap) {
-        let (low, high) = value.to_bytes();
-        if let Some(high) = high {
-            self.push(bus, high, wrap);
-        }
-        self.push(bus, low, wrap);
-    }
-
-    /// Pulls a value of width `W`: "REG Low" at 0,S+1, then, when 16 bits wide, "REG High"
-    /// at 0,S+2 (cycles 4 and 4a of row 22b).
-    // @source: wdc-w65c816s#table-5-7-22b
-    // @source: wdc-w65c816s#table-5-7-note-1
-    fn pull_value<W: Width>(&mut self, bus: &mut impl Bus65816, wrap: StackWrap) -> W {
-        let low = self.pull(bus, wrap);
-        W::from_bytes(low, || self.pull(bus, wrap))
     }
 }
 

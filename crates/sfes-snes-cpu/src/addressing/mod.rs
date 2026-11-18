@@ -3,10 +3,10 @@
 //! Addressing modes: each mode performs its exact sequence of bus cycles.
 //!
 //! A mode function runs the cycles of its Table 5-7 row from cycle 2 up to the cycle before
-//! the data, and returns where the data is as an [`Operand`]. The instruction then reads (or,
-//! from #34, writes) one or two bytes there. Where the high byte of 16-bit data lives is part
-//! of the mode: data reached through the Data Bank Register or a long address runs on into
-//! the next bank, while direct and stack-relative data stays in bank 0.
+//! the data, and returns where the data is as an [`Operand`]. The instruction then reads or
+//! writes one or two bytes there. Where the high byte of 16-bit data lives is part of the
+//! mode: data reached through the Data Bank Register or a long address runs on into the next
+//! bank, while direct and stack-relative data stays in bank 0.
 
 mod absolute;
 mod direct;
@@ -23,73 +23,20 @@ use crate::{
     width::Width,
 };
 
-/// The addressing modes that yield a data operand, named as in the datasheet's Table 5-6.
+/// The addressing modes that yield a data operand, named as in the datasheet's Table 5-6:
+/// immediate data, or data in memory at an [`Address`].
 // @source: wdc-w65c816s#table-5-6
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum Mode {
     /// `#`: the operand follows the opcode.
     Immediate,
-    /// `a`
-    Absolute,
-    /// `a,x`
-    AbsoluteX,
-    /// `a,y`
-    AbsoluteY,
-    /// `al`
-    AbsoluteLong,
-    /// `al,x`
-    AbsoluteLongX,
-    /// `d`
-    Direct,
-    /// `d,x`
-    DirectX,
-    /// `d,y`
-    DirectY,
-    /// `(d)`
-    DirectIndirect,
-    /// `(d,x)`
-    DirectIndexedIndirect,
-    /// `(d),y`
-    DirectIndirectIndexed,
-    /// `[d]`
-    DirectIndirectLong,
-    /// `[d],y`
-    DirectIndirectLongIndexed,
-    /// `d,s`
-    StackRelative,
-    /// `(d,s),y`
-    StackRelativeIndirectIndexed,
+    /// The operand is in memory. The store and read-modify-write instructions take an
+    /// [`Address`] alone, so that a write to immediate data cannot be written.
+    Memory(Address),
 }
 
-impl Mode {
-    /// The memory address mode, or `None` for immediate data, which is not in memory the
-    /// instruction can write.
-    // @source: wdc-w65c816s#table-5-6
-    const fn address(self) -> Option<Address> {
-        let address = match self {
-            Self::Immediate => return None,
-            Self::Absolute => Address::Absolute,
-            Self::AbsoluteX => Address::AbsoluteX,
-            Self::AbsoluteY => Address::AbsoluteY,
-            Self::AbsoluteLong => Address::AbsoluteLong,
-            Self::AbsoluteLongX => Address::AbsoluteLongX,
-            Self::Direct => Address::Direct,
-            Self::DirectX => Address::DirectX,
-            Self::DirectY => Address::DirectY,
-            Self::DirectIndirect => Address::DirectIndirect,
-            Self::DirectIndexedIndirect => Address::DirectIndexedIndirect,
-            Self::DirectIndirectIndexed => Address::DirectIndirectIndexed,
-            Self::DirectIndirectLong => Address::DirectIndirectLong,
-            Self::DirectIndirectLongIndexed => Address::DirectIndirectLongIndexed,
-            Self::StackRelative => Address::StackRelative,
-            Self::StackRelativeIndirectIndexed => Address::StackRelativeIndirectIndexed,
-        };
-        Some(address)
-    }
-}
-
-/// The addressing modes whose operand is in memory: every [`Mode`] but immediate. The store
-/// instructions take one of these, so that a store to immediate data cannot be written.
+/// The addressing modes whose operand is in memory: every mode of Table 5-6 that yields data,
+/// except immediate.
 // @source: wdc-w65c816s#table-5-6
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum Address {
@@ -136,6 +83,29 @@ pub(crate) enum Access {
     Write,
 }
 
+/// Which way a register steps by one: S in a pull or a push, X and Y in a block move.
+// @source: wdc-w65c816s#7.1
+// @source: wdc-w65c816s#3.5.9
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Direction {
+    /// Increment: S in a pull, X and Y in MVN.
+    Up,
+    /// Decrement: S in a push, X and Y in MVP.
+    Down,
+}
+
+impl Direction {
+    /// `value` stepped by one in this direction, wrapping in 16 bits.
+    // @source: wdc-w65c816s#7.1
+    // @source: wdc-w65c816s#3.5.9
+    pub(crate) const fn step(self, value: u16) -> u16 {
+        match self {
+            Self::Up => value.wrapping_add(1),
+            Self::Down => value.wrapping_sub(1),
+        }
+    }
+}
+
 /// Where a data operand is: the address of its low byte and, for 16-bit data, of its high
 /// byte.
 // @source: wdc-w65c816s#3.5
@@ -157,15 +127,24 @@ impl Operand {
         Self { low, high }
     }
 
+    /// An operand that stays in `bank`: the high byte is at the next offset, wrapping from
+    /// `FFFF` to `0000` (the indexed jump pointers of ADR 0008).
+    // @source: wdc-w65c816s#7.1
+    // @source: wdc-w65c816s#7.2
+    // @source: adr-0008
+    pub(crate) fn in_bank(bank: u8, offset: u16) -> Self {
+        Self {
+            low: Addr24::from_bank_offset(bank, offset),
+            high: Addr24::from_bank_offset(bank, offset.wrapping_add(1)),
+        }
+    }
+
     /// An operand in bank 0, which direct and stack-relative addressing never leave: the
     /// high byte is at the next offset, wrapping from `FFFF` to `0000`.
     // @source: wdc-w65c816s#7.1
     // @source: wdc-w65c816s#7.2
-    fn in_bank_zero(offset: u16) -> Self {
-        Self {
-            low: Addr24::from_bank_offset(0, offset),
-            high: Addr24::from_bank_offset(0, offset.wrapping_add(1)),
-        }
+    pub(crate) fn in_bank_zero(offset: u16) -> Self {
+        Self::in_bank(0, offset)
     }
 }
 
@@ -182,11 +161,13 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7
     // @source: wdc-w65c816s#table-5-7-note-1
     pub(crate) fn read_operand<W: Width>(&mut self, bus: &mut impl Bus65816, mode: Mode) -> W {
-        let Some(address) = mode.address() else {
-            return self.immediate(bus);
-        };
-        let operand = self.operand(bus, address, Access::Read);
-        self.read_data(bus, operand)
+        match mode {
+            Mode::Immediate => self.immediate(bus),
+            Mode::Memory(address) => {
+                let operand = self.operand(bus, address, Access::Read);
+                self.read_data(bus, operand)
+            }
+        }
     }
 
     /// Runs the cycles of `address` after the opcode fetch and writes `value` at width `W`:
@@ -227,13 +208,23 @@ impl Cpu65816 {
     }
 
     /// The data cycles that end a read instruction: "Data Low" and, for 16-bit data, "Data
-    /// High", each with VDA active.
+    /// High", each with VDA active. The pointer reads of the indirect modes and jumps are
+    /// the same two cycles at 16 bits.
     // @source: wdc-w65c816s#table-5-7-1a
     // @source: wdc-w65c816s#table-5-7-note-1
-    fn read_data<W: Width>(&self, bus: &mut impl Bus65816, operand: Operand) -> W {
+    pub(crate) fn read_data<W: Width>(&self, bus: &mut impl Bus65816, operand: Operand) -> W {
         let Operand { low, high } = operand;
         let low = self.read_byte(bus, low);
         W::from_bytes(low, || self.read_byte(bus, high))
+    }
+
+    /// The 16-bit value at 0,`offset` and 0,`offset`+1, wrapping at the end of bank 0: the
+    /// "AAL", "AAH" pointer reads of the `[d]` and `(a)` rows and PEI's data.
+    // @source: wdc-w65c816s#table-5-7-15
+    // @source: wdc-w65c816s#table-5-7-3b
+    // @source: wdc-w65c816s#table-5-7-22e
+    pub(crate) fn read_bank_zero_word(&self, bus: &mut impl Bus65816, offset: u16) -> u16 {
+        self.read_data(bus, Operand::in_bank_zero(offset))
     }
 
     /// The data cycles that end a write instruction: "Data Low" and, for 16-bit data, "Data

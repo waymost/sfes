@@ -15,7 +15,7 @@
 use crate::{
     bus::Bus65816,
     registers::{Cpu65816, Flags},
-    width::Width,
+    width::{Width, at_width},
 };
 
 impl Cpu65816 {
@@ -27,12 +27,13 @@ impl Cpu65816 {
         self.x = self.transfer_to_index(bus, self.a);
     }
 
-    /// TAY: "A → Y", 16 bits (B and A) into a 16-bit Y. (Table 5-5 prints its opcode as
-    /// `AB`, which Table 5-4 gives to PLB; TAY is `A8` in Table 5-4 and in the vectors.)
+    /// TAY: "A → Y", 16 bits (B and A) into a 16-bit Y. Its opcode is `A8` (Table 5-4); the
+    /// `AB` of Table 5-5 is a misprint (ADR 0012).
     // @source: wdc-w65c816s#table-5-4
     // @source: wdc-w65c816s#table-5-7-19a
     // @source: wdc-65816-manual#chapter-18-tay
     // @source: 6502org-65c816-opcodes#6.10.1
+    // @source: adr-0012
     pub(crate) fn tay(&mut self, bus: &mut impl Bus65816) {
         self.y = self.transfer_to_index(bus, self.a);
     }
@@ -155,14 +156,11 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#2.7
     fn transfer_to_index(&mut self, bus: &mut impl Bus65816, value: u16) -> u16 {
         self.internal_at_program_counter(bus);
-        if self.p.contains(Flags::X) {
-            let value = <u8 as Width>::from_register(value);
+        at_width!(self.p, Flags::X, W => {
+            let value = W::from_register(value);
             self.p.set_negative_zero(value);
             value.to_u16()
-        } else {
-            self.p.set_negative_zero(value);
-            value
-        }
+        })
     }
 
     /// The internal cycle of row 19a, then `value` into the accumulator at the width the M
@@ -172,14 +170,11 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#2.4
     fn transfer_to_accumulator(&mut self, bus: &mut impl Bus65816, value: u16) {
         self.internal_at_program_counter(bus);
-        if self.p.contains(Flags::M) {
-            let value = <u8 as Width>::from_register(value);
+        at_width!(self.p, Flags::M, W => {
+            let value = W::from_register(value);
             self.p.set_negative_zero(value);
             self.set_accumulator(value);
-        } else {
-            self.p.set_negative_zero(value);
-            self.set_accumulator(value);
-        }
+        });
     }
 
     /// Stores `value` in S, with SH forced to `01` in emulation mode.

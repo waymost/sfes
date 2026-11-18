@@ -29,7 +29,7 @@
 use sfes_api::Addr24;
 
 use crate::{
-    addressing::StackWrap,
+    addressing::{Direction, StackWrap},
     bus::{Bus65816, Pins},
     registers::{Cpu65816, Flags, RunState},
 };
@@ -113,12 +113,7 @@ impl Cpu65816 {
     // @source: 6502org-65c816-opcodes#6.3.1.1
     // @source: adr-0004
     pub(crate) fn hardware_interrupt(&mut self, bus: &mut impl Bus65816, interrupt: Interrupt) {
-        let address = self.program_address();
-        bus.read(
-            address,
-            Pins::VDA | Pins::VPA | Pins::RWB | self.status_pins(),
-        );
-        self.internal(bus, address);
+        self.discarded_opcode_cycles(bus);
         self.enter_handler(bus, interrupt);
     }
 
@@ -136,12 +131,10 @@ impl Cpu65816 {
         self.internal_at_program_counter(bus);
         self.internal_at_program_counter(bus);
         let status = Flags::from_bits_retain(self.pull(bus, StackWrap::PageOne));
-        let low = self.pull(bus, StackWrap::PageOne);
-        let high = self.pull(bus, StackWrap::PageOne);
+        self.pc = self.pull_value::<u16>(bus, StackWrap::PageOne);
         if !self.e {
             self.pbr = self.pull(bus, StackWrap::PageOne);
         }
-        self.pc = u16::from_le_bytes([low, high]);
         self.set_status(status);
     }
 
@@ -197,17 +190,22 @@ impl Cpu65816 {
         self.p.insert(Flags::I);
         self.run = RunState::Running;
 
-        let address = self.program_address();
-        bus.read(
-            address,
-            Pins::VDA | Pins::VPA | Pins::RWB | self.status_pins(),
-        );
-        self.internal(bus, address);
+        self.discarded_opcode_cycles(bus);
         for _ in 0..3 {
             self.read_byte(bus, self.stack_address());
-            self.s = 0x0100 | (self.s.wrapping_sub(1) & 0x00FF);
+            self.step_stack(StackWrap::PageOne, Direction::Down);
         }
         self.pc = self.read_vector(bus, RESET_VECTOR);
+    }
+
+    /// Cycles 1 and 2 of row 22a, which hardware interrupts and reset share: the opcode at
+    /// PBR,PC is read with VDA and VPA active and discarded, then an internal cycle runs at the
+    /// same address.
+    // @source: wdc-w65c816s#table-5-7-22a
+    // @source: adr-0011
+    fn discarded_opcode_cycles(&self, bus: &mut impl Bus65816) {
+        self.read_opcode(bus);
+        self.internal_at_program_counter(bus);
     }
 
     /// The end of every interrupt sequence: the pushes, the flag changes and the vector.
@@ -225,9 +223,7 @@ impl Cpu65816 {
         if !self.e {
             self.push(bus, self.pbr, StackWrap::PageOne);
         }
-        let [low, high] = self.pc.to_le_bytes();
-        self.push(bus, high, StackWrap::PageOne);
-        self.push(bus, low, StackWrap::PageOne);
+        self.push_value(bus, self.pc, StackWrap::PageOne);
         let status = if self.e && interrupt.is_hardware() {
             self.p.difference(Flags::X)
         } else {

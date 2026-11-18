@@ -15,36 +15,22 @@
 use sfes_api::Addr24;
 
 use crate::{
+    addressing::Direction,
     bus::Bus65816,
     registers::{Cpu65816, Flags},
 };
 
-/// Which way a block move steps X and Y after each byte.
+/// `register` stepped by one in `direction` after a block move's byte. With the index
+/// registers 8 bits wide (`narrow`) the high byte stays zero, so the step wraps within page 0
+/// of the bank (7.8.3.2); otherwise it wraps within the bank.
 // @source: wdc-w65c816s#3.5.9
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Direction {
-    /// MVN: "Increment X and Y".
-    Next,
-    /// MVP: "decrement X and Y".
-    Previous,
-}
-
-impl Direction {
-    /// `register` stepped by one in this direction. With the index registers 8 bits wide the
-    /// high byte stays zero, so the step wraps within page 0 of the bank (7.8.3.2); otherwise
-    /// it wraps within the bank.
-    // @source: wdc-w65c816s#3.5.9
-    // @source: wdc-w65c816s#7.8.3.2
-    // @source: wdc-65816-manual#chapter-17-block-move-addressing
-    // @source: 6502org-65c816-opcodes#5.1.2
-    // @source: 6502org-65c816-opcodes#6.6
-    const fn step(self, register: u16, narrow: bool) -> u16 {
-        let stepped = match self {
-            Self::Next => register.wrapping_add(1),
-            Self::Previous => register.wrapping_sub(1),
-        };
-        if narrow { stepped & 0x00FF } else { stepped }
-    }
+// @source: wdc-w65c816s#7.8.3.2
+// @source: wdc-65816-manual#chapter-17-block-move-addressing
+// @source: 6502org-65c816-opcodes#5.1.2
+// @source: 6502org-65c816-opcodes#6.6
+const fn step_index(register: u16, direction: Direction, narrow: bool) -> u16 {
+    let stepped = direction.step(register);
+    if narrow { stepped & 0x00FF } else { stepped }
 }
 
 impl Cpu65816 {
@@ -53,7 +39,7 @@ impl Cpu65816 {
     // @source: wdc-65816-manual#chapter-18-mvn
     // @source: 6502org-65c816-opcodes#6.6
     pub(crate) fn mvn(&mut self, bus: &mut impl Bus65816) {
-        self.block_move(bus, Direction::Next);
+        self.block_move(bus, Direction::Up);
     }
 
     /// MVP: moves the byte at srcbnk,X to dstbnk,Y, then decrements X and Y (row 9b).
@@ -61,7 +47,7 @@ impl Cpu65816 {
     // @source: wdc-65816-manual#chapter-18-mvp
     // @source: 6502org-65c816-opcodes#6.6
     pub(crate) fn mvp(&mut self, bus: &mut impl Bus65816) {
-        self.block_move(bus, Direction::Previous);
+        self.block_move(bus, Direction::Down);
     }
 
     /// Cycles 2 to 7 of rows 9a and 9b, which move one byte:
@@ -98,8 +84,8 @@ impl Cpu65816 {
 
         self.dbr = destination;
         let narrow = self.p.contains(Flags::X);
-        self.x = direction.step(self.x, narrow);
-        self.y = direction.step(self.y, narrow);
+        self.x = step_index(self.x, direction, narrow);
+        self.y = step_index(self.y, direction, narrow);
         self.a = self.a.wrapping_sub(1);
         if self.a != 0xFFFF {
             self.pc = self.pc.wrapping_sub(3);
@@ -239,9 +225,9 @@ mod tests {
     // @source: wdc-w65c816s#3.5.9
     #[test]
     fn directions_step_by_one_within_the_index_width() {
-        assert_eq!(Direction::Next.step(0xFFFF, false), 0x0000);
-        assert_eq!(Direction::Previous.step(0x0000, false), 0xFFFF);
-        assert_eq!(Direction::Next.step(0x00FF, true), 0x0000);
-        assert_eq!(Direction::Previous.step(0x0000, true), 0x00FF);
+        assert_eq!(step_index(0xFFFF, Direction::Up, false), 0x0000);
+        assert_eq!(step_index(0x0000, Direction::Down, false), 0xFFFF);
+        assert_eq!(step_index(0x00FF, Direction::Up, true), 0x0000);
+        assert_eq!(step_index(0x0000, Direction::Down, true), 0x00FF);
     }
 }

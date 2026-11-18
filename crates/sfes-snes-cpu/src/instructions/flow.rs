@@ -12,7 +12,7 @@
 use sfes_api::Addr24;
 
 use crate::{
-    addressing::StackWrap,
+    addressing::{Operand, StackWrap},
     bus::Bus65816,
     registers::{Cpu65816, Flags},
 };
@@ -217,7 +217,7 @@ impl Cpu65816 {
     pub(crate) fn rts(&mut self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
         self.internal_at_program_counter(bus);
-        let address = self.pull_word(bus, StackWrap::PageOne);
+        let address = self.pull_value::<u16>(bus, StackWrap::PageOne);
         self.internal(bus, self.stack_address());
         self.pc = address.wrapping_add(1);
     }
@@ -233,7 +233,7 @@ impl Cpu65816 {
     pub(crate) fn rtl(&mut self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
         self.internal_at_program_counter(bus);
-        let address = self.pull_word(bus, StackWrap::BankZero);
+        let address = self.pull_value::<u16>(bus, StackWrap::BankZero);
         self.pbr = self.pull(bus, StackWrap::BankZero);
         self.pc = address.wrapping_add(1);
         self.restore_stack_page();
@@ -243,36 +243,14 @@ impl Cpu65816 {
     /// "PCL".
     // @source: wdc-w65c816s#table-5-7-1c
     fn push_return_address(&mut self, bus: &mut impl Bus65816, wrap: StackWrap) {
-        let [low, high] = self.pc.wrapping_sub(1).to_le_bytes();
-        self.push(bus, high, wrap);
-        self.push(bus, low, wrap);
-    }
-
-    /// Pulls a 16-bit value, low byte first.
-    // @source: wdc-w65c816s#table-5-7-22h
-    fn pull_word(&mut self, bus: &mut impl Bus65816, wrap: StackWrap) -> u16 {
-        let low = self.pull(bus, wrap);
-        let high = self.pull(bus, wrap);
-        u16::from_le_bytes([low, high])
-    }
-
-    /// The 16-bit value at 0,`pointer` and 0,`pointer`+1, wrapping at the end of bank 0.
-    // @source: wdc-w65c816s#table-5-7-3b
-    fn read_bank_zero_word(&self, bus: &mut impl Bus65816, pointer: u16) -> u16 {
-        let low = self.read_byte(bus, Addr24::from_bank_offset(0, pointer));
-        let high = self.read_byte(bus, Addr24::from_bank_offset(0, pointer.wrapping_add(1)));
-        u16::from_le_bytes([low, high])
+        self.push_value(bus, self.pc.wrapping_sub(1), wrap);
     }
 
     /// The 16-bit value at PBR,`base`+X and the next offset, wrapping in the program bank.
     // @source: wdc-w65c816s#table-5-7-2a
     // @source: adr-0008
     fn read_program_bank_pointer(&self, bus: &mut impl Bus65816, base: u16) -> u16 {
-        let pointer = base.wrapping_add(self.x);
-        let low = self.read_byte(bus, Addr24::from_bank_offset(self.pbr, pointer));
-        let next = Addr24::from_bank_offset(self.pbr, pointer.wrapping_add(1));
-        let high = self.read_byte(bus, next);
-        u16::from_le_bytes([low, high])
+        self.read_data(bus, Operand::in_bank(self.pbr, base.wrapping_add(self.x)))
     }
 }
 

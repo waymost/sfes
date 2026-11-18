@@ -14,7 +14,7 @@ use crate::{
     addressing::Mode,
     bus::Bus65816,
     registers::{Cpu65816, Flags},
-    width::Width,
+    width::{Width, at_width},
 };
 
 /// What an addition or subtraction produced, before it is written to the registers.
@@ -34,11 +34,7 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-65816-manual#chapter-18-adc
     pub(crate) fn adc(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        if self.p.contains(Flags::M) {
-            self.add_with_carry::<u8>(bus, mode, false);
-        } else {
-            self.add_with_carry::<u16>(bus, mode, false);
-        }
+        at_width!(self.p, Flags::M, W => self.add_with_carry::<W>(bus, mode, false));
     }
 
     /// SBC: "A – M – (C) → A", subtracting one more when the carry is clear, and setting N,
@@ -46,22 +42,14 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-65816-manual#chapter-18-sbc
     pub(crate) fn sbc(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        if self.p.contains(Flags::M) {
-            self.add_with_carry::<u8>(bus, mode, true);
-        } else {
-            self.add_with_carry::<u16>(bus, mode, true);
-        }
+        at_width!(self.p, Flags::M, W => self.add_with_carry::<W>(bus, mode, true));
     }
 
     /// CMP: "A-M", setting N, Z and C from the result and discarding it.
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-65816-manual#chapter-18-cmp
     pub(crate) fn cmp(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        if self.p.contains(Flags::M) {
-            self.compare::<u8>(bus, mode, self.a);
-        } else {
-            self.compare::<u16>(bus, mode, self.a);
-        }
+        at_width!(self.p, Flags::M, W => self.compare::<W>(bus, mode, self.a));
     }
 
     /// CPX: "X-M", at the width the X flag selects.
@@ -107,11 +95,7 @@ impl Cpu65816 {
     /// CPX or CPY at the width the X flag selects.
     // @source: 6502org-65c816-opcodes#6.1.1.2
     fn compare_index(&mut self, bus: &mut impl Bus65816, mode: Mode, register: u16) {
-        if self.p.contains(Flags::X) {
-            self.compare::<u8>(bus, mode, register);
-        } else {
-            self.compare::<u16>(bus, mode, register);
-        }
+        at_width!(self.p, Flags::X, W => self.compare::<W>(bus, mode, register));
     }
 
     /// `register` minus the operand at width `W`, always binary and without the carry: N and

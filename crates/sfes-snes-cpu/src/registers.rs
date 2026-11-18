@@ -125,7 +125,7 @@ impl Cpu65816 {
     pub const fn set_emulation(&mut self, emulation: bool) {
         self.e = emulation;
         if emulation {
-            self.s = 0x0100 | (self.s & 0x00FF);
+            self.restore_stack_page();
             self.set_status(self.p);
         }
     }

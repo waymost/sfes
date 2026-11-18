@@ -102,11 +102,19 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7-note-2
     // @source: wdc-w65c816s#7.2
     pub(crate) fn effective_indirect(&mut self, bus: &mut impl Bus65816) -> u16 {
+        let address = self.fetch_page_crossing_direct_address(bus);
+        self.read_bank_zero_word(bus, address)
+    }
+
+    /// Cycles 2 and 2a of the `[d]`, `[d],y` and PEI rows: fetches the offset, runs the
+    /// optional cycle, and returns D+DO as a 16-bit sum. The bytes these rows read from there
+    /// never wrap at a page boundary, even in emulation mode (datasheet 7.2.1 and 7.2.2).
+    // @source: wdc-w65c816s#table-5-7-15
+    // @source: wdc-w65c816s#table-5-7-22e
+    // @source: wdc-w65c816s#7.2
+    fn fetch_page_crossing_direct_address(&mut self, bus: &mut impl Bus65816) -> u16 {
         let offset = self.fetch_direct_offset(bus);
-        let address = self.d.wrapping_add(u16::from(offset));
-        let low = self.read_byte(bus, Addr24::from_bank_offset(0, address));
-        let high = self.read_byte(bus, Addr24::from_bank_offset(0, address.wrapping_add(1)));
-        u16::from_le_bytes([low, high])
+        self.d.wrapping_add(u16::from(offset))
     }
 
     /// Cycles 2 and 2a of every direct row: fetches the offset "DO", then spends an internal
@@ -156,15 +164,16 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#7.2
     // @source: 6502org-65c816-opcodes#5.9
     fn read_pointer(&self, bus: &mut impl Bus65816, address: u16) -> u16 {
-        let next = if self.direct_page_wraps() {
-            let [low, page] = address.to_le_bytes();
-            u16::from_le_bytes([low.wrapping_add(1), page])
-        } else {
-            address.wrapping_add(1)
+        if !self.direct_page_wraps() {
+            return self.read_bank_zero_word(bus, address);
+        }
+        let [low, page] = address.to_le_bytes();
+        let next = u16::from_le_bytes([low.wrapping_add(1), page]);
+        let operand = Operand {
+            low: Addr24::from_bank_offset(0, address),
+            high: Addr24::from_bank_offset(0, next),
         };
-        let low = self.read_byte(bus, Addr24::from_bank_offset(0, address));
-        let high = self.read_byte(bus, Addr24::from_bank_offset(0, next));
-        u16::from_le_bytes([low, high])
+        self.read_data(bus, operand)
     }
 
     /// Cycles 2 to 5 of the `[d]` and `[d],y` rows: the offset, the optional cycle, and the
@@ -174,12 +183,10 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#7.2
     // @source: 6502org-65c816-opcodes#5.10
     fn read_long_pointer(&mut self, bus: &mut impl Bus65816) -> Addr24 {
-        let offset = self.fetch_direct_offset(bus);
-        let address = self.d.wrapping_add(u16::from(offset));
-        let low = self.read_byte(bus, Addr24::from_bank_offset(0, address));
-        let high = self.read_byte(bus, Addr24::from_bank_offset(0, address.wrapping_add(1)));
+        let address = self.fetch_page_crossing_direct_address(bus);
+        let pointer = self.read_bank_zero_word(bus, address);
         let bank = self.read_byte(bus, Addr24::from_bank_offset(0, address.wrapping_add(2)));
-        Addr24::from_bank_offset(bank, u16::from_le_bytes([low, high]))
+        Addr24::from_bank_offset(bank, pointer)
     }
 }
 

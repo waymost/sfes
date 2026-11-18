@@ -3,57 +3,35 @@
 //! Logic and bit tests: ORA, AND, EOR, BIT, TSB and TRB. All work at the accumulator's
 //! width, 8 bits when the M flag is set and 16 bits otherwise.
 
+use core::ops::{BitAnd, BitOr, BitXor};
+
 use crate::{
     addressing::{Address, Mode},
     bus::Bus65816,
     registers::{Cpu65816, Flags},
-    width::Width,
+    width::{Width, at_width},
 };
-
-/// A bitwise operation that combines the accumulator with memory into the accumulator.
-// @source: 6502org-65c816-opcodes#6.1.2.1
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Bitwise {
-    /// "A V M → A"
-    Or,
-    /// "A^M → A"
-    And,
-    /// "A xv M → A"
-    ExclusiveOr,
-}
-
-impl Bitwise {
-    /// The operation on two values of the same width.
-    // @source: wdc-w65c816s#table-5-5
-    fn apply(self, accumulator: u16, data: u16) -> u16 {
-        match self {
-            Self::Or => accumulator | data,
-            Self::And => accumulator & data,
-            Self::ExclusiveOr => accumulator ^ data,
-        }
-    }
-}
 
 impl Cpu65816 {
     /// ORA: "A V M → A", setting N and Z from the result.
     // @source: wdc-w65c816s#table-5-5
     // @source: 6502org-65c816-opcodes#6.1.2.1
     pub(crate) fn ora(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        self.bitwise(bus, mode, Bitwise::Or);
+        self.bitwise(bus, mode, BitOr::bitor);
     }
 
     /// AND: "A^M → A", setting N and Z from the result.
     // @source: wdc-w65c816s#table-5-5
     // @source: 6502org-65c816-opcodes#6.1.2.1
     pub(crate) fn and(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        self.bitwise(bus, mode, Bitwise::And);
+        self.bitwise(bus, mode, BitAnd::bitand);
     }
 
     /// EOR: "A xv M → A", setting N and Z from the result.
     // @source: wdc-w65c816s#table-5-5
     // @source: 6502org-65c816-opcodes#6.1.2.1
     pub(crate) fn eor(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        self.bitwise(bus, mode, Bitwise::ExclusiveOr);
+        self.bitwise(bus, mode, BitXor::bitxor);
     }
 
     /// BIT: sets Z from "A ^ M" and leaves A alone. Except in immediate mode, N and V take
@@ -62,11 +40,7 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-5-note-2
     // @source: wdc-65816-manual#chapter-18-bit
     pub(crate) fn bit(&mut self, bus: &mut impl Bus65816, mode: Mode) {
-        if self.p.contains(Flags::M) {
-            self.test_bits::<u8>(bus, mode);
-        } else {
-            self.test_bits::<u16>(bus, mode);
-        }
+        at_width!(self.p, Flags::M, W => self.test_bits::<W>(bus, mode));
     }
 
     /// TSB: sets the memory bits that are set in A, "AVM → M", and sets Z from A AND M as
@@ -75,11 +49,9 @@ impl Cpu65816 {
     // @source: wdc-65816-manual#chapter-18-tsb
     // @source: 6502org-65c816-opcodes#6.1.2.3
     pub(crate) fn tsb(&mut self, bus: &mut impl Bus65816, address: Address) {
-        if self.p.contains(Flags::M) {
-            self.modify_operand::<u8>(bus, address, |cpu, data| cpu.test_and_change(data, true));
-        } else {
-            self.modify_operand::<u16>(bus, address, |cpu, data| cpu.test_and_change(data, true));
-        }
+        at_width!(self.p, Flags::M, W => {
+            self.modify_operand::<W>(bus, address, |cpu, data| cpu.test_and_change(data, true));
+        });
     }
 
     /// TRB: clears the memory bits that are set in A, and sets Z from A AND M as BIT does. A
@@ -88,34 +60,25 @@ impl Cpu65816 {
     // @source: wdc-65816-manual#chapter-18-trb
     // @source: 6502org-65c816-opcodes#6.1.2.3
     pub(crate) fn trb(&mut self, bus: &mut impl Bus65816, address: Address) {
-        if self.p.contains(Flags::M) {
-            self.modify_operand::<u8>(bus, address, |cpu, data| cpu.test_and_change(data, false));
-        } else {
-            self.modify_operand::<u16>(bus, address, |cpu, data| cpu.test_and_change(data, false));
-        }
+        at_width!(self.p, Flags::M, W => {
+            self.modify_operand::<W>(bus, address, |cpu, data| cpu.test_and_change(data, false));
+        });
     }
 
-    /// ORA, AND or EOR at the width the M flag selects.
+    /// ORA, AND or EOR at the width the M flag selects: `operation` on the accumulator and
+    /// the operand; the result goes to the accumulator and sets N and Z. An 8-bit result
+    /// leaves B alone.
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-w65c816s#2.4
-    fn bitwise(&mut self, bus: &mut impl Bus65816, mode: Mode, operation: Bitwise) {
-        if self.p.contains(Flags::M) {
-            self.bitwise_at::<u8>(bus, mode, operation);
-        } else {
-            self.bitwise_at::<u16>(bus, mode, operation);
-        }
-    }
-
-    /// `operation` on the accumulator and the operand at width `W`; the result goes to the
-    /// accumulator and sets N and Z. An 8-bit result leaves B alone.
-    // @source: wdc-w65c816s#table-5-5
     // @source: 6502org-65c816-opcodes#6.1.2.1
-    fn bitwise_at<W: Width>(&mut self, bus: &mut impl Bus65816, mode: Mode, operation: Bitwise) {
-        let data = self.read_operand::<W>(bus, mode);
-        let accumulator = self.accumulator::<W>();
-        let result = W::from_register(operation.apply(accumulator.to_u16(), data.to_u16()));
-        self.set_accumulator(result);
-        self.p.set_negative_zero(result);
+    fn bitwise(&mut self, bus: &mut impl Bus65816, mode: Mode, operation: fn(u16, u16) -> u16) {
+        at_width!(self.p, Flags::M, W => {
+            let data = self.read_operand::<W>(bus, mode);
+            let accumulator = self.accumulator::<W>();
+            let result = W::from_register(operation(accumulator.to_u16(), data.to_u16()));
+            self.set_accumulator(result);
+            self.p.set_negative_zero(result);
+        });
     }
 
     /// BIT at width `W`.
