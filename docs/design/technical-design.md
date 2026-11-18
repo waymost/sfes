@@ -285,11 +285,11 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
 
 ### 65C816 (`sfes-snes-cpu`)
 
-- `Cpu65816 { a, x, y, s, d: u16, db, pb: u8, pc: u16, p: Flags, e: bool, run: RunState }`, where `Flags` uses `bitflags` and `RunState` is `Running | Waiting | Stopped`.
+- `Cpu65816 { a, x, y, s, d: u16, dbr, pbr: u8, pc: u16, p: Flags, e: bool, run: RunState }`, where `Flags` uses `bitflags` and `RunState` is `Running | Waiting | Stopped`.
 - `step(&mut self, bus: &mut impl Bus65816)` executes one instruction or one interrupt entry: fetch, then one `match opcode` with 256 arms calling small functions. A block move advances one byte (7 cycles) per `step`, and a waiting or stopped CPU spends one idle cycle per `step`. `interrupts()` is read once, before the opcode fetch; reset is a separate `reset` method (ADR 0004) that runs the reset sequence of ADR 0011.
-- Register width uses const generics instead of duplicated code, e.g. `fn lda<const M16: bool>(&mut self, bus: &mut impl Bus65816, mode: Mode)`. The compiler emits an 8-bit and a 16-bit version.
-- Addressing modes are an enum. Each mode's function performs the exact sequence of reads, including dummy reads and internal cycles, because the test vectors check every bus cycle (EMU-02).
-- Decimal mode (ADR 0007), the emulation-mode stack (ADRs 0005, 0008 and 0009) and direct-page quirks, and interrupt sampling follow the WDC datasheet, with ADRs where vector results decide an ambiguity.
+- Register width is a type parameter instead of duplicated code: instructions are generic over a private, sealed `Width` trait implemented for `u8` and `u16` (decided in the M1 tracking issue), e.g. `fn load_accumulator<W: Width>(&mut self, bus: &mut impl Bus65816, mode: Mode)`, and one `at_width!` macro picks `u8` or `u16` from the M or X flag. The compiler emits an 8-bit and a 16-bit version.
+- Addressing modes are an enum: `Mode` is `Immediate` or `Memory(Address)`, and the stores and read-modify-write instructions take an `Address`, so a write to immediate data cannot be written. Each mode's function performs the exact sequence of reads, including dummy reads and internal cycles, because the test vectors check every bus cycle (EMU-02).
+- Decimal mode (ADR 0007), the emulation-mode stack (ADRs 0005, 0008 and 0009) and direct-page quirks, and interrupt sampling follow the WDC datasheet, with ADRs where vector results decide an ambiguity or the documents misprint an entry (ADR 0012).
 - Testing: a `RecordingBus` in the test harness implements `Bus65816` over a sparse 16 MiB map and records `(address, value, pins)` for every cycle, internal cycles included, so the runner compares the address, the value and all eight signals against the vectors directly (ADR 0004). The emulation-mode vectors start with a stack pointer outside page 1, which the chip cannot hold, so the harness sets the high byte of S to `01` before such a test (ADR 0005).
 
 ### PPU (`sfes-snes-ppu`)
