@@ -2,13 +2,14 @@
 // @source: wdc-w65c816s#3.5.24
 // @source: wdc-w65c816s#7.1
 // @source: adr-0008
+// @source: adr-0009
 //! The stack: pushes and pulls, and stack-relative addressing (an unsigned 8-bit offset from
 //! the stack pointer). The stack is always in bank 0.
 //!
 //! In emulation mode S is in page 1. Most instructions keep their stack accesses there, so S
-//! wraps in its low byte; the instructions that datasheet 7.1 lists (JSL, JSR (a,x), RTL,
-//! and from #39 PEA, PEI, PER, PHD and PLD) step S as a 16-bit value while they run and may
-//! leave page 1, and the high byte of S returns to `01` when they end (ADR 0008).
+//! wraps in its low byte; the instructions that datasheet 7.1 lists (JSL, JSR (a,x), RTL, PEA,
+//! PEI, PER, PHD and PLD), and PLB, step S as a 16-bit value while they run and may leave
+//! page 1, and the high byte of S returns to `01` when they end (ADRs 0008 and 0009).
 
 use sfes_api::Addr24;
 
@@ -22,11 +23,12 @@ use crate::{
 /// are 16-bit steps in bank 0.
 // @source: wdc-w65c816s#7.1
 // @source: adr-0008
+// @source: adr-0009
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StackWrap {
     /// S wraps in its low byte and stays in page 1.
     PageOne,
-    /// S steps as a 16-bit value and may leave page 1 (the instructions of 7.1).
+    /// S steps as a 16-bit value and may leave page 1 (the instructions of 7.1, and PLB).
     BankZero,
 }
 

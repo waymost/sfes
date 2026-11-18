@@ -228,6 +228,33 @@ The pointers of `JMP (a)` and `JML (a)` are in bank 0 and wrap at its end. (`JML
 
 All 20 opcodes pass every test of their vector files in both modes.
 
+## Stack: pushes, pulls, PEA, PEI, PER
+
+They are in [`instructions/stack.rs`](../../crates/sfes-snes-cpu/src/instructions/stack.rs).
+
+| Instruction | Opcode | Row | Cycles | Effect |
+| --- | --- | --- | --- | --- |
+| PHA | 48 | 22c | 3, +1 if m = 0 | push A or C |
+| PHX PHY | DA 5A | 22c | 3, +1 if x = 0 | push X or Y |
+| PHP PHB PHK | 08 8B 4B | 22c | 3 | push P, DBR or PBR (one byte) |
+| PHD | 0B | 22c | 4 | push D (two bytes) |
+| PLA | 68 | 22b | 4, +1 if m = 0 | pull A or C; N, Z |
+| PLX PLY | FA 7A | 22b | 4, +1 if x = 0 | pull X or Y; N, Z |
+| PLP | 28 | 22b | 4 | pull P |
+| PLB | AB | 22b | 4 | pull DBR; N, Z |
+| PLD | 2B | 22b | 5 | pull D (two bytes); N, Z |
+| PEA | F4 | 22d | 5 | push the 16-bit operand |
+| PEI | D4 | 22e | 6, +1 if DL ≠ 0 | push the 16-bit value at 0,D+DO |
+| PER | 62 | 22f | 6 | push PC + 16-bit offset |
+
+A push writes the high byte at 0,S and the low byte below it; a pull reads the low byte first. Pushes spend one internal cycle and pulls two, all at the address after the opcode. PHP and PLP are always one byte (note 12, datasheet 7.20), and PHD, PLD, PEA, PEI and PER always two, whatever the M and X flags. PLP goes through the same path as any change of P: in emulation mode M and X stay set, and a set X flag clears the high bytes of X and Y. PHP in emulation mode pushes the B bit as 1, since bit 4 is the X flag there.
+
+PEA reads no memory at its operand, and PEI reads the 16-bit value at the direct address rather than the data it points to (tutorial 6.8.1). PEI's value runs on into the next page even in emulation mode with DL = 0, as the `[d]` pointer does (datasheet 7.2.1); vector `d4 e 232` reads `000CFF` and `000D00`. PER adds its offset to the address of the next instruction, wrapping in 16 bits, after an internal cycle at the offset's high byte.
+
+**The stack in emulation mode.** PEA, PEI, PER, PHD and PLD are in datasheet 7.1's list and step S as a 16-bit value, as JSL does (ADR 0008): PHD with S at `0100` writes `0100` and `00FF`, and S ends at `01FE`. PLB is not in the list, but the vectors show it reading `000200` when S is `01FF`, and the core follows them ([ADR 0009](../adr/0009-emulation-stack-in-plb.md)). The other pushes and pulls wrap inside page 1.
+
+All 16 opcodes pass every test of their vector files in both modes.
+
 ## Testing against the vectors
 
 `sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).

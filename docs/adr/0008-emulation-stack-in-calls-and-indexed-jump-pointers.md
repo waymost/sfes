@@ -27,7 +27,7 @@ The calls and returns (issue #38) are the first instructions that push and pull.
 
 ## Decision
 
-- **Pushes and pulls in emulation mode** step S in its low byte and stay in page 1, except in the instructions that 7.1 lists. Those step S as a 16-bit value while they run, so their stack cycles may be in page 0 or page 2, and at the end of the instruction the high byte of S is set back to `01`. In native mode every push and pull steps S as a 16-bit value in bank 0. The core names the two behaviours `StackWrap::PageOne` and `StackWrap::BankZero`; this PR uses them for JSR a and RTS (page one) and JSL, JSR (a,x) and RTL (bank zero), and #39 applies the same rule to PEA, PEI, PER, PHD and PLD.
+- **Pushes and pulls in emulation mode** step S in its low byte and stay in page 1, except in the instructions that 7.1 lists. Those step S as a 16-bit value while they run, so their stack cycles may be in page 0 or page 2, and at the end of the instruction the high byte of S is set back to `01`. In native mode every push and pull steps S as a 16-bit value in bank 0. The core names the two behaviours `StackWrap::PageOne` and `StackWrap::BankZero`; this PR uses them for JSR a and RTS (page one) and JSL, JSR (a,x) and RTL (bank zero), and #39 applies the same rule to PEA, PEI, PER, PHD and PLD. [ADR 0009](0009-emulation-stack-in-plb.md) adds PLB, which 7.1 does not list but the vectors show leaving page 1.
 - **The `(a,x)` pointer** of JMP and JSR is read at PBR,AA+X and PBR,AA+X+1, each a 16-bit sum that wraps in the program bank, with **VDA active and VPA inactive**, as the vectors record. Table 5-7's VPA marking for these two cycles is not followed.
 
 ## Consequences

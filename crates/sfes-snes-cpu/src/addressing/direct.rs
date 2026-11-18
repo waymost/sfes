@@ -94,6 +94,21 @@ impl Cpu65816 {
         Operand::spanning_banks(indexed(base, self.y))
     }
 
+    /// Row 22e, cycles 2 to 4: the offset, the optional cycle, and the 16-bit value "AAL",
+    /// "AAH" at 0,D+DO and 0,D+DO+1 that PEI pushes. Like the `[d]` pointer, the value never
+    /// wraps at a page boundary, even in emulation mode (datasheet 7.2.1 and 7.2.2); it does
+    /// wrap at the end of bank 0.
+    // @source: wdc-w65c816s#table-5-7-22e
+    // @source: wdc-w65c816s#table-5-7-note-2
+    // @source: wdc-w65c816s#7.2
+    pub(crate) fn effective_indirect(&mut self, bus: &mut impl Bus65816) -> u16 {
+        let offset = self.fetch_direct_offset(bus);
+        let address = self.d.wrapping_add(u16::from(offset));
+        let low = self.read_byte(bus, Addr24::from_bank_offset(0, address));
+        let high = self.read_byte(bus, Addr24::from_bank_offset(0, address.wrapping_add(1)));
+        u16::from_le_bytes([low, high])
+    }
+
     /// Cycles 2 and 2a of every direct row: fetches the offset "DO", then spends an internal
     /// cycle when the low byte of the Direct Register is not zero (note 2).
     // @source: wdc-w65c816s#table-5-7-10a
