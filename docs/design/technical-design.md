@@ -286,7 +286,7 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
 ### 65C816 (`sfes-snes-cpu`)
 
 - `Cpu65816 { a, x, y, s, d: u16, db, pb: u8, pc: u16, p: Flags, e: bool, run: RunState }`, where `Flags` uses `bitflags` and `RunState` is `Running | Waiting | Stopped`.
-- `step(&mut self, bus: &mut impl Bus65816)` executes one instruction or one interrupt entry: fetch, then one `match opcode` with 256 arms calling small functions. A block move advances one byte (7 cycles) per `step`, and a waiting or stopped CPU spends one idle cycle per `step`. `interrupts()` is read once, before the opcode fetch; reset is a separate `reset` method (ADR 0004).
+- `step(&mut self, bus: &mut impl Bus65816)` executes one instruction or one interrupt entry: fetch, then one `match opcode` with 256 arms calling small functions. A block move advances one byte (7 cycles) per `step`, and a waiting or stopped CPU spends one idle cycle per `step`. `interrupts()` is read once, before the opcode fetch; reset is a separate `reset` method (ADR 0004) that runs the reset sequence of ADR 0011.
 - Register width uses const generics instead of duplicated code, e.g. `fn lda<const M16: bool>(&mut self, bus: &mut impl Bus65816, mode: Mode)`. The compiler emits an 8-bit and a 16-bit version.
 - Addressing modes are an enum. Each mode's function performs the exact sequence of reads, including dummy reads and internal cycles, because the test vectors check every bus cycle (EMU-02).
 - Decimal mode (ADR 0007), the emulation-mode stack (ADRs 0005, 0008 and 0009) and direct-page quirks, and interrupt sampling follow the WDC datasheet, with ADRs where vector results decide an ambiguity.

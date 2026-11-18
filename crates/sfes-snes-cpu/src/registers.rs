@@ -99,7 +99,7 @@ impl Cpu65816 {
     ///
     /// Reset leaves A, the low bytes of X, Y and S, and the N, V, Z and C flags
     /// uninitialized. They are zero here so that every machine starts the same (FND-02).
-    /// The program counter is zero until the reset sequence loads it from the vector (#42).
+    /// The program counter is zero until [`reset`](Self::reset) loads it from the vector.
     // @source: wdc-w65c816s#2.25
     #[must_use]
     pub const fn new() -> Self {

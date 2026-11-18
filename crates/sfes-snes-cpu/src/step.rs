@@ -7,7 +7,7 @@ use sfes_api::Addr24;
 use crate::{
     addressing::{Address, Mode},
     bus::{Bus65816, Pending, Pins},
-    instructions::{Condition, Modify},
+    instructions::{Condition, Interrupt, Modify},
     registers::{Cpu65816, Flags, RunState},
 };
 
@@ -38,25 +38,32 @@ impl Cpu65816 {
             self.run = RunState::Running;
         }
         if interrupt {
-            self.interrupt_entry();
+            self.interrupt_entry(bus, nmi);
         } else {
             self.instruction(bus);
         }
     }
 
     /// The cycle a waiting or stopped processor spends per step, so that the machine's time
-    /// keeps passing. A modelling choice of ADR 0004, not a claim about the pins: the address
-    /// and signals here are provisional until the WAI and STP rows are implemented (#42).
+    /// keeps passing (ADR 0004): an internal cycle at PBR,PC, which after WAI or STP is the
+    /// "PBR,PC+1" of their last cycle, repeated with the same signals (rows 19c and 19d, ADR
+    /// 0011).
     // @source: adr-0004
+    // @source: adr-0011
+    // @source: wdc-w65c816s#table-5-7-19c
+    // @source: wdc-w65c816s#table-5-7-19d
     fn halted_cycle(&self, bus: &mut impl Bus65816) {
         bus.idle(self.program_address(), Pins::RWB | self.status_pins());
     }
 
-    /// Bring-up placeholder for the hardware interrupt sequence: it stops the processor. The
-    /// sequence replaces it in #42. (`todo!` and `panic!` are denied in library code.)
+    /// The hardware interrupt sequence (row 22a) for the request `step` recognized: an NMI
+    /// before an IRQ (7.19).
+    // @source: wdc-w65c816s#7.19
+    // @source: wdc-w65c816s#table-5-7-22a
     // @source: adr-0004
-    fn interrupt_entry(&mut self) {
-        self.run = RunState::Stopped;
+    fn interrupt_entry(&mut self, bus: &mut impl Bus65816, nmi: bool) {
+        let interrupt = if nmi { Interrupt::Nmi } else { Interrupt::Irq };
+        self.hardware_interrupt(bus, interrupt);
     }
 
     /// Fetches an opcode and executes it. The arms follow the opcode matrix, Table 5-4,
@@ -70,7 +77,9 @@ impl Cpu65816 {
     fn instruction(&mut self, bus: &mut impl Bus65816) {
         let opcode = self.fetch_opcode(bus);
         match opcode {
+            0x00 => self.brk(bus),
             0x01 => self.ora(bus, Mode::DirectIndexedIndirect),
+            0x02 => self.cop(bus),
             0x03 => self.ora(bus, Mode::StackRelative),
             0x04 => self.tsb(bus, Address::Direct),
             0x05 => self.ora(bus, Mode::Direct),
@@ -132,6 +141,7 @@ impl Cpu65816 {
             0x3D => self.and(bus, Mode::AbsoluteX),
             0x3E => self.modify_memory(bus, Address::AbsoluteX, Modify::RotateLeft),
             0x3F => self.and(bus, Mode::AbsoluteLongX),
+            0x40 => self.rti(bus),
             0x41 => self.eor(bus, Mode::DirectIndexedIndirect),
             0x42 => self.wdm(bus),
             0x43 => self.eor(bus, Mode::StackRelative),
@@ -270,6 +280,7 @@ impl Cpu65816 {
             0xC8 => self.iny(bus),
             0xC9 => self.cmp(bus, Mode::Immediate),
             0xCA => self.dex(bus),
+            0xCB => self.wai(bus),
             0xCC => self.cpy(bus, Mode::Absolute),
             0xCD => self.cmp(bus, Mode::Absolute),
             0xCE => self.modify_memory(bus, Address::Absolute, Modify::Decrement),
@@ -285,6 +296,7 @@ impl Cpu65816 {
             0xD8 => self.set_flag(bus, Flags::D, false),
             0xD9 => self.cmp(bus, Mode::AbsoluteY),
             0xDA => self.phx(bus),
+            0xDB => self.stp(bus),
             0xDC => self.jml_indirect(bus),
             0xDD => self.cmp(bus, Mode::AbsoluteX),
             0xDE => self.modify_memory(bus, Address::AbsoluteX, Modify::Decrement),
@@ -321,10 +333,6 @@ impl Cpu65816 {
             0xFD => self.sbc(bus, Mode::AbsoluteX),
             0xFE => self.modify_memory(bus, Address::AbsoluteX, Modify::Increment),
             0xFF => self.sbc(bus, Mode::AbsoluteLongX),
-            // Bring-up placeholder: an opcode with no arm yet stops the processor. The vector
-            // harness only runs opcodes on its implemented list. This arm is deleted once all
-            // 256 opcodes have one (#43), so that the compiler proves the match is complete.
-            _ => self.run = RunState::Stopped,
         }
     }
 
@@ -356,12 +364,13 @@ mod tests {
     #[derive(Debug, Eq, PartialEq)]
     enum Cycle {
         Read(u32, Pins),
+        Write(u32, Pins),
         Idle(u32, Pins),
     }
 
     /// A bus that returns one fixed byte, reports fixed interrupt requests and records every
-    /// cycle. The byte is `DB` (STP), an opcode with no arm yet, so the instruction stops at
-    /// the opcode fetch.
+    /// cycle. The byte is `DB`, STP: three cycles, the opcode fetch first, after which the
+    /// processor stops.
     #[derive(Default)]
     struct TestBus {
         pending: Pending,
@@ -376,8 +385,8 @@ mod tests {
         }
 
         // @source: adr-0004
-        fn write(&mut self, address: Addr24, value: u8, pins: Pins) {
-            panic!("unexpected write of {value:#04X} to {address:?} with {pins:?}");
+        fn write(&mut self, address: Addr24, _value: u8, pins: Pins) {
+            self.cycles.push(Cycle::Write(address.get(), pins));
         }
 
         // @source: adr-0004
@@ -408,7 +417,7 @@ mod tests {
         let mut bus = TestBus::default();
         cpu.step(&mut bus);
         let pins = Pins::VDA | Pins::VPA | Pins::RWB | Pins::E | Pins::M | Pins::X;
-        assert_eq!(bus.cycles, [Cycle::Read(0x12_3456, pins)]);
+        assert_eq!(bus.cycles[0], Cycle::Read(0x12_3456, pins));
         assert_eq!((cpu.pbr, cpu.pc), (0x12, 0x3457));
     }
 
@@ -418,14 +427,6 @@ mod tests {
         let mut cpu = cpu_at(0x12, 0xFFFF);
         cpu.step(&mut TestBus::default());
         assert_eq!((cpu.pbr, cpu.pc), (0x12, 0x0000));
-    }
-
-    // @source: adr-0004
-    #[test]
-    fn an_opcode_with_no_arm_stops_the_processor_during_bring_up() {
-        let mut cpu = cpu_at(0, 0x8000);
-        cpu.step(&mut TestBus::default());
-        assert_eq!(cpu.run, RunState::Stopped);
     }
 
     // @source: adr-0004
@@ -476,7 +477,7 @@ mod tests {
         };
         cpu.step(&mut bus);
         // The next instruction's opcode was fetched: no interrupt sequence ran.
-        assert!(matches!(bus.cycles[..], [Cycle::Read(0x12_3456, _)]));
+        assert!(matches!(bus.cycles[..], [Cycle::Read(0x12_3456, _), ..]));
         assert_eq!(cpu.pc, 0x3457);
     }
 
@@ -493,22 +494,31 @@ mod tests {
             cycles: Vec::new(),
         };
         cpu.step(&mut bus);
-        assert!(matches!(bus.cycles[..], [Cycle::Read(0x00_8000, _)]));
+        assert!(matches!(bus.cycles[..], [Cycle::Read(0x00_8000, _), ..]));
     }
 
     // @source: adr-0004
     // @source: wdc-w65c816s#2.21
+    // @source: wdc-w65c816s#7.19
+    // @source: wdc-w65c816s#table-5-7-22a
+    // @source: wdc-w65c816s#table-5-3
     #[test]
     fn a_recognized_interrupt_replaces_the_instruction() {
-        for pending in [
-            Pending {
-                nmi: true,
-                irq: false,
-            },
-            Pending {
-                nmi: false,
-                irq: true,
-            },
+        for (pending, vector) in [
+            (
+                Pending {
+                    nmi: true,
+                    irq: true,
+                },
+                0xFFEA,
+            ),
+            (
+                Pending {
+                    nmi: false,
+                    irq: true,
+                },
+                0xFFEE,
+            ),
         ] {
             let mut cpu = cpu_at(0, 0x8000);
             cpu.set_emulation(false);
@@ -518,9 +528,12 @@ mod tests {
                 cycles: Vec::new(),
             };
             cpu.step(&mut bus);
-            // No opcode fetch. (The sequence itself is a bring-up placeholder until #42.)
-            assert_eq!(bus.cycles, []);
-            assert_eq!(cpu.pc, 0x8000);
+            // The eight cycles of row 22a in native mode, ending with the vector, and no
+            // instruction: the processor runs on at the vector's contents, `DBDB`.
+            assert_eq!(bus.cycles.len(), 8);
+            assert!(matches!(bus.cycles[7], Cycle::Read(address, pins)
+                if address == vector + 1 && pins.contains(Pins::VPB)));
+            assert_eq!((cpu.pbr, cpu.pc, cpu.run), (0, 0xDBDB, RunState::Running));
         }
     }
 }

@@ -302,6 +302,56 @@ X and Y wrap within the bank. With the X flag set (always, in emulation mode) th
 
 Both opcodes pass every test of their vector files in both modes. The set has 100 tests per file for these two, each a whole move of 4 to 1,000 bytes; the harness steps once per byte.
 
+## Interrupts and run states: BRK, COP, RTI, WAI, STP, NMI, IRQ, reset
+
+Every interrupt ends with the same steps (Table 5-7 rows 22a and 22j):
+1. In native mode, push PBR.
+2. Push the program counter, high byte first.
+3. Push P.
+4. Set I and clear D (7.12).
+5. Clear PBR (7.11).
+6. Read the 16-bit vector in bank 0, its two cycles with VPB active (2.28).
+
+Emulation mode leaves out the PBR push (note 7), so its sequences are one cycle shorter. Its pushes stay in page 1, as the pushes of every instruction not listed in datasheet 7.1 do ([ADR 0008](../adr/0008-emulation-stack-in-calls-and-indexed-jump-pointers.md)). DBR is not changed ([ADR 0011](../adr/0011-reset-and-halted-cycles.md)).
+
+| Interrupt | Native vector | Emulation vector | Return address pushed |
+| --- | --- | --- | --- |
+| COP | `00FFE4` | `00FFF4` | the instruction's address plus 2 |
+| BRK | `00FFE6` | `00FFFE` | the instruction's address plus 2 |
+| NMI | `00FFEA` | `00FFFA` | the next instruction |
+| IRQ | `00FFEE` | `00FFFE` | the next instruction |
+| Reset | none | `00FFFC` | nothing is pushed |
+
+BRK and COP fetch a signature byte that nothing uses (7.22, 7.15). They push P as it is, so in emulation mode bit 4, the break flag, is set. A hardware interrupt in emulation mode pushes bit 4 clear (note 11), which is how a handler on the shared BRK/IRQ vector tells the two apart. The 6502.org tutorial calls the break flag "bit 5" but tests `#$10`; the datasheet's bit 4 is right.
+
+**Hardware NMI and IRQ** are taken by `step` in place of an instruction, as ADR 0004 sets out: an NMI whenever one is latched, an IRQ when the I flag is clear, with the NMI first (7.19). Cycle 1 reads the next opcode with VDA and VPA active and discards it. Cycle 2 is internal at the same address. The pushes and the vector follow: 8 cycles in native mode, 7 in emulation mode. The program counter pushed is that of the instruction not executed.
+
+**RTI** (row 22g) runs two internal cycles, then pulls P, the program counter (low byte first) and, in native mode, PBR. The program counter is used as pulled, unlike RTS's. The pulled P takes effect after the last cycle, through `set_status`: in emulation mode M and X stay set, and a set X flag clears the index high bytes. Every cycle of RTI reports the old M and X signals, as the vectors record.
+
+**WAI** (row 19d) and **STP** (row 19c) run two internal cycles at the next instruction's address, then wait or stop. Each later step of a waiting or stopped processor is one more internal cycle there (ADR 0011).
+- A waiting processor wakes for an NMI, or for an IRQ with the I flag clear, and runs the interrupt sequence in that same step. Its first cycle, at the address after WAI, is the last cycle of row 19d.
+- With the I flag set, an IRQ ends the wait without the handler, and the same step runs the next instruction (7.13).
+- A stopped processor ignores both requests. Only reset restarts it (7.14).
+
+**Reset** is `Cpu65816::reset`, called by the machine from any run state ([ADR 0011](../adr/0011-reset-and-halted-cycles.md)). It works in three steps:
+1. It sets the registers of 2.25:
+   - D, DBR and PBR become zero;
+   - the processor enters emulation mode, so M and X are set, S is in page 1 and the index high bytes are zero;
+   - D is cleared and I is set;
+   - A, the low bytes of X, Y and S, and the N, V, Z and C flags keep their values.
+2. It runs row 22a in emulation mode:
+   - a discarded opcode read;
+   - an internal cycle;
+   - three stack cycles that read instead of writing (note 10), leaving S three lower in page 1;
+   - the vector at `00FFFC`.
+3. The program counter takes the vector, and the run state becomes running.
+
+The reset cycles are the one part of this family that no vector checks. They follow the datasheet with medium confidence.
+
+**ABORT** is not modelled. No machine this core serves raises ABORTB, so `Pending` has no field for it (ADR 0004), and the sequences above never abort.
+
+The five opcodes pass every test of their vector files in both modes. The hardware interrupts, WAI wake-up, STP and reset are covered by the project's own tests in `instructions/interrupt.rs` and `step.rs`, each citing the datasheet row it checks (EMU-02). They include the tutorial's BRK, NMI and RTI examples. The NMI example names `00FFE6`, BRK's native vector, where Table 5-3 and the tutorial's own vector list give `00FFEA`; the test uses `00FFEA`.
+
 ## Testing against the vectors
 
 `sfes-test-harness` runs the SingleStepTests 65816 vectors against the core (`crates/sfes-test-harness/src/sst65816/`). For each test it loads the initial registers, seeds a `RecordingBus` (sparse RAM over the full 24-bit space) with the listed bytes, calls `step`, and reports the first difference, in this order: bus cycles (address, value and all eight signals), registers, memory, run state. A block-move test takes one `step` per byte; a test that ends with the vectors' halt record must leave the processor waiting or stopped (ADR 0004).
@@ -321,8 +371,8 @@ cargo nextest run -p sfes-test-harness
 
 CI caches the set, requires it, and runs all of it on Linux and the first 500 tests of each file on macOS and Windows.
 
-Only the opcodes in the harness's `IMPLEMENTED` list are run. Each instruction family adds its opcodes, and the list is deleted when all 256 exist (#43).
+Only the opcodes in the harness's `IMPLEMENTED` list are run. It now holds all 256, and it is deleted with the rest of the bring-up scaffolding (#43).
 
 ## Bring-up state
 
-Until milestone M1 closes, two placeholders stand in for missing behaviour. An opcode without a `match` arm stops the processor, and so does a recognized interrupt. Neither is hardware behaviour. The first is removed once all 256 opcodes are implemented (#43), the second with the interrupt sequence (#42).
+Both bring-up placeholders are gone. Every opcode has a `match` arm, so the compiler checks that the match is complete, and a recognized interrupt runs the hardware sequence. The harness's `IMPLEMENTED` list remains until #43 removes it.
