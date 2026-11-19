@@ -90,6 +90,16 @@ The [technical design](docs/design/technical-design.md)'s code sketches show sha
   ```
 
 - **Parameters and `let` bindings are full words**: `address`, `value`, `machine`, `index`, not `addr`, `v`, `m`, `i`. Generic type parameters (`A: Accuracy`, `O: Observer`) are the exception.
+- **Hardware registers are named in full words, and their doc comment gives the address and the documents' mnemonic**, so a search by either still finds them:
+
+  ```rust
+  /// $2100 INIDISP: forced blank and screen brightness.
+  display_control: u8,
+  /// $420C HDMAEN
+  pub fn write_hdma_enable(&mut self, value: u8) { … }
+  ```
+
+  The identifier says what the register does (`display_control`, `write_dma_enable`), never the mnemonic alone (`inidisp`, `mdmaen`).
 - **A struct literal holds simple initializers.** Bind a value that needs a block (a `match`, an `if`, a closure, a multi-line chain) first and pass it by name:
 
   ```rust
