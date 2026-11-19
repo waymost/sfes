@@ -30,7 +30,7 @@ const SCRATCH: &str = "target/carts";
 /// itself as 2.18.
 const TOOL_VERSION: &str = "V2.18";
 
-/// The smallest ROM a board here links: one 32 KiB LoROM bank.
+/// The smallest ROM a board here links: the single 32 KiB bank of `lorom.cfg`.
 const SMALLEST_ROM: usize = 32 * 1024;
 /// The largest ROM accepted: 4 MiB, size byte `$0C` (`fullsnes#snescartridgeromheader`).
 const LARGEST_ROM: usize = 4 * 1024 * 1024;
