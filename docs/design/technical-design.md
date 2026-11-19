@@ -582,6 +582,7 @@ Tests are layered from per-instruction vectors up to Python end-to-end runs; ben
 
 - **Vector storage:** the test-vector sets are large, so they are not committed. `cargo xtask vectors fetch` downloads each set at the commit pinned in `tests/assets/MANIFEST.toml` and verifies every file's SHA-256 against the committed `tests/assets/vectors.lock` (written by `cargo xtask vectors lock`), and CI caches them under a key derived from that lock file, runs the fetch on every job so a restored cache is verified too, and sets `SFES_REQUIRE_VECTORS=1` so a missing set fails the run instead of skipping it. Both sets are MIT-licensed (spec, section 15).
 - **Own test cartridges (EMU-11):** 65816 sources in `tests/carts/<name>/`, assembled and linked with ca65 and ld65 from cc65 2.19 against shared LoROM and HiROM linker configurations and a header include. `cargo xtask carts build` writes the ROMs, with their size byte and checksum filled in, to `tests/assets/carts/`, where they are committed and recorded in the manifest as `own`; `cargo xtask carts check` rebuilds them in a Linux CI job and fails on any byte difference, so no other job or contributor needs the assembler (ADR 0013).
+- **Third-party test ROMs:** only ROMs the project owner approved after a license survey (#74). Those whose license allows it are committed under `tests/assets/third-party/` with their license text; the rest, with no stated license, are manifest entries under the git-ignored `tests/assets/fetched/` with `license = "NOASSERTION"`, a pinned `https://` URL and a SHA-256. `cargo xtask roms fetch` downloads and verifies them, CI caches them under a key derived from the manifest, and `sfes_test_harness::roms::load` skips a test whose ROM is absent unless `SFES_REQUIRE_VECTORS=1` (ADR 0014).
 - **Golden updates:** `cargo xtask golden --update` rewrites golden files; changes appear in the PR diff and need a written reason in the PR description. Each golden carries a status: unverified (blessed after manual comparison with an oracle's output) or oracle-confirmed (by the M8 harness). --update resets changed entries to unverified.
 - **Coverage:** `cargo llvm-cov` publishes a report; it informs reviews but does not gate merges.
 
@@ -676,7 +677,8 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System`; `impl System for Snes` waits for the state envelope in M4.
 - [ ] Own test cartridges in 65816 assembly built with ca65/ld65, the built `.sfc` files committed and rebuilt byte-identically in CI (ADR 0013, #73).
-- [ ] Development viewer (PLY-01); first golden frame hashes, marked unverified, from permissively licensed test ROMs and own test cartridges.
+- [ ] Approved third-party test ROMs committed or fetched by hash (ADR 0014, #75).
+- [ ] Development viewer (PLY-01); first golden frame hashes, marked unverified, from the approved third-party test ROMs (ADR 0014) and own test cartridges.
 
 ExHiROM, PAL timing, hi-res, pseudo-hi-res and interlace are P1 in the feature specification. They are scheduled in M2 because the memory map, scheduler and renderer are shaped by them; their priority is unchanged.
 

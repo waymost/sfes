@@ -9,6 +9,11 @@
 //! fetch` from `source_url` at `commit`. Its files' hashes live in `tests/assets/vectors.lock`:
 //! every file present must be in the lock with a matching hash.
 //!
+//! A file entry with `fetch = true` is a third-party ROM downloaded by `cargo xtask roms fetch`
+//! from its `https://` `source_url` (ADR 0014). Such files live under `fetched/`, which git
+//! ignores, and nothing else does. Only they may carry `license = "NOASSERTION"`: a file with no
+//! stated license is never committed (PROV-09).
+//!
 //! The own test cartridges (ADR 0013) keep their sources in `tests/carts/` and their built ROMs
 //! in `tests/assets/carts/`. `tests/carts/` may hold only sources, and every cartridge needs a
 //! `license = "own"` manifest entry for `carts/<name>.sfc`.
@@ -31,6 +36,10 @@ use crate::{
 /// The asset directory, relative to the workspace root.
 pub(crate) const ASSETS: &str = "tests/assets";
 const MANIFEST: &str = "tests/assets/MANIFEST.toml";
+/// The directory, relative to `tests/assets/`, that holds downloaded files; git ignores it.
+pub(crate) const FETCHED: &str = "fetched/";
+/// The SPDX term for "no license stated", allowed only on downloaded files (ADR 0014).
+const NO_ASSERTION: &str = "NOASSERTION";
 
 /// Files in the asset directory that describe the assets and are not assets themselves.
 const INDEX_FILES: &[&str] = &["MANIFEST.toml", "vectors.lock"];
@@ -209,11 +218,29 @@ fn check_entry(asset: &Asset, present: &[(String, String)]) -> Vec<Finding> {
             format!("asset `{path}`: {message}"),
         ));
     };
+    let fetched_file = !path.ends_with('/') && *fetch;
     let allowed = |term: &str| term == "own" || ALLOWED_LICENSES.contains(&term);
-    if !license_permitted(license, &allowed) {
+    if license == NO_ASSERTION {
+        if !fetched_file {
+            problem(
+                "a file with no stated license is never committed; mark it `fetch = true` (PROV-09)",
+            );
+        }
+    } else if !license_permitted(license, &allowed) {
         problem(
-            "license is not on the PROV-08 list (use an SPDX id, or \"own\" for project-made assets)",
+            "license is not on the PROV-08 list (use an SPDX id, \"own\" for project-made assets, \
+             or \"NOASSERTION\" for a fetched file with none stated)",
         );
+    }
+    if fetched_file {
+        if !path.starts_with(FETCHED) {
+            problem("fetched files live under `fetched/`, which git ignores (ADR 0014)");
+        }
+        if !source_url.as_deref().is_some_and(vectors::is_source_url) {
+            problem("fetched files need an https:// `source_url`");
+        }
+    } else if path.starts_with(FETCHED) {
+        problem("only fetched files belong under `fetched/` (ADR 0014)");
     }
     let fetched_directory = path.ends_with('/') && *fetch;
     if commit.is_some() && !fetched_directory {
@@ -271,7 +298,8 @@ mod tests {
         let hash = files::sha256_hex(b"vector");
         let text = format!(
             "[[asset]]\npath = \"cpu/00.json\"\nlicense = \"MIT\"\nsha256 = \"{hash}\"\n\n\
-             [[asset]]\npath = \"cpu/01.json\"\nlicense = \"MIT\"\nsha256 = \"{hash}\"\nfetch = true\n\n\
+             [[asset]]\npath = \"fetched/rom.sfc\"\nlicense = \"NOASSERTION\"\nsha256 = \"{hash}\"\n\
+             fetch = true\nsource_url = \"https://example.org/rom.sfc\"\n\n\
              [[asset]]\npath = \"golden/\"\nlicense = \"own\"\n"
         );
         let files = present(&[("cpu/00.json", b"vector"), ("golden/frame.txt", b"x")]);
@@ -334,6 +362,27 @@ mod tests {
             "{messages:?}"
         );
         assert!(messages[2].starts_with("tests/carts/hdma:"), "{messages:?}");
+    }
+
+    #[test]
+    fn fetched_files_are_checked() {
+        let hash = files::sha256_hex(b"rom");
+        let text = format!(
+            "[[asset]]\npath = \"third-party/none.sfc\"\nlicense = \"NOASSERTION\"\nsha256 = \"{hash}\"\n\n\
+             [[asset]]\npath = \"roms/a.sfc\"\nlicense = \"NOASSERTION\"\nsha256 = \"{hash}\"\n\
+             fetch = true\nsource_url = \"http://example.org/a.sfc\"\n\n\
+             [[asset]]\npath = \"fetched/b.sfc\"\nlicense = \"MIT\"\nsha256 = \"{hash}\"\n"
+        );
+        let files = present(&[("third-party/none.sfc", b"rom"), ("fetched/b.sfc", b"rom")]);
+        let messages = check(&manifest(&text), &Lock::default(), &files)
+            .into_iter()
+            .map(|finding| finding.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 4, "{messages:?}");
+        assert!(messages[0].contains("never committed"), "{messages:?}");
+        assert!(messages[1].contains("live under"), "{messages:?}");
+        assert!(messages[2].contains("source_url"), "{messages:?}");
+        assert!(messages[3].contains("only fetched files"), "{messages:?}");
     }
 
     #[test]

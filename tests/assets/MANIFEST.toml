@@ -10,6 +10,11 @@
 # fetch = false
 # notes = "SingleStepTests 65816, commit …"
 #
+# A third-party ROM whose license does not allow committing it is a file entry under `fetched/`
+# with `fetch = true`, an https `source_url` and its `sha256`; `cargo xtask roms fetch` downloads
+# it, and git ignores `fetched/`. `license = "NOASSERTION"` (no license stated) is allowed only
+# there. Committed third-party ROMs live under `third-party/` (ADR 0014).
+#
 # A directory entry (path ending in `/`) covers every file beneath it and takes no sha256. With
 # `fetch = true` it is a vector set that `cargo xtask vectors fetch` downloads from the git
 # repository at `source_url`, at the pinned `commit`. The hashes of its files are in
@@ -42,3 +47,206 @@ path = "carts/halt.sfc"
 license = "own"
 sha256 = "379aba977e6f29e222b9fb215e846b053a7ba49ed4a6f207c4fd8d70c79e7674"
 notes = "Own test cartridge: boots, writes $A5 to WRAM $7E:0000 and stops. Built from tests/carts/halt/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
+path = "third-party/gilyon/LICENSE"
+license = "MIT"
+source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
+sha256 = "8d22899b4e22435aefc1865666f889402750a1fffdf8957ce87f03f2d6d40fec"
+notes = "The MIT license text that must accompany the gilyon files. gilyon/snes-tests release v1.4 (commit 5ecdf555da920f0bd7b157542141965a8120186d), extracted from snes-tests.zip (SHA-256 c3a39e15a9f3789fe143e54dfa035c988204576eafacf97df8ff3546a917c5e9). MIT per its LICENSE, committed beside it. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "third-party/gilyon/cputest-basic.sfc"
+license = "MIT"
+source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
+sha256 = "d479bde706b9e16d76c0dfe98e2b2d3f5348f9dcb911e6a36b898f4201fc98bb"
+notes = "65C816 instruction test ROM, skipping behaviour games are unlikely to use; reports failures on screen. gilyon/snes-tests release v1.4 (commit 5ecdf555da920f0bd7b157542141965a8120186d), extracted from snes-tests.zip (SHA-256 c3a39e15a9f3789fe143e54dfa035c988204576eafacf97df8ff3546a917c5e9). MIT per its LICENSE, committed beside it. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "third-party/gilyon/cputest-full.sfc"
+license = "MIT"
+source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
+sha256 = "f61de78d346a68c166d67472a414e5d207368889d37b977d1338f9221ca6400e"
+notes = "65C816 instruction test ROM, every test including emulation-mode wrapping; reports failures on screen. gilyon/snes-tests release v1.4 (commit 5ecdf555da920f0bd7b157542141965a8120186d), extracted from snes-tests.zip (SHA-256 c3a39e15a9f3789fe143e54dfa035c988204576eafacf97df8ff3546a917c5e9). MIT per its LICENSE, committed beside it. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "third-party/gilyon/tests-basic.txt"
+license = "MIT"
+source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
+sha256 = "cc5fca504344d771f7b7a5e65c51e4485dbcbaba378edb88df381d6c9819e289"
+notes = "Generated list of every test in cputest-basic.sfc with its input and expected output values. gilyon/snes-tests release v1.4 (commit 5ecdf555da920f0bd7b157542141965a8120186d), extracted from snes-tests.zip (SHA-256 c3a39e15a9f3789fe143e54dfa035c988204576eafacf97df8ff3546a917c5e9). MIT per its LICENSE, committed beside it. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "third-party/gilyon/tests-full.txt"
+license = "MIT"
+source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
+sha256 = "abbd5b5afdf3a669cf16859bd2e509938e1eff1a1ac4c0deef7217c0ee35f60b"
+notes = "Generated list of every test in cputest-full.sfc with its input and expected output values. gilyon/snes-tests release v1.4 (commit 5ecdf555da920f0bd7b157542141965a8120186d), extracted from snes-tests.zip (SHA-256 c3a39e15a9f3789fe143e54dfa035c988204576eafacf97df8ff3546a917c5e9). MIT per its LICENSE, committed beside it. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/rainwarrior/extbgtest.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/bbbradsmith/SNES_stuff/3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85/extbgtest/extbgtest.sfc"
+sha256 = "2aaaddc42e417f8549807a11dcea5799dedeb214fbe0083b6fa355e36525874b"
+fetch = true
+notes = "rainwarrior (Brad Smith) SNES_stuff at 3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85. Mode 7 EXTBG layering and direct colour with movable sprites; the readme states the expected colours and layering. No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/rainwarrior/twoship.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/bbbradsmith/SNES_stuff/3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85/twoship/twoship.sfc"
+sha256 = "98ff5b7b500fe4a93a481bcca510437597eef35fec49d4ec9dd9e8a6f5596076"
+fetch = true
+notes = "rainwarrior (Brad Smith) SNES_stuff at 3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85. Mode 5 with interlace against Mode 1, toggled by button. No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/rainwarrior/smalltext.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/bbbradsmith/SNES_stuff/3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85/smalltext/smalltext.sfc"
+sha256 = "2e771fe3d89fc83e834ac5d6b8ec19daafe1505f0a58763b85be4f19d5b8b81b"
+fetch = true
+notes = "rainwarrior (Brad Smith) SNES_stuff at 3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85. Hi-res and interlace 64x60 text display. No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/rainwarrior/colourmath.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/bbbradsmith/SNES_stuff/3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85/colourmath/colourmath.sfc"
+sha256 = "597ade58897d5cf2ba4dfa471e5d043672bdf627467799a1a20e57161e0e2986"
+fetch = true
+notes = "rainwarrior (Brad Smith) SNES_stuff at 3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85. Five colour-math screens (add, half, subtract) with main and sub screen designations. No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/rainwarrior/elasticity.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/bbbradsmith/SNES_stuff/3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85/elasticity/elasticity.sfc"
+sha256 = "f9e40cd958706f268f95e8f1d333154f0c3060a8efd2bfb5518500d07f09df25"
+fetch = true
+notes = "rainwarrior (Brad Smith) SNES_stuff at 3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85. Mode 3 8bpp images, including a flicker blend. No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/rainwarrior/multest_mul16.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/bbbradsmith/SNES_stuff/3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85/multest/multest_mul16.sfc"
+sha256 = "a18b57398fdc611072b88ae3a4fbb7d1c6682d2841ae8863fd8037eacbb495cb"
+fetch = true
+notes = "rainwarrior (Brad Smith) SNES_stuff at 3143bc8cf2b56dc28c6ffad7fe42fbc0eccb8f85. 16x16 multiply built on the hardware multiplier over all inputs; prints Pass! when done. No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/BANKHiROMFastROM.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/BANK/HiROMFastROM/BANKHiROMFastROM.sfc"
+sha256 = "676f859ffcbe5b903e30049db04c479c5dd41b8bc1bd14485d735f9d185dc8c5"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, BANK/HiROMFastROM/BANKHiROMFastROM.sfc: HiROM banks at FastROM speed. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/BANKHiROMSlowROM.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/BANK/HiROMSlowROM/BANKHiROMSlowROM.sfc"
+sha256 = "320caca1bc8f17d8f5396d7c210cdbc798978a601cf8b2cef17d70e6d398fc6f"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, BANK/HiROMSlowROM/BANKHiROMSlowROM.sfc: HiROM banks at SlowROM speed. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/BANKLoROMFastROM.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/BANK/LoROMFastROM/BANKLoROMFastROM.sfc"
+sha256 = "7a8de9f87986b4667723dcef00003ab93aea84586d3e13cfc8459db4a59369c5"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, BANK/LoROMFastROM/BANKLoROMFastROM.sfc: LoROM banks at FastROM speed. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/BANKLoROMSlowROM.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/BANK/LoROMSlowROM/BANKLoROMSlowROM.sfc"
+sha256 = "3f2d0d9d8d3a05912c636830e6c78a823ea357bc99e0115fe46d0e9a7f6737c6"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, BANK/LoROMSlowROM/BANKLoROMSlowROM.sfc: LoROM banks at SlowROM speed. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/BANKWRAM.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/BANK/WRAM/BANKWRAM.sfc"
+sha256 = "6ee3c92304298e5b6b083f1309285d5b8a75ad4287220ba16d1eb7df01167b06"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, BANK/WRAM/BANKWRAM.sfc: WRAM banks. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/RotZoom.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/Mode7/RotZoom/RotZoom.sfc"
+sha256 = "d5580870e152046ca838fa276568e10c671be63b1db0285030a53dc7864cc4c0"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/Mode7/RotZoom/RotZoom.sfc: Mode 7 rotation and zoom. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/Perspective.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/Mode7/Perspective/Perspective.sfc"
+sha256 = "cf31c9af58af91bd3541b1ee4133fca3379ea93416a7ed718bc21d3a5044422a"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/Mode7/Perspective/Perspective.sfc: Mode 7 perspective. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/MosaicMode3.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/Mosaic/Mode3/MosaicMode3.sfc"
+sha256 = "6deebf7ddbe46392d900914dd69e6a060d868e9cc7436a486987c1fb868885db"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/Mosaic/Mode3/MosaicMode3.sfc: Mosaic in Mode 3. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/MosaicMode5.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/Mosaic/Mode5/MosaicMode5.sfc"
+sha256 = "da0197247fa6c19f076351a2110608ad248e10d199310191c69e0a91b6fa339c"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/Mosaic/Mode5/MosaicMode5.sfc: Mosaic in Mode 5. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/WindowHDMA.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/Window/WindowHDMA/WindowHDMA.sfc"
+sha256 = "27594315a409d11f0182838201901aedeaaf825e986a0c9999111f08cb83ffbf"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/Window/WindowHDMA/WindowHDMA.sfc: A window shaped by HDMA. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/WindowMultiHDMA.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/Window/WindowMultiHDMA/WindowMultiHDMA.sfc"
+sha256 = "1bacb0c050a42c8ba3a53268f1bf74cd8889234ca904e195490adf3bf682f363"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/Window/WindowMultiHDMA/WindowMultiHDMA.sfc: Several windows shaped by HDMA. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/RedSpaceHDMA.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/HDMA/RedSpaceHDMA/RedSpaceHDMA.sfc"
+sha256 = "f59bc2cc89b22cad7308fe65f5d9fee1025311c84a9f809e14ebf96ab9a4c4de"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/HDMA/RedSpaceHDMA/RedSpaceHDMA.sfc: Direct HDMA colour gradient. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/RedSpaceIndirectHDMA.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/HDMA/RedSpaceIndirectHDMA/RedSpaceIndirectHDMA.sfc"
+sha256 = "bfc85c6c05399512e33c4ec5393e90eba6a4465bdcdb6c3f2624d2f7c2cf90ff"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/HDMA/RedSpaceIndirectHDMA/RedSpaceIndirectHDMA.sfc: Indirect HDMA colour gradient. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/WaveHDMA.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/HDMA/WaveHDMA/WaveHDMA.sfc"
+sha256 = "b9ecef8a41628d74900cbe6334ae24680dcd6e5526292f3e68aa39be34518b31"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/HDMA/WaveHDMA/WaveHDMA.sfc: HDMA scroll wave. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
+
+[[asset]]
+path = "fetched/krom/InterlaceFont.sfc"
+license = "NOASSERTION"
+source_url = "https://raw.githubusercontent.com/PeterLemon/SNES/350b394e86ec5d62f600b5cbf64cdce3721bb6ef/PPU/Interlace/InterlaceFont/InterlaceFont.sfc"
+sha256 = "097e4c79fbf351c8e8b74c73ce3d60752ec5f8691185f46737aac786f45dd36c"
+fetch = true
+notes = "krom (Peter Lemon) SNES at 350b394e86ec5d62f600b5cbf64cdce3721bb6ef, PPU/Interlace/InterlaceFont/InterlaceFont.sfc: Interlaced text. (from its directory name; the README states no expected output). No license stated: fetched, never committed. Approved in #74 (ADR 0014)."
