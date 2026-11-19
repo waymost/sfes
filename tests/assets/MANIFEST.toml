@@ -36,3 +36,9 @@ path = "fixtures/sst-65816-format.json"
 license = "own"
 sha256 = "49a448526212f2b48563a1d5d094805d34426cb6316891fa70d32a3a8c13c7c2"
 notes = "Project-made tests in the SingleStepTests 65816 JSON format, for the vector harness's own tests. The values are invented to exercise the parser and the comparison; they describe no instruction."
+
+[[asset]]
+path = "carts/halt.sfc"
+license = "own"
+sha256 = "379aba977e6f29e222b9fb215e846b053a7ba49ed4a6f207c4fd8d70c79e7674"
+notes = "Own test cartridge: boots, writes $A5 to WRAM $7E:0000 and stops. Built from tests/carts/halt/ by `cargo xtask carts build` (ADR 0013)."

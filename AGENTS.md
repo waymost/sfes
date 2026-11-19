@@ -14,6 +14,7 @@ Working rules for every contributor to sfes, human or coding assistant. Read [`P
   ```
 
   The id is a key in [`provenance/bibliography.toml`](provenance/bibliography.toml) or an ADR number in `docs/adr/`. The anchor after `#` names the section; each entry's `notes` give its anchor forms. Cite the most precise place the document offers: for a 65C816 cycle sequence that is the row of the datasheet's instruction-operation table (`wdc-w65c816s#table-5-7-1a`), not the table or the chapter.
+- Own test cartridges (`tests/carts/`, ADR 0013) are tagged the same way with `; @source:`: each source file in its leading comments, and each `.proc` and `.macro` in the comment lines directly above it. An expected value the cartridge checks itself cites its source beside it.
 - A test driven by test vectors cites the vector set (`sst-65816`, or `sst-65816#a9.n` for one file). Vectors are evidence, not a specification: the function under test still cites the document it was written from.
 - Read the cited section before writing the code. The source documents that cannot be redistributed are kept outside the repo by the project owner; if you cannot read the section, do not write the code.
 - Code with no matching citation is rewritten. Where sources disagree or are silent, write an ADR (context, sources, decision, consequences, confidence) instead of guessing.
@@ -40,6 +41,7 @@ cargo xtask provenance lint
 cargo xtask provenance scan
 cargo xtask provenance assets
 cargo xtask deps
+cargo xtask carts check     # needs cc65 2.19 (ADR 0013); CI runs it on Linux
 ```
 
 CI runs all of these, plus `cargo xtask provenance commits` on pull requests and `no_std` builds for `thumbv7em-none-eabihf` and `wasm32-unknown-unknown`.

@@ -581,6 +581,7 @@ Tests are layered from per-instruction vectors up to Python end-to-end runs; ben
 | Differential (M8) | Harness runs oracle binaries from paths in environment variables, compares outputs | Manual and weekly |
 
 - **Vector storage:** the test-vector sets are large, so they are not committed. `cargo xtask vectors fetch` downloads each set at the commit pinned in `tests/assets/MANIFEST.toml` and verifies every file's SHA-256 against the committed `tests/assets/vectors.lock` (written by `cargo xtask vectors lock`), and CI caches them under a key derived from that lock file, runs the fetch on every job so a restored cache is verified too, and sets `SFES_REQUIRE_VECTORS=1` so a missing set fails the run instead of skipping it. Both sets are MIT-licensed (spec, section 15).
+- **Own test cartridges (EMU-11):** 65816 sources in `tests/carts/<name>/`, assembled and linked with ca65 and ld65 from cc65 2.19 against shared LoROM and HiROM linker configurations and a header include. `cargo xtask carts build` writes the ROMs, with their size byte and checksum filled in, to `tests/assets/carts/`, where they are committed and recorded in the manifest as `own`; `cargo xtask carts check` rebuilds them in a Linux CI job and fails on any byte difference, so no other job or contributor needs the assembler (ADR 0013).
 - **Golden updates:** `cargo xtask golden --update` rewrites golden files; changes appear in the PR diff and need a written reason in the PR description. Each golden carries a status: unverified (blessed after manual comparison with an oracle's output) or oracle-confirmed (by the M8 harness). --update resets changed entries to unverified.
 - **Coverage:** `cargo llvm-cov` publishes a report; it informs reviews but does not gate merges.
 
@@ -594,9 +595,9 @@ Tests are layered from per-instruction vectors up to Python end-to-end runs; ben
 
 | Command | Checks | Spec |
 | --- | --- | --- |
-| `cargo xtask provenance lint` | Parses chip crates with `syn`: every module and every function, private ones and tests included, has an `@source:` tag; only methods of standard-library trait impls are exempt. Every tag under `crates/` names a known bibliography id or ADR | PROV-03 |
+| `cargo xtask provenance lint` | Parses chip crates with `syn`: every module and every function, private ones and tests included, has an `@source:` tag; only methods of standard-library trait impls are exempt. Every tag under `crates/` names a known bibliography id or ADR. Test-cartridge sources need a `; @source:` tag per file and per `.proc` and `.macro` (ADR 0013) | PROV-03 |
 | `cargo xtask provenance scan` | Searches code files for known emulator copyright headers and author names | PROV-05 |
-| `cargo xtask provenance assets` | Every file under `tests/assets/` has a manifest entry with an allowed license | PROV-09 |
+| `cargo xtask provenance assets` | Every file under `tests/assets/` has a manifest entry with an allowed license; `tests/carts/` holds only sources and every cartridge has an `own` entry (ADR 0013) | PROV-09 |
 | `cargo xtask provenance commits` | Every commit in the PR has `Signed-off-by`; commits with `Assisted-by` touching chip crates require the PR's AI-review checklist to be ticked | PROV-06, PROV-07 |
 | `cargo xtask provenance report` | Generates the release report: bibliography, tag coverage, ADR count, oracle versions, exposure log | PROV-10 |
 

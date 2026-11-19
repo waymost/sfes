@@ -8,6 +8,10 @@
 //! A directory entry with `fetch = true` is a vector set downloaded by `cargo xtask vectors
 //! fetch` from `source_url` at `commit`. Its files' hashes live in `tests/assets/vectors.lock`:
 //! every file present must be in the lock with a matching hash.
+//!
+//! The own test cartridges (ADR 0013) keep their sources in `tests/carts/` and their built ROMs
+//! in `tests/assets/carts/`. `tests/carts/` may hold only sources, and every cartridge needs a
+//! `license = "own"` manifest entry for `carts/<name>.sfc`.
 
 use std::{
     fs,
@@ -15,9 +19,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
 
 use crate::{
+    carts::{self, CARTS, COMMON, OUTPUT},
     files,
     finding::Finding,
     provenance::{ALLOWED_LICENSES, license_permitted},
@@ -74,7 +78,56 @@ pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
     let lock = Lock::load(root)?;
     let assets_directory = root.join(ASSETS);
     let present = hash_tree(&assets_directory, &assets_directory)?;
-    Ok(check(&manifest, &lock, &present))
+    let mut findings = check(&manifest, &lock, &present);
+    let carts_directory = root.join(CARTS);
+    let cart_files = files::walk(&carts_directory, &|_| false)?
+        .iter()
+        .map(|path| files::display(&carts_directory, path))
+        .collect::<Vec<_>>();
+    findings.extend(check_carts(&manifest, &carts::names(root)?, &cart_files));
+    Ok(findings)
+}
+
+/// File extensions allowed in `tests/carts/`: assembly sources and includes, linker
+/// configurations, `cart.toml` and notes.
+const CART_SOURCE_EXTENSIONS: &[&str] = &["cfg", "inc", "md", "s", "toml"];
+
+/// Checks the cartridge sources, given as cartridge names and the files under `tests/carts/`
+/// (relative to it), against the manifest.
+fn check_carts(manifest: &Manifest, names: &[String], cart_files: &[String]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for file in cart_files {
+        let name = file.rsplit('/').next().unwrap_or(file);
+        let extension = name.rsplit_once('.').map(|(_, extension)| extension);
+        let source = extension.is_some_and(|extension| CART_SOURCE_EXTENSIONS.contains(&extension));
+        if !source && !OS_FILES.contains(&name) {
+            findings.push(Finding::new(
+                format!("{CARTS}/{file}"),
+                0,
+                format!(
+                    "only cartridge sources belong in {CARTS}/; built ROMs go to \
+                     {ASSETS}/{OUTPUT}/ (ADR 0013)"
+                ),
+            ));
+        }
+    }
+    for name in names.iter().filter(|name| *name != COMMON) {
+        let path = format!("{OUTPUT}/{name}.sfc");
+        match manifest.assets.iter().find(|asset| asset.path == path) {
+            Some(asset) if asset.license == "own" => {}
+            Some(_) => findings.push(Finding::new(
+                MANIFEST,
+                0,
+                format!("asset `{path}`: an own test cartridge has `license = \"own\"` (ADR 0013)"),
+            )),
+            None => findings.push(Finding::new(
+                format!("{CARTS}/{name}"),
+                0,
+                format!("no entry for `{path}` in {MANIFEST} (ADR 0013)"),
+            )),
+        }
+    }
+    findings
 }
 
 /// Every asset file under `directory`, as `(path relative to assets_directory, SHA-256 hex)`,
@@ -96,7 +149,7 @@ pub(crate) fn hash_tree(
 
 fn hash_file(path: &PathBuf) -> Result<String> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(sha256_hex(&bytes))
+    Ok(files::sha256_hex(&bytes))
 }
 
 /// Checks the manifest and the lock against the files present, given as `(path relative to
@@ -190,20 +243,6 @@ fn check_entry(asset: &Asset, present: &[(String, String)]) -> Vec<Finding> {
     findings
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    Sha256::digest(bytes)
-        .iter()
-        .flat_map(|byte| {
-            [
-                DIGITS[usize::from(byte >> 4)],
-                DIGITS[usize::from(byte & 0x0F)],
-            ]
-        })
-        .map(char::from)
-        .collect::<String>()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,7 +254,7 @@ mod tests {
     fn present(entries: &[(&str, &[u8])]) -> Vec<(String, String)> {
         entries
             .iter()
-            .map(|(path, bytes)| (String::from(*path), sha256_hex(bytes)))
+            .map(|(path, bytes)| (String::from(*path), files::sha256_hex(bytes)))
             .collect::<Vec<_>>()
     }
 
@@ -229,7 +268,7 @@ mod tests {
 
     #[test]
     fn recorded_files_pass() {
-        let hash = sha256_hex(b"vector");
+        let hash = files::sha256_hex(b"vector");
         let text = format!(
             "[[asset]]\npath = \"cpu/00.json\"\nlicense = \"MIT\"\nsha256 = \"{hash}\"\n\n\
              [[asset]]\npath = \"cpu/01.json\"\nlicense = \"MIT\"\nsha256 = \"{hash}\"\nfetch = true\n\n\
@@ -264,6 +303,37 @@ mod tests {
         assert!(messages[0].contains("source_url"));
         assert!(messages[1].contains("commit"));
         assert!(messages[2].contains("applies only"));
+    }
+
+    #[test]
+    fn cartridges_need_own_entries_and_only_sources() {
+        let text = "[[asset]]\npath = \"carts/halt.sfc\"\nlicense = \"own\"\nsha256 = \"00\"\n\n\
+                    [[asset]]\npath = \"carts/dma.sfc\"\nlicense = \"MIT\"\nsha256 = \"00\"\n";
+        let names = ["halt", "dma", "hdma"].map(String::from);
+        let cart_files = [
+            "common/header.inc",
+            "common/lorom.cfg",
+            "halt/halt.s",
+            "halt/cart.toml",
+            "halt/.DS_Store",
+            "halt/halt.sfc",
+            "README.md",
+        ]
+        .map(String::from);
+        let messages = check_carts(&manifest(text), &names, &cart_files)
+            .into_iter()
+            .map(|finding| finding.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        assert!(
+            messages[0].starts_with("tests/carts/halt/halt.sfc:"),
+            "{messages:?}"
+        );
+        assert!(
+            messages[1].contains("`carts/dma.sfc`: an own"),
+            "{messages:?}"
+        );
+        assert!(messages[2].starts_with("tests/carts/hdma:"), "{messages:?}");
     }
 
     #[test]

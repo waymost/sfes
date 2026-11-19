@@ -3,6 +3,7 @@
 //! Every check prints one line per finding and exits non-zero when there is any, so CI and
 //! local runs behave the same.
 
+mod carts;
 mod deps;
 mod files;
 mod finding;
@@ -26,6 +27,8 @@ commands:
                        sign-off on every commit; AI-assisted chip changes reviewed (PROV-06, PROV-07)
   vectors fetch [set]  download test-vector sets at their pinned commits; verify against the lock
   vectors lock [set]   download the sets and rewrite tests/assets/vectors.lock
+  carts build          assemble the own test cartridges into tests/assets/carts/ (ADR 0013)
+  carts check          rebuild the cartridges and compare them with the committed ROMs
   deps                 workspace dependency layering and player-only licenses (MS-02, PROV-08)";
 
 fn main() -> ExitCode {
@@ -58,6 +61,8 @@ fn run() -> Result<bool> {
         ["vectors", "fetch", set] => ("vectors fetch", vectors::fetch(&root, Some(set))?),
         ["vectors", "lock"] => ("vectors lock", vectors::lock(&root, None)?),
         ["vectors", "lock", set] => ("vectors lock", vectors::lock(&root, Some(set))?),
+        ["carts", "build"] => ("carts build", carts::build(&root)?),
+        ["carts", "check"] => ("carts check", carts::check(&root)?),
         ["deps"] => ("deps", deps::run(&root)?),
         _ => {
             eprintln!("{USAGE}");

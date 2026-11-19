@@ -10,6 +10,12 @@
 //!
 //! Tags anywhere else under `crates/` must also name known ids.
 //!
+//! In every test-cartridge source (`.s` and `.inc` under `tests/carts/`, ADR 0013):
+//! - the file's leading `;` comment block carries a tag;
+//! - every `.proc` and `.macro` carries a tag on its line or in the `;` comment lines directly
+//!   above it;
+//! - every tag names a bibliography id or an existing ADR.
+//!
 //! A tag is `@source: <id>[#anchor]`, with several separated by commas. `syn` finds the items
 //! and their lines; the raw text is searched for tags, because `syn` drops `//` comments.
 
@@ -19,6 +25,7 @@ use anyhow::{Context, Result};
 use syn::{spanned::Spanned, visit::Visit};
 
 use crate::{
+    carts::CARTS,
     files,
     finding::Finding,
     provenance::bibliography::{self, KnownIds},
@@ -96,7 +103,70 @@ pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
             findings.extend(check_required_tags(&display, &text));
         }
     }
+    for path in files::walk(&root.join(CARTS), &|_| false)? {
+        if !path.extension().is_some_and(|extension| {
+            CART_SOURCE_EXTENSIONS
+                .iter()
+                .any(|known| extension == *known)
+        }) {
+            continue;
+        }
+        let display = files::display(root, &path);
+        let text = fs::read_to_string(&path).with_context(|| format!("reading {display}"))?;
+        findings.extend(check_tag_ids(&display, &text, &known));
+        findings.extend(check_cart_tags(&display, &text));
+    }
     Ok(findings)
+}
+
+/// Assembly source extensions in `tests/carts/`: sources and includes.
+const CART_SOURCE_EXTENSIONS: &[&str] = &["s", "inc"];
+
+/// Assembly directives that open a test case or a reusable block, each needing a tag.
+const CART_BLOCKS: &[&str] = &[".proc", ".macro"];
+
+/// The module tag and the per-block tags of one cartridge source.
+fn check_cart_tags(display: &str, text: &str) -> Vec<Finding> {
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut findings = Vec::new();
+    let leading_tag = lines
+        .iter()
+        .map(|line| line.trim())
+        .take_while(|line| line.is_empty() || line.starts_with(';'))
+        .any(has_tag);
+    if !leading_tag {
+        findings.push(Finding::new(
+            display,
+            1,
+            "cartridge source has no `; @source:` tag in its leading comments",
+        ));
+    }
+    for (index, line) in lines.iter().enumerate() {
+        let mut words = line.split_whitespace();
+        let directive = words.next().unwrap_or_default().to_ascii_lowercase();
+        if !CART_BLOCKS.contains(&directive.as_str()) {
+            continue;
+        }
+        let name = words
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(',')
+            .to_owned();
+        let tagged = has_tag(line)
+            || lines[..index]
+                .iter()
+                .rev()
+                .take_while(|above| above.trim_start().starts_with(';'))
+                .any(|above| has_tag(above));
+        if !tagged {
+            findings.push(Finding::new(
+                display,
+                index + 1,
+                format!("`{directive} {name}` has no `; @source:` tag"),
+            ));
+        }
+    }
+    findings
 }
 
 fn is_chip_crate_file(display: &str) -> bool {
@@ -440,6 +510,85 @@ const GAP: u8 = 0;
 pub fn read() {}
 ";
         assert_eq!(messages(text), ["6: `read` has no `@source:` tag"]);
+    }
+
+    fn cart_messages(text: &str) -> Vec<String> {
+        let known = KnownIds::from_ids(&["fullsnes", "adr-0013"]);
+        let mut findings = check_tag_ids("tests/carts/x/x.s", text, &known);
+        findings.extend(check_cart_tags("tests/carts/x/x.s", text));
+        findings
+            .into_iter()
+            .map(|finding| format!("{}: {}", finding.line, finding.message))
+            .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn tagged_cart_source_passes() {
+        let text = "\
+; A cartridge.
+; @source: adr-0013
+
+.p816
+.include \"header.inc\"
+
+; Boots.
+; @source: fullsnes#snescartridgeromheader
+.proc reset
+    stp
+.endproc
+
+.PROC halt ; @source: fullsnes
+    stp
+.endproc
+
+; @source: adr-0013
+.macro twice value
+    .byte value, value
+.endmacro
+";
+        assert_eq!(cart_messages(text), Vec::<String>::new());
+    }
+
+    #[test]
+    fn missing_cart_tags_are_reported() {
+        let text = "\
+; A cartridge without a tag.
+.p816
+
+; @source: fullsnes
+
+.proc reset
+    stp
+.endproc
+
+; Halts.
+.proc halt
+.endproc
+
+.macro twice value
+.endmacro
+";
+        assert_eq!(
+            cart_messages(text),
+            [
+                "1: cartridge source has no `; @source:` tag in its leading comments",
+                "6: `.proc reset` has no `; @source:` tag",
+                "11: `.proc halt` has no `; @source:` tag",
+                "14: `.macro twice` has no `; @source:` tag",
+            ]
+        );
+    }
+
+    #[test]
+    fn cart_tag_ids_are_checked() {
+        let text = "; @source: fulsnes#x\n; @source: Adr-0013\n";
+        assert_eq!(
+            cart_messages(text),
+            [
+                "1: unknown source id `fulsnes`: add it to provenance/bibliography.toml or cite an existing ADR",
+                "2: malformed source tag `Adr-0013`",
+            ]
+        );
     }
 
     #[test]
