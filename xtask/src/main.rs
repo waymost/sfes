@@ -7,6 +7,7 @@ mod carts;
 mod deps;
 mod files;
 mod finding;
+mod golden;
 mod provenance;
 mod roms;
 mod vectors;
@@ -29,6 +30,11 @@ commands:
   vectors fetch [set]  download test-vector sets at their pinned commits; verify against the lock
   vectors lock [set]   download the sets and rewrite tests/assets/vectors.lock
   roms fetch           download the fetched third-party test ROMs; verify their SHA-256 (ADR 0014)
+  golden --update [name…]
+                       rerun goldens in tests/assets/golden/ and rewrite changed checkpoints as
+                       unverified (ADR 0015)
+  golden --png <name> <frame>
+                       write a golden's frame to target/golden/<name>-<frame>.png
   carts build          assemble the own test cartridges into tests/assets/carts/ (ADR 0013)
   carts check          rebuild the cartridges and compare them with the committed ROMs
   deps                 workspace dependency layering and player-only licenses (MS-02, PROV-08)";
@@ -64,6 +70,8 @@ fn run() -> Result<bool> {
         ["vectors", "lock"] => ("vectors lock", vectors::lock(&root, None)?),
         ["vectors", "lock", set] => ("vectors lock", vectors::lock(&root, Some(set))?),
         ["roms", "fetch"] => ("roms fetch", roms::fetch(&root)?),
+        ["golden", "--update", names @ ..] => ("golden --update", golden::update(&root, names)?),
+        ["golden", "--png", name, frame] => ("golden --png", golden::png(&root, name, frame)?),
         ["carts", "build"] => ("carts build", carts::build(&root)?),
         ["carts", "check"] => ("carts check", carts::check(&root)?),
         ["deps"] => ("deps", deps::run(&root)?),

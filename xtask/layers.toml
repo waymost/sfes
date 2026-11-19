@@ -35,4 +35,4 @@ sfes-py = ["sfes", "sfes-api", "sfes-dataset", "sfes-env", "sfes-movie", "sfes-p
 sfes-capi = ["sfes", "sfes-api", "sfes-movie", "sfes-snes-core"]
 sfes-player = ["sfes", "sfes-api", "sfes-cheevos", "sfes-env", "sfes-movie", "sfes-pool", "sfes-snes-core"]
 sfes-test-harness = ["sfes-api", "sfes-movie", "sfes-snes-cart", "sfes-snes-core", "sfes-snes-cpu", "sfes-snes-ppu", "sfes-snes-spc"]
-xtask = []
+xtask = ["sfes-test-harness"]
