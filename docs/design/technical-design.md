@@ -205,6 +205,8 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
 }
 ```
 
+`Snes` implements `System` in M4, together with the state envelope. Until then (M2 and M3) it has an inherent public API with the same method shapes (`run`, `set_input`, `video`, `region`, `region_mut`, `peek_bus`), which the development viewer uses, so the M4 impl delegates to methods that already exist.
+
 Construction uses a builder that returns `Result`, so invalid ROMs never yield a half-built machine:
 
 ```rust
@@ -301,6 +303,7 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
   3. Build window masks, apply mosaic, then colour math and brightness.
   4. Write the line into the frame buffer; when layer output is requested (WM-02), copy the per-layer buffers too.
 - With render skip, steps 1, 3 and 4 are skipped but step 2 always runs, since its flags are readable state (EMU-06).
+- Lines are 256 pixels wide, or 512 in BG modes 5 and 6 and with pseudo-hi-res; frames have 224 or 239 visible lines, or 448 or 478 when interlaced. Hi-res and interlace are P1 but built in M2, so the frame buffer and `VideoFrame` are sized for them from the start; an ADR on frame geometry (#89) decides how mixed-width frames are presented and hashed.
 - Mode 7 uses the documented fixed-point matrix arithmetic in integers.
 
 ### SPC700 and S-DSP (`sfes-snes-spc`)
@@ -507,10 +510,10 @@ BK2 import and lag data live in `sfes-movie` (section 7); branch search in `sfes
 
 ## 11. Reference player
 
-`sfes-player` is an ordinary consumer of the public API; it has no access to crate internals, which keeps the API honest. It grows from a development viewer at M2 to the recording and authoring tool at M5 and the full player at M6 (PLY-01 to PLY-07).
+`sfes-player` is an ordinary consumer of the public API; it has no access to crate internals, which keeps the API honest. It grows from a development viewer at M2, which uses `Snes`'s inherent API until `impl System` lands in M4 (section 3), to the recording and authoring tool at M5 and the full player at M6 (PLY-01 to PLY-07).
 
-- **Event loop:** a `winit` application implementing its `ApplicationHandler` trait. Emulation runs on the main thread with fixed-timestep pacing at the region's frame rate (about 60.1 Hz NTSC), independent of display refresh.
-- **Video:** each frame's RGB555 buffer is converted to RGBA8 on the CPU and uploaded to a `wgpu` texture, drawn with integer scaling and the correct aspect ratio. No shader pipeline beyond that blit (non-goal).
+- **Event loop:** a `winit` application implementing its `ApplicationHandler` trait. Emulation runs on the main thread with fixed-timestep pacing at the region's frame rate (about 60.1 Hz NTSC, 50 Hz PAL), independent of display refresh.
+- **Video:** each frame's RGB555 buffer is converted to RGBA8 on the CPU and uploaded to a `wgpu` texture, drawn with integer scaling and the correct aspect ratio. A 512-wide or interlaced frame is drawn at the same display size as a 256 × 224 one. No shader pipeline beyond that blit (non-goal).
 - **Audio:** the `cpal` callback reads from a lock-free single-producer, single-consumer ring buffer. A small resampler with dynamic rate control converts the native S-DSP rate to the device rate and nudges the ratio by ±0.5% to keep the buffer half full, so audio neither crackles nor drifts. The resampler lives in a `sfes-player::audio` module and is not part of the core (API-04).
 - **Input:** keyboard through winit and gamepads through `gilrs`, mapped through a TOML config in the platform config directory.
 - **Tools:** `egui` panels for recording, start-state authoring (PLY-02), RAM search and watch (PLY-04), and later inspection views (PLY-05). Panels call the same `sfes-env` and `sfes-movie` APIs the Python package uses, so a start state made in the player is byte-identical to one made in Python.
@@ -667,10 +670,14 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 
 ### M2 — Bus, DMA and video
 
-- [ ] Header detection, `MemoryMap`, LoROM and HiROM boards; WRAM; 5A22 I/O.
-- [ ] Deadline table and catch-up in `BusView`; DMA and HDMA.
-- [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math.
+- [ ] Header detection, `MemoryMap`, LoROM, HiROM and ExHiROM boards; WRAM; 5A22 I/O.
+- [ ] Deadline table and catch-up in `BusView`; NTSC and PAL frame timing; DMA and HDMA.
+- [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
+- [ ] `Snes` with an inherent API shaped like `System`; `impl System for Snes` waits for the state envelope in M4.
+- [ ] Own test cartridges in 65816 assembly built with ca65/ld65, the built `.sfc` files committed and rebuilt byte-identically in CI (ADR 0013, #73).
 - [ ] Development viewer (PLY-01); first golden frame hashes, marked unverified, from permissively licensed test ROMs and own test cartridges.
+
+ExHiROM, PAL timing, hi-res, pseudo-hi-res and interlace are P1 in the feature specification. They are scheduled in M2 because the memory map, scheduler and renderer are shaped by them; their priority is unchanged.
 
 ### M3 — Audio and base system
 

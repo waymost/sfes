@@ -233,7 +233,7 @@ The core starts with one `Fast` accuracy profile: CPU-cycle-exact bus timing wit
 
 **EMU-03 5A22 on-chip I/O (P0, M2).** Multiply and divide unit with its result latency, H/V timers, NMI and IRQ enables, auto-joypad read with its timing, WRIO/RDIO, FastROM selection (`$420D`).
 
-**EMU-04 Memory map and cartridge (P0 LoROM/HiROM, P1 ExHiROM).**
+**EMU-04 Memory map and cartridge (P0 LoROM/HiROM, P1 ExHiROM).** ExHiROM is scheduled in M2 alongside the P0 boards; its priority is unchanged.
 
 - Header detection MUST score candidate header locations and accept an explicit override.
 - A 512-byte copier header MUST be detected and stripped before hashing. **Decision:** the canonical ROM identity is SHA-1 and SHA-256 of the ROM without copier header. When matching stable-retro integrations, the loader computes both the stripped and the raw-file hash and accepts either.
@@ -244,7 +244,7 @@ The core starts with one `Fast` accuracy profile: CPU-cycle-exact bus timing wit
 **EMU-06 PPU (P0 core features, M2).**
 
 - MUST: BG modes 0–7, sprites with per-line limits and the time-over and range-over flags, windows, colour math, mosaic, Mode 7 including EXTBG, overscan (224 or 239 lines), brightness and forced blank.
-- P1: hi-res modes 5 and 6, pseudo-hi-res and interlace.
+- P1: hi-res modes 5 and 6, pseudo-hi-res and interlace. Scheduled in M2; priority unchanged.
 - Per-layer output (BG1–BG4, sprites, before compositing) MUST be producible on request for WM-02, with no cost when off.
 - Render skip MUST skip pixel composition only. Sprite evaluation still runs every line, because its overflow flags are readable state (`$213E`).
 
@@ -258,7 +258,7 @@ The core starts with one `Fast` accuracy profile: CPU-cycle-exact bus timing wit
 
 **EMU-08 Controllers and peripherals.** Standard pad (P0); Multitap for up to 4 players (P1, needed for RL-09 beyond two agents); mouse and Super Scope (P2).
 
-**EMU-09 Regions (P0 NTSC, P1 PAL).** NTSC and PAL frame timing and line counts. Region comes from the header, with an override.
+**EMU-09 Regions (P0 NTSC, P1 PAL).** NTSC and PAL frame timing and line counts. Region comes from the header, with an override. PAL timing is scheduled in M2; its priority is unchanged, and the PAL APU ratio follows in M3.
 
 **EMU-10 Coprocessors (P1, M9), ordered by how many popular games need them.**
 
