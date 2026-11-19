@@ -16,3 +16,6 @@
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Commercial ROMs stay ignored; the own test cartridges are built here (ADR 0013).
+!/tests/assets/carts/*.sfc

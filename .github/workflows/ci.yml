@@ -98,6 +98,30 @@ jobs:
         with:
           command: check
 
+  carts:
+    runs-on: ubuntu-latest
+    env:
+      # ADR 0013: cc65 release 2.19, built from its tag.
+      CC65_TAG: V2.19
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/cc65
+          key: cc65-${{ env.CC65_TAG }}-${{ runner.os }}
+      - name: Build cc65
+        run: |
+          if [ ! -x "$HOME/cc65/bin/ld65" ]; then
+            rm -rf "$HOME/cc65"
+            git clone --depth 1 --branch "$CC65_TAG" https://github.com/cc65/cc65.git "$HOME/cc65"
+            make -C "$HOME/cc65" -j"$(nproc)" bin
+          fi
+          echo "$HOME/cc65/bin" >> "$GITHUB_PATH"
+      # Rebuilds every own test cartridge and fails if a committed ROM differs.
+      - run: cargo xtask carts check
+
   provenance:
     runs-on: ubuntu-latest
     steps:

@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 
 /// Directories never walked into.
 const ALWAYS_SKIPPED: &[&str] = &[".git", "target", "node_modules", ".venv"];
@@ -53,4 +54,19 @@ pub(crate) fn display(root: &Path, path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// The SHA-256 of `bytes` as 64 lower-case hex digits.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    Sha256::digest(bytes)
+        .iter()
+        .flat_map(|byte| {
+            [
+                DIGITS[usize::from(byte >> 4)],
+                DIGITS[usize::from(byte & 0x0F)],
+            ]
+        })
+        .map(char::from)
+        .collect::<String>()
 }
