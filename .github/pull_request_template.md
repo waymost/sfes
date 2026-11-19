@@ -2,6 +2,12 @@
 
 <!-- What changes and why. Link issues with "Closes #N". -->
 
+## Golden changes
+
+<!-- Required when a file in tests/assets/golden/ changes: say why each changed frame is right,
+     and for a blessed entry which oracle and version it was compared with (ADR 0015).
+     Write "None" otherwise. -->
+
 ## Definition of done
 
 - [ ] Tests added or updated; golden-file changes explained below.

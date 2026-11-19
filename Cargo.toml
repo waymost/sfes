@@ -19,6 +19,7 @@ sfes-pool = { path = "crates/sfes-pool", version = "0.0.0" }
 sfes-env = { path = "crates/sfes-env", version = "0.0.0" }
 sfes-snes-cpu = { path = "crates/sfes-snes-cpu", version = "0.0.0", default-features = false }
 sfes-snes-core = { path = "crates/sfes-snes-core", version = "0.0.0", default-features = false }
+sfes-test-harness = { path = "crates/sfes-test-harness", version = "0.0.0" }
 
 # Chip and core crates may use only these (TDD section 12)
 bitflags = { version = "2.13.2", default-features = false, features = ["serde"] }
@@ -29,6 +30,7 @@ thiserror = { version = "2.0.21", default-features = false }
 # Tooling (xtask)
 anyhow = "1.0.104"
 cargo_metadata = "0.23.1"
+png = "0.18.1"
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 regex = "1.13.1"
 serde_json = "1.0.154"
