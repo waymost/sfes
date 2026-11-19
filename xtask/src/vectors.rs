@@ -87,7 +87,8 @@ pub(crate) fn is_commit(commit: &str) -> bool {
     is_lower_hex(commit, 40)
 }
 
-fn is_lower_hex(text: &str, length: usize) -> bool {
+/// Whether `text` is exactly `length` lower-case hex digits.
+pub(crate) fn is_lower_hex(text: &str, length: usize) -> bool {
     text.len() == length
         && text
             .bytes()

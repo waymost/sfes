@@ -10,8 +10,9 @@
 *.bs
 /firmware/
 
-# Fetched test vectors (cargo xtask vectors fetch)
+# Fetched test vectors (cargo xtask vectors fetch) and test ROMs (cargo xtask roms fetch, ADR 0014)
 /tests/assets/vectors/
+/tests/assets/fetched/
 
 .DS_Store
 Thumbs.db
@@ -19,3 +20,5 @@ desktop.ini
 
 # Commercial ROMs stay ignored; the own test cartridges are built here (ADR 0013).
 !/tests/assets/carts/*.sfc
+# Third-party test ROMs whose license allows committing them (ADR 0014).
+!/tests/assets/third-party/*/*.sfc

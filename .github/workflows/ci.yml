@@ -68,6 +68,15 @@ jobs:
           enableCrossOsArchive: true
       # Downloads on a cache miss; always verifies every file against vectors.lock.
       - run: cargo xtask vectors fetch 65816
+      # Third-party test ROMs with no stated license are fetched by URL and hash, never
+      # committed (ADR 0014). The key changes whenever a manifest entry does.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: tests/assets/fetched
+          key: roms-${{ hashFiles('tests/assets/MANIFEST.toml') }}
+          enableCrossOsArchive: true
+      # Downloads what is missing or differs; always verifies every file's SHA-256.
+      - run: cargo xtask roms fetch
       - run: cargo build --workspace --all-targets --locked
       - run: cargo nextest run --workspace --locked --no-tests=warn
 
