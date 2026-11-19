@@ -326,7 +326,7 @@ impl<'ast> Visit<'ast> for Collector {
         self.in_std_trait_impl = item
             .trait_
             .as_ref()
-            .and_then(|(_, path, _)| path.segments.last())
+            .and_then(|(path, _)| path.segments.last())
             .is_some_and(|segment| STD_TRAITS.contains(&segment.ident.to_string().as_str()));
         syn::visit::visit_item_impl(self, item);
         self.in_std_trait_impl = outer;
