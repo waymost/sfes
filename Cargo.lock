@@ -433,6 +433,7 @@ version = "0.0.0"
 name = "sfes-snes-cart"
 version = "0.0.0"
 dependencies = [
+ "sfes-api",
  "thiserror",
 ]
 

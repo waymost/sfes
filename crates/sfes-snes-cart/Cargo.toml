@@ -12,8 +12,9 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+sfes-api.workspace = true
 thiserror.workspace = true
 
 [features]
 default = ["std"]
-std = ["thiserror/std"]
+std = ["sfes-api/std", "thiserror/std"]

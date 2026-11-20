@@ -316,7 +316,7 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
 ### Cartridge (`sfes-snes-cart`)
 
 - `Header::detect(&[u8]) -> Result<Header, HeaderError>` drops a 512-byte copier header (image length 512 modulo 1024), then scores the LoROM (`$7FC0`), HiROM (`$FFC0`) and ExHiROM (`$40FFC0`) header locations. A location whose RESET vector is outside `$8000–$FFFE` is rejected. The rest score 4 for a stored checksum matching the image's mirrored checksum, 4 for a valid complement, 2 for a map-mode byte naming that board, 1 for a printable title and 1 for a ROM size that covers the image. A tie or no candidate is an error naming the boards. `Header::detect_with` takes an explicit board, which bypasses scoring, and a region override; the region otherwise comes from the country byte, and codes the documents leave open give none (ADR 0016).
-- `MemoryMap` is a precomputed table of 2,048 pages of 8 KiB covering the 24-bit space. Each entry is `Page::Rom(offset) | Page::CartRam(offset) | Page::Wram(offset) | Page::Io | Page::Coproc(id) | Page::Open`. It is built once at load and `Arc`-shared, so a read is a table lookup.
+- `MemoryMap` is a precomputed table of 2,048 pages of 8 KiB covering the 24-bit space. Each entry is `Page::Rom(offset) | Page::CartRam(offset) | Page::Wram(offset) | Page::Io | Page::Coproc(id) | Page::Open`. It is built once at load and `Arc`-shared, so a read is a table lookup Offsets are mirrored when the table is built: ROM the way the checksum sums it, SRAM modulo its size. LoROM maps SRAM at `$70–$7D,$F0–$FF:0000–7FFF`, HiROM at `$20–$3F,$A0–$BF:6000–7FFF` and ExHiROM at `$80–$BF:6000–7FFF`; RAM over 128 KiB is refused. `Cartridge::load` exposes the ROM and SRAM as `RegionId::Rom` and `RegionId::CartRam` (ADR 0017).
 - `Board` is an enum: `LoRom`, `HiRom`, `ExHiRom`, `Sa1(Box<Sa1>)`, `SuperFx(Box<Gsu>)`, `NecDsp(Box<NecDsp>)` and later variants. Boxing large variants keeps the enum small, and `Box<T: Clone>` is `Clone`, so cloning still works.
 - **Coprocessors:** the SA-1 contains a `Cpu65816` plus I-RAM, BW-RAM access and its arithmetic and DMA units. The GSU is an interpreter for its own instruction set. The NEC DSP is a µPD77C25 interpreter running user-supplied firmware (EMU-10).
 
@@ -673,7 +673,7 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 
 ### M2 — Bus, DMA and video
 
-- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards; WRAM; 5A22 I/O.
+- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM; 5A22 I/O.
 - [ ] Deadline table and catch-up in `BusView`; NTSC and PAL frame timing; DMA and HDMA.
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System`; `impl System for Snes` waits for the state envelope in M4.
