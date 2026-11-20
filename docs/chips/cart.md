@@ -74,9 +74,48 @@ The country byte implies the video standard (`fullsnes#snescartridgeromheader`).
 
 An explicit `Options::region` always replaces the header's region (EMU-09).
 
+## The memory map
+
+The bus looks up what answers an address in a [`MemoryMap`](../../crates/sfes-snes-cart/src/map.rs): 2,048 pages of 8 KiB, built once when the cartridge is loaded and shared between clones (technical design section 5, ADR 0017). Each page is `Rom`, `CartRam`, `Wram`, `Io`, `Coproc` or `Open`, with ROM and RAM offsets already mirrored. `MemoryMap::resolve` adds the offset inside the page.
+
+### The console's part
+
+Some areas are the same whatever the cartridge (`anomie-memmap#memory-map`, `fullsnes#snesmemorymap`):
+
+| Banks | Addresses | Page |
+| --- | --- | --- |
+| `$00–$3F`, `$80–$BF` | `$0000–$1FFF` | `Wram`, a mirror of `$7E:0000–$1FFF` |
+| `$00–$3F`, `$80–$BF` | `$2000–$5FFF` | `Io`: Address Bus B at `$2100–$21FF` and the CPU's registers at `$4000–$43FF`, decoded by the bus |
+| `$7E–$7F` | all | `Wram`, 128 KiB |
+
+The cartridge sees all 24 address lines (`anomie-memmap#hardware/address-bus-a`). It answers `/CART` at `$8000–$FFFF` of the system banks and across `$40–$7D` and `$C0–$FF`, and may answer `$6000–$7FFF` too. Whatever the board leaves unmapped is `Open`.
+
+### The boards
+
+[`Board`](../../crates/sfes-snes-cart/src/board.rs) gives each address's ROM or SRAM offset, before mirroring. The header's map mode decides the board (ADR 0016). For each family, the map follows the plain board and the most common SRAM board in fullsnes's tables (`fullsnes#snescartlorommappingromdividedinto32kbanksaround1500games`, `fullsnes#snescarthirommappingromdividedinto64kbanksaround500games`):
+
+| Board | ROM | SRAM |
+| --- | --- | --- |
+| `LoRom` | 32 KiB per bank at `$00–$7D,$80–$FF:8000–FFFF`, mirrored to the lower halves of `$40–$7D,$C0–$FF` | `$70–$7D,$F0–$FF:0000–7FFF`, 32 KiB per bank |
+| `HiRom` | 64 KiB per bank at `$40–$7D,$C0–$FF`; the upper halves mirrored to `$00–$3F,$80–$BF` | `$20–$3F,$A0–$BF:6000–7FFF`, 8 KiB per bank |
+| `ExHiRom` | as HiROM, but banks below `$80` hold the slow ROM that follows the first 4 MiB | `$80–$BF:6000–7FFF` |
+
+Mirroring the HiROM upper halves into bank `$00` is what puts the vectors at `$00:FFE0`. So `$00:FFC0` reaches the header area that detection read: `$7FC0`, `$FFC0` or `$40FFC0` (`fullsnes#snesmemorymap`, `fullsnes#snescartridgeromimageinterleave`).
+
+### Mirroring
+
+A ROM smaller than its area repeats. [`mirror`](../../crates/sfes-snes-cart/src/board.rs) follows the checksum's layout (`fullsnes#snescartridgeromheader`): the largest power-of-two part, then the remainder repeated. A 3 MiB LoROM therefore reads its last 1 MiB twice. A 5 MiB ExHiROM reads its last 1 MiB in each of `$40`, `$50`, `$60` and `$70`. A remainder that is not a power of two is split the same way again (ADR 0017).
+
+The SRAM size comes from the header, `1 SHL n` KiB. It repeats through the board's whole SRAM area. Sizes over 128 KiB are refused (ADR 0017).
+
+### The cartridge
+
+[`Cartridge::load`](../../crates/sfes-snes-cart/src/cartridge.rs) detects the header, keeps the ROM without its copier header, allocates the SRAM and builds the map. It exposes the ROM as `RegionId::Rom` and the SRAM as `RegionId::CartRam`, which is the only writable region (EMU-04, FND-06).
+
 ## Not handled yet
 
 - Interleaved images from old copiers (`fullsnes#snescartridgeromimageinterleave`).
+- Board variants with other SRAM areas, SRAM across the whole LoROM bank, or open ROM banks (ADR 0017).
 - Satellaview and Sufami Turbo headers.
 - The checksums fullsnes lists for SPC7110 boards.
 
@@ -85,3 +124,4 @@ Such images may score wrongly and then need a board override.
 ## Decisions
 
 - [ADR 0016](../adr/0016-cartridge-header-detection.md): candidate locations, the reset-vector rule, the score weights, overrides and the region table.
+- [ADR 0017](../adr/0017-memory-map-and-boards.md): the page table, each board's ROM and SRAM areas, mirroring and the RAM size limit.
