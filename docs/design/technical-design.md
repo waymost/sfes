@@ -326,6 +326,8 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
 
 The bus owns WRAM (128 KiB), the PPU, the APU unit, the cartridge, DMA channels, the multiply/divide unit, H/V timers, controller ports and the deadline table (section 4). `BusView` implements `Bus65816` by looking up the page, charging the access time, running due deadlines and catch-ups, performing the access and calling the observer.
 
+The console's I/O pages decode further: `$2100–$21FF` is Address Bus B (PPU `$00–$3F`, APU `$40–$7F`, the WRAM port `$80–$83`) and `$4000–$43FF` the 5A22's own registers. Memory-2 is Fast while `$420D` bit 0 is set. The CPU pauses 40 master cycles per line for DRAM refresh, 538 cycles into the first line and then at the multiple of 8 cycles closest to 536, after the CPU cycle running when it falls due. A read that nothing answers returns the last value on the data bus, and every write places its value there. The two writes of an emulation-mode read-modify-write instruction each reach a register with their side effects (ADR 0019).
+
 ## 6. State, cloning, serialization and determinism
 
 In-memory snapshots are `Clone`; persisted state is a sectioned envelope of postcard-encoded chip structs; hashes are BLAKE3 over that encoding; and determinism is enforced by lints and CI rather than by convention.
@@ -675,7 +677,7 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 
 ### M2 — Bus, DMA and video
 
-- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM; 5A22 I/O.
+- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O.
 - [ ] Deadline table and catch-up in `BusView`; NTSC and PAL frame timing; DMA and HDMA.
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System` (ADR 0018, #79); `impl System for Snes` waits for the state envelope in M4.

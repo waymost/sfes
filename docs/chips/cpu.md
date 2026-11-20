@@ -187,7 +187,7 @@ TSB, TRB and the memory forms of the shifts, rotates, increments and decrements 
 
 MLB is active on all of these cycles and on no other, which is the "last three or five cycles" of datasheet 2.19. In native mode the modify cycle is internal. In emulation mode RWB is low in it (note 17), and the unmodified byte is written back before the result.
 
-Table 5-7 prints the modify cycle at AA+1 for both widths. With 8-bit data the vectors put it at AA, the byte that was read, and they are the only source for the value written in emulation mode. [ADR 0006](../adr/0006-read-modify-write-modify-cycle.md) records both.
+Table 5-7 prints the modify cycle at AA+1 for both widths. With 8-bit data the vectors put it at AA, the byte that was read, and they are the only source for the value written in emulation mode. [ADR 0006](../adr/0006-read-modify-write-modify-cycle.md) records both. On the SNES bus the two emulation-mode writes reach a register as two ordinary writes, each with its side effects ([ADR 0019](../adr/0019-snes-bus-decode-and-refresh.md), point 7).
 
 All 54 opcodes pass every test of their vector files in both modes.
 

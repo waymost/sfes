@@ -54,6 +54,12 @@ sha256 = "379aba977e6f29e222b9fb215e846b053a7ba49ed4a6f207c4fd8d70c79e7674"
 notes = "Own test cartridge: boots, writes $A5 to WRAM $7E:0000 and stops. Built from tests/carts/halt/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/bus-timing.sfc"
+license = "own"
+sha256 = "643a93c14c01b0d644286b8d4f539121a62decd85071157538b7964483c7fecf"
+notes = "Own test cartridge: runs FastROM code from bank $80, drives the WRAM port $2180-$2183, reads a write-only register and runs INC $2180 in emulation mode (ADR 0019). Built from tests/carts/bus-timing/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
