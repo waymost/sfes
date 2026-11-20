@@ -31,7 +31,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sfes_api::{Buttons, VideoFrame};
+use sfes_api::{Buttons, Fast, Stop, VideoFrame};
+use sfes_snes_core::{BuildError, Snes};
 use sha2::{Digest, Sha256};
 
 use crate::roms::{self, Rom, RomError};
@@ -206,9 +207,9 @@ pub enum GoldenError {
         /// The ROM's hash.
         found: String,
     },
-    /// No machine can run a ROM yet.
-    #[error("running a ROM needs the SNES machine, which does not exist yet (#79)")]
-    NoMachine,
+    /// The machine could not be built from the ROM.
+    #[error(transparent)]
+    Build(#[from] BuildError),
 }
 
 impl Golden {
@@ -401,11 +402,26 @@ pub fn rom(golden: &Golden) -> Result<Rom, GoldenError> {
 ///
 /// # Errors
 ///
-/// Returns [`GoldenError::NoMachine`] until the SNES machine exists (#79).
+/// Returns [`GoldenError::Build`] when the machine cannot be built from `rom`.
 // @source: adr-0015
+// @source: adr-0018
 pub fn boot(rom: &[u8]) -> Result<Box<dyn FrameMachine>, GoldenError> {
-    let _ = rom;
-    Err(GoldenError::NoMachine)
+    let machine = Snes::<Fast>::builder(std::sync::Arc::from(rom)).build()?;
+    Ok(Box::new(machine))
+}
+
+impl FrameMachine for Snes {
+    // @source: adr-0015
+    fn set_buttons(&mut self, port: u8, buttons: Buttons) {
+        self.set_input(usize::from(port), buttons);
+    }
+
+    // @source: adr-0015
+    // @source: adr-0018
+    fn run_frame(&mut self) -> VideoFrame<'_> {
+        self.run(Stop::Frames(1));
+        self.video()
+    }
 }
 
 /// The size and BLAKE3 hash of `frame`: its pixels, each `u16` little-endian, row-major.
@@ -768,9 +784,22 @@ mod tests {
     }
 
     // @source: adr-0015
+    // @source: adr-0016
     #[test]
-    fn no_machine_runs_a_rom_yet() {
-        assert!(matches!(boot(&[]), Err(GoldenError::NoMachine)));
+    fn a_rom_without_a_header_boots_no_machine() {
+        assert!(matches!(boot(&[]), Err(GoldenError::Build(_))));
+    }
+
+    // @source: adr-0015
+    // @source: adr-0018
+    #[test]
+    fn the_own_halt_cartridge_boots_and_runs_frames() {
+        let rom = include_bytes!("../../../tests/assets/carts/halt.sfc");
+        let mut machine = boot(rom).unwrap();
+        machine.set_buttons(0, Buttons::START);
+        let frame = machine.run_frame();
+        // No PPU renders yet, so the frame is empty (ADR 0018).
+        assert_eq!((frame.width, frame.height, frame.pixels.len()), (0, 0, 0));
     }
 
     // @source: adr-0015
