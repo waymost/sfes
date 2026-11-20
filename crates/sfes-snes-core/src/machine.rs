@@ -201,14 +201,18 @@ impl<A: Accuracy, O: Observer> SnesBuilder<A, O> {
 }
 
 impl<A: Accuracy, O: Observer> Snes<A, O> {
-    /// Presses the reset button: the timing position returns to the start of a frame and the
-    /// CPU runs its reset sequence at once. WRAM and cartridge RAM are kept (ADR 0018).
+    /// Presses the reset button: the timing position returns to the start of a frame, the
+    /// bus registers take their reset values and the CPU runs its reset sequence at once.
+    /// WRAM and cartridge RAM are kept (ADR 0018, ADR 0019).
     // @source: fullsnes#snescontrollersotherinputs
+    // @source: fullsnes#snesiomap
     // @source: anomie-timing
     // @source: adr-0018
+    // @source: adr-0019
     pub fn reset(&mut self) {
         let now = self.state.bus.now;
         self.state.bus.timing.restart(now);
+        self.state.bus.reset();
         self.reset_cpu();
     }
 
@@ -370,16 +374,16 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         }
     }
 
-    /// Reads the CPU bus without side effects or time (FND-06). No register with read side
-    /// effects exists yet, so nothing is reported as latched.
+    /// Reads the CPU bus without side effects or time (FND-06). An address whose read has
+    /// side effects, such as `$2180 WMDATA`, is reported as latched, with the value a read
+    /// would return now.
     // @source: anomie-memmap#memory-map
     // @source: anomie-memmap#hardware/data-bus
+    // @source: adr-0019
     #[must_use]
     pub fn peek_bus(&self, address: u32) -> Peek {
-        Peek {
-            value: self.state.bus.peek(address & 0xFF_FFFF),
-            latched: false,
-        }
+        let (value, latched) = self.state.bus.peek(address & 0xFF_FFFF);
+        Peek { value, latched }
     }
 
     /// The most recently rendered frame; 0 × 0 until the PPU renders one.
@@ -778,9 +782,110 @@ mod tests {
         assert_eq!(snes.region(RegionId::Rom).len(), 0x8000);
         assert_eq!(snes.region_mut(RegionId::Rom).len(), 0);
         assert_eq!(snes.region(RegionId::Vram).len(), 0);
-        // The I/O pages answer with the last value on the data bus: the vector's high byte.
+        // Unanswered I/O addresses show the last value on the data bus: the vector's high
+        // byte.
         assert_eq!(snes.peek_bus(0x00_2000).value, 0x80);
         assert!(!snes.peek_bus(0x00_2000).latched);
+        // WMDATA's read advances its address, so a peek is latched.
+        snes.region_mut(RegionId::Wram)[0] = 0x31;
+        assert_eq!(
+            snes.peek_bus(0x00_2180),
+            Peek {
+                value: 0x31,
+                latched: true
+            }
+        );
+    }
+
+    // @source: anomie-regs#2180
+    // @source: wdc-w65c816s#table-5-7-1d
+    // @source: adr-0006
+    // @source: adr-0019
+    #[test]
+    fn an_emulation_mode_inc_of_wmdata_writes_twice() {
+        // LDA #$40; STA $0000; STZ $2181; STZ $2182; STZ $2183; INC $2180; STP. The CPU is
+        // in emulation mode after reset, so INC writes the value read, then the result.
+        let code = [
+            0xA9, 0x40, 0x8D, 0x00, 0x00, 0x9C, 0x81, 0x21, 0x9C, 0x82, 0x21, 0x9C, 0x83, 0x21,
+            0xEE, 0x80, 0x21, 0xDB,
+        ];
+        let mut snes = recorded(&code);
+        snes.run(Stop::Instructions(7));
+        let wram = snes.region(RegionId::Wram);
+        assert_eq!(wram[..3], [0x40, 0x40, 0x41]);
+        assert_eq!(snes.state.bus.wram_port_address, 3);
+        let port = snes
+            .observer()
+            .0
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::Read(0x00_2180, _) | Event::Write(0x00_2180, _)
+                )
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            port,
+            [
+                Event::Read(0x00_2180, 0x40),
+                Event::Write(0x00_2180, 0x40),
+                Event::Write(0x00_2180, 0x41),
+            ]
+        );
+    }
+
+    // @source: anomie-timing#s-cpu/clocks-and-refresh
+    // @source: anomie-timing#s-cpu/instructions
+    // @source: adr-0019
+    #[test]
+    fn a_refresh_shows_as_a_40_cycle_gap_between_accesses() {
+        // NOPs from $00:8000: each is an 8-cycle ROM opcode fetch and a 6-cycle internal
+        // cycle (wdc-w65c816s#table-5-7-19a), so fetches start at 54 + 14n.
+        let mut snes = recorded(&[0xEA; 64]);
+        snes.observer_mut().0.clear();
+        snes.run(Stop::Instructions(40));
+        let fetches = snes
+            .observer()
+            .0
+            .iter()
+            .filter_map(|event| match event {
+                Event::Instruction(event) => Some(event.at.0),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        // The fetch at 530 ends at 538, when the refresh is due; the internal cycle after it
+        // starts 40 cycles later.
+        let gaps = fetches
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .collect::<Vec<_>>();
+        let paused = fetches
+            .iter()
+            .position(|&at| at == 530)
+            .expect("a fetch at 530");
+        assert_eq!(gaps[paused], 14 + 40);
+        assert!(
+            gaps.iter()
+                .enumerate()
+                .all(|(index, &gap)| index == paused || gap == 14)
+        );
+    }
+
+    // @source: anomie-regs#420d
+    // @source: fullsnes#snesmemorycontrol
+    // @source: adr-0019
+    #[test]
+    fn reset_clears_memsel_and_the_wram_port_address() {
+        // LDA #$01; STA $420D; STA $2183; STP.
+        let mut snes = machine(&[0xA9, 0x01, 0x8D, 0x0D, 0x42, 0x8D, 0x83, 0x21, 0xDB]);
+        snes.run(Stop::Instructions(4));
+        assert!(snes.state.bus.fast_rom);
+        assert_eq!(snes.state.bus.wram_port_address, 0x1_0000);
+        snes.reset();
+        assert!(!snes.state.bus.fast_rom);
+        assert_eq!(snes.state.bus.wram_port_address, 0);
     }
 
     // @source: adr-0018
