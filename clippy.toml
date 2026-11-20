@@ -2,6 +2,9 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 
+# Cartridge board names, written as the documents write them; ".." keeps clippy's defaults.
+doc-valid-idents = ["LoROM", "HiROM", "ExHiROM", "FastROM", ".."]
+
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "iteration order is not deterministic; use BTreeMap or an array (FND-02)" },
     { path = "std::collections::HashSet", reason = "iteration order is not deterministic; use BTreeSet or an array (FND-02)" },
