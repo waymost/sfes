@@ -13,6 +13,7 @@ extern crate alloc;
 mod accuracy;
 mod input;
 mod observer;
+mod random;
 mod state;
 mod system;
 mod units;
@@ -21,6 +22,7 @@ pub use crate::{
     accuracy::{Accuracy, Fast},
     input::Buttons,
     observer::{BusId, DmaEvent, InstrEvent, Interrupt, NoopObserver, Observer},
+    random::SplitMix64,
     state::{StateError, StateHash},
     system::{
         AudioChunk, Peek, RegionDescriptor, RegionId, Stop, StopReason, System, SystemDescriptor,

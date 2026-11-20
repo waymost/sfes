@@ -440,6 +440,12 @@ dependencies = [
 [[package]]
 name = "sfes-snes-core"
 version = "0.0.0"
+dependencies = [
+ "sfes-api",
+ "sfes-snes-cart",
+ "sfes-snes-cpu",
+ "thiserror",
+]
 
 [[package]]
 name = "sfes-snes-cpu"
@@ -466,6 +472,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sfes-api",
+ "sfes-snes-core",
  "sfes-snes-cpu",
  "sha2",
  "thiserror",

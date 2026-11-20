@@ -172,3 +172,18 @@ Fetched by `cargo xtask vectors fetch` and never committed; per-file hashes are 
 not a specification: the README does not say how the vectors were produced, so they confirm or contradict a reading of a document and do not replace \
 one. Behaviour that only the vectors settle needs an ADR naming the deciding tests by file and test name. Anchors name the vector file without `v1/` and \
 `.json`, e.g. sst-65816#a9.n for opcode A9 in native mode and sst-65816#a9.e in emulation mode; a test that runs the whole set cites sst-65816 alone."""
+
+[[source]]
+id = "vigna-splitmix"
+title = "SplitMix64 reference description (Sebastiano Vigna, splitmix.c)"
+url = "https://prng.di.unimi.it/splitmix.c"
+license = "CC0-1.0"
+redistributable = true
+retrieved = "2026-11-20"
+version = "Written 2015; https://prng.di.unimi.it/splitmix64.c redirects here"
+sha256 = "920282fcf60da413d5d823b4049b4962db16816de59d5cc63507d816f2938742"
+notes = """
+Public-domain dedication in the file. The archived copy is provenance/archive/vigna-splitmix/splitmix.c, the file as served. It is the \
+reference description of the SplitMix64 generator (the fixed-increment version of Java 8's SplittableRandom, Steele, Lea and Flood, \
+OOPSLA 2014) and is random-number-generator code, not emulator code. No anchors: cite vigna-splitmix. Used for FND-02's seeded power-on \
+state (issue #79)."""

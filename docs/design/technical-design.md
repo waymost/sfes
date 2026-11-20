@@ -205,7 +205,7 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
 }
 ```
 
-`Snes` implements `System` in M4, together with the state envelope. Until then (M2 and M3) it has an inherent public API with the same method shapes (`run`, `set_input`, `video`, `region`, `region_mut`, `peek_bus`), which the development viewer uses, so the M4 impl delegates to methods that already exist.
+`Snes` implements `System` in M4, together with the state envelope. Power-on fills WRAM from `SplitMix64(seed)`; RESB rises at `Cycles(0)` with no hold time, and the reset button restarts the line and frame position at once and keeps WRAM; the reset sequence's page-1 reads hit WRAM and have no side effects. `on_instruction` fires once per instruction step and `on_interrupt` once per NMI or IRQ entry; halted steps report nothing (ADR 0018). Until then (M2 and M3) it has an inherent public API with the same method shapes (`run`, `set_input`, `video`, `region`, `region_mut`, `peek_bus`), which the development viewer uses, so the M4 impl delegates to methods that already exist.
 
 Construction uses a builder that returns `Result`, so invalid ROMs never yield a half-built machine:
 
@@ -216,6 +216,8 @@ let mut snes = Snes::<Fast>::builder(rom)          // rom: Arc<[u8]>
     .firmware(FirmwareSet::default())
     .build()?;
 ```
+
+The region comes from the builder, else the header's country code, else NTSC (ADR 0018). `.board(mapping)` skips header scoring (ADR 0016); firmware joins the builder with the coprocessors.
 
 ### Bus65816: one CPU core for two machines
 
@@ -355,7 +357,7 @@ section* : tag [u8; 4] | section version u16 | length u32 | postcard bytes
 | No hash-map iteration order in state | `HashMap` and `HashSet` listed in `disallowed-types` for those crates; use arrays or `BTreeMap` |
 | No wall clock or OS randomness | `Instant::now`, `SystemTime::now` and OS RNG listed in `disallowed-methods` |
 | No platform-sized integers in state | Review rule plus a CI job that serializes golden states on a 32-bit target (`i686-unknown-linux-gnu`) and compares hashes |
-| Seeded power-on | `SplitMix64` implemented in `sfes-api` in a few lines, no `rand` dependency |
+| Seeded power-on | `SplitMix64` implemented in `sfes-api` in a few lines from Vigna's description (`vigna-splitmix`), no `rand` dependency; WRAM is filled from it at power-on (ADR 0018) |
 | Thread-count independence | Pool tests run 1, 2 and N threads and compare per-machine hashes |
 
 Golden per-frame hashes for every committed test ROM live as text files under `tests/assets/golden/`, one TOML file per ROM: the ROM's SHA-256, an input script until movies arrive in M4, and per checkpoint the frame number, width, height and BLAKE3 of the RGB555 pixels written little-endian (ADR 0015). `cargo xtask golden --update` regenerates them, and the diff is reviewed in the PR like code.
@@ -676,7 +678,7 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 - [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM; 5A22 I/O.
 - [ ] Deadline table and catch-up in `BusView`; NTSC and PAL frame timing; DMA and HDMA.
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
-- [ ] `Snes` with an inherent API shaped like `System`; `impl System for Snes` waits for the state envelope in M4.
+- [ ] `Snes` with an inherent API shaped like `System` (ADR 0018, #79); `impl System for Snes` waits for the state envelope in M4.
 - [ ] Own test cartridges in 65816 assembly built with ca65/ld65, the built `.sfc` files committed and rebuilt byte-identically in CI (ADR 0013, #73).
 - [ ] Approved third-party test ROMs committed or fetched by hash (ADR 0014, #75).
 - [ ] Golden-frame format, runner, `cargo xtask golden --update` and `--png` (ADR 0015, #76).

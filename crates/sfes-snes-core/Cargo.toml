@@ -12,7 +12,11 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+sfes-api.workspace = true
+sfes-snes-cart.workspace = true
+sfes-snes-cpu.workspace = true
+thiserror.workspace = true
 
 [features]
 default = ["std"]
-std = []
+std = ["sfes-api/std", "sfes-snes-cart/std", "sfes-snes-cpu/std", "thiserror/std"]
