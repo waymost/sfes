@@ -15,8 +15,8 @@ This page explains the SNES machine and how the crate models it (QA-08). It grow
 | Part | What | Cloned? |
 | --- | --- | --- |
 | `State::cpu` | The 65C816's registers and run state | yes |
-| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the NMI latch and IRQ line, the clock, the line position and refresh schedule, and the held buttons | yes |
-| `State::meta` | The seed, the video standard and the frame count | yes |
+| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the NMI latch and IRQ line, the clock, the scheduler (line, field, vertical blank, line and frame counts, refresh and the deadline table), and the held buttons | yes |
+| `State::meta` | The seed and the video standard | yes |
 | `observer` | The observer | yes |
 | `outputs` | The frame buffer | no: a clone starts empty (technical design section 5) |
 
@@ -34,7 +34,7 @@ Until `impl System` arrives in M4, the machine has an inherent API with the same
 
 - **Power-on.** WRAM is filled from `SplitMix64::new(seed)`, eight bytes per output, little-endian, from `$7E:0000` up (`vigna-splitmix`, FND-02, ADR 0018). The CPU starts from `Cpu65816::new()`, the clock from 0, and the reset sequence runs at once.
 - **RESB.** No document says how long the SNES holds RESB, so the machine spends no time on it. `Cycles(0)` is the moment RESB rises, and the reset sequence's seven cycles are the first ones charged (ADR 0018).
-- **The reset button.** It "leaves WRAM intact" (`fullsnes#snescontrollersotherinputs`). The SNES "returns to a known timing position on reset" (`anomie-timing`), so `reset` restarts the line and frame position and the refresh schedule, clears `$420D` and the WRAM port address (`fullsnes#snesiomap`), then runs the CPU's reset sequence. Cartridge RAM is kept as well.
+- **The reset button.** It "leaves WRAM intact" (`fullsnes#snescontrollersotherinputs`). The SNES "returns to a known timing position on reset" (`anomie-timing`), so `reset` restarts the line and frame position at H=0, V=0 with field 0 (`fullsnes#snestiminghvevents`) and the refresh schedule, clears `$420D`, the scheduler's copy of `$2133` and the WRAM port address (`fullsnes#snesiomap`), then runs the CPU's reset sequence. Cartridge RAM is kept as well.
 - **The page-1 reads.** The reset sequence reads three stack bytes in page 1 of bank `$00` without writing (ADR 0011). On the SNES that page is WRAM (`anomie-memmap#memory-map`), so the reads have no side effects. They still reach observers as `on_read`.
 - **Region.** The builder's region wins; otherwise the header's country code decides (ADR 0016); otherwise NTSC (ADR 0018).
 
@@ -49,6 +49,10 @@ The CPU core calls no observer (`docs/chips/cpu.md`, "Notes for M2"). The machin
 | A waiting or stopped step | nothing |
 
 Every `read` and `write` cycle calls `on_read` or `on_write` on `BusId::Cpu`, with the time the access began. Internal cycles call nothing.
+
+The bus reports line and frame boundaries from the cycle in which they pass, after that cycle's `on_read` or `on_write` (ADR 0020, point 8):
+- `on_scanline(line, at)` at the start of every line, line 0 included, with the time it started. Power-on and reset start line 0 without it.
+- `on_frame_end(frame)` when vertical blank begins, with the new frame count. It comes before that line's `on_scanline`.
 
 ## The bus
 
@@ -109,10 +113,9 @@ In emulation mode a read-modify-write instruction writes twice: first the value 
 
 ### Still provisional
 
-Until #81 and #82 (ADR 0018, point 6):
+Until #82 and M4 (ADR 0018, point 6):
 
-- **Lines and frames.** A line is 1364 master cycles. A frame is 262 lines on NTSC and 312 on PAL (`fullsnes#snestimingoscillators`, `fullsnes#snestiminghvcounters`), with no short or long lines yet. The frame boundary is the end of a frame's last line.
-- **Stops.** A stop takes effect at the first step boundary at or after its target (FND-08). `Stop::Instructions(n)` counts steps. `Stop::Watch` runs to its frame limit, since watches arrive in M4.
+- **Watches.** `Stop::Watch` runs to its frame limit, since watches arrive in M4.
 - **Interrupts.** The NMI latch is cleared by the vector-pull read of the NMI vector (ADR 0004). Nothing sets it, or the IRQ line, until #82.
 - **Video.** No PPU renders yet, so `video()` is a 0 × 0 frame.
 
@@ -120,7 +123,53 @@ Until #81 and #82 (ADR 0018, point 6):
 
 [`tests/carts/bus-timing`](../../tests/carts/bus-timing/bus-timing.s) runs FastROM code from bank `$80`, drives the WRAM port, reads a write-only register and runs `INC $2180` in emulation mode. A test in `src/carts.rs` checks the start time of each of its 28 instructions, including the first refresh, and the WRAM it leaves.
 
+## Scanlines and frames
+
+The scheduler in [`timing/`](../../crates/sfes-snes-core/src/timing/mod.rs) derives the line and dot from the clock (ADR 0020).
+
+### Lines
+
+A line is 1364 master cycles (`anomie-timing#s-cpu/clocks-and-refresh`). Two lines differ (`fullsnes#snestiminghvcounters`):
+
+| Line | When | Length | Dots |
+| --- | --- | --- | --- |
+| Normal | Every other line | 1364 | 0–339; 323 and 327 are 6 cycles, the rest 4 |
+| Short | NTSC line 240, interlace off, field 1 | 1360 | 0–339, all 4 cycles |
+| Long | PAL line 311, interlace on, field 1 | 1368 | 0–340; 323 and 327 are 6 cycles, the rest 4 |
+
+The long dots are anomie's (`anomie-timing#s-ppu/rendering`), and fullsnes's H-counter statistics agree with them. fullsnes's "four dots are 5-cycles long" is not used (ADR 0020, point 3). A line's length is fixed when it starts.
+
+### Frames
+
+A frame has lines 0–261 on NTSC and 0–311 on PAL (`anomie-regs#213c`). With interlace on, frames in field 0 have one more line: 262 or 312 (`anomie-timing#s-cpu/clocks-and-refresh`, `fullsnes#snestiminghvevents`). Two consecutive frames therefore take:
+
+| Standard | Interlace off | Interlace on |
+| --- | --- | --- |
+| NTSC | (262 + 262) × 1364 − 4 | (262 + 263) × 1364 |
+| PAL | 2 × 312 × 1364 | 625 × 1364 + 4 |
+
+These are fullsnes's totals (`fullsnes#snestimingoscillators`, `fullsnes#snestiminghvcounters`).
+
+- **The field.** `$213F` bit 7 toggles at H=1 of line 0 of every frame (`anomie-timing#s-ppu/registers`, `fullsnes#snestiminghvevents`). Power-on and reset start at field 0, so the first frame is field 1 (ADR 0020, point 4).
+- **Vertical blank.** It begins at H=0 of line 225, or 240 with `$2133` bit 2 (overscan) set. It ends at H=0 of line 0 (`anomie-timing#s-ppu/blanking-periods`). Clearing overscan during lines 225–239 starts vertical blank with the next line (`anomie-regs#2133`). The scheduler samples the bit only at line starts (ADR 0020, point 5).
+- **`$2133`.** The scheduler keeps the interlace and overscan bits of every CPU write to `$2133`, and reset clears them (ADR 0020, point 6).
+
+### The frame boundary and stops
+
+A frame ends when vertical blank begins, so frame 1 ends 225 × 1364 = 306 900 master cycles after power-on, without overscan (FND-04, ADR 0020, point 7). Every stop takes effect at the first step boundary at or after its target (FND-08):
+- `Stop::Frames(n)` counts vertical blanks;
+- `Stop::Scanlines(n)` counts line starts;
+- `Stop::Cycles(n)` counts master cycles;
+- `Stop::Instructions(n)` counts steps.
+
+A stop overshoots its target by at most one step.
+
+### The deadline table
+
+The bus keeps the next time each scheduled event is due: the refresh pause and the next line start, with NMI, IRQ, HDMA and auto-joypad to follow. After every CPU cycle one comparison with the earliest of them decides whether any is due. Due events are serviced in time order, and events due together in the table's order (technical design section 4, ADR 0001, ADR 0020, point 9).
+
 ## Decisions
 
 - [ADR 0018](../adr/0018-snes-reset-and-power-on.md): RESB timing, the page-1 reads, power-on and reset, the default region, observer events and the provisional timing.
 - [ADR 0019](../adr/0019-snes-bus-decode-and-refresh.md): decode, access speed, open bus, the WRAM port, refresh and read-modify-write writes to registers.
+- [ADR 0020](../adr/0020-snes-scanlines-frames-and-deadlines.md): line lengths and dots, frames, the field, vertical blank and overscan, the frame boundary, line and frame events, and the deadline table.

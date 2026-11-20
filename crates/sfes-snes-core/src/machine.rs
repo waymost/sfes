@@ -17,7 +17,7 @@ use sfes_snes_cpu::{Cpu65816, Flags, Pending, RunState};
 use crate::{
     Region,
     bus::{Bus, BusView},
-    timing::{Boundary, Timing},
+    timing::Timing,
 };
 
 /// Why a machine could not be built. A failed build never yields a machine.
@@ -35,8 +35,6 @@ struct Meta {
     seed: u64,
     /// The video standard the machine runs.
     region: Region,
-    /// Frames completed since power-on.
-    frame: u64,
 }
 
 /// Everything that is machine state: what `Clone` copies and, from M4, what save states hold.
@@ -182,7 +180,6 @@ impl<A: Accuracy, O: Observer> SnesBuilder<A, O> {
         let meta = Meta {
             seed: self.seed,
             region,
-            frame: 0,
         };
         let bus = Bus::power_on(cartridge, Timing::new(region, Cycles(0)), self.seed);
         let mut snes = Snes {
@@ -226,11 +223,7 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         self.state.bus = Bus::power_on(cartridge, Timing::new(region, Cycles(0)), seed);
         self.state.bus.input = input;
         self.state.cpu = Cpu65816::new();
-        self.state.meta = Meta {
-            seed,
-            region,
-            frame: 0,
-        };
+        self.state.meta = Meta { seed, region };
         self.reset_cpu();
     }
 
@@ -241,7 +234,6 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         let State { cpu, bus, .. } = &mut self.state;
         let mut view = BusView::new(bus, &mut self.observer);
         cpu.reset(&mut view);
-        self.advance_timing();
     }
 
     /// Sets the buttons held on `port`, 0 or 1. Other ports are ignored.
@@ -252,10 +244,12 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         }
     }
 
-    /// Runs until `until` is reached, at the first step boundary at or after it (FND-08).
-    /// Until the scheduler and watches arrive, frames and lines have fixed lengths and
-    /// `Stop::Watch` always runs to its frame limit (ADR 0018, point 6).
+    /// Runs until `until` is reached, at the first step boundary at or after it (FND-08):
+    /// a frame ends when vertical blank begins and a scanline when the next one starts
+    /// (ADR 0020). Until watches arrive, `Stop::Watch` runs to its frame limit (ADR 0018,
+    /// point 6).
     // @source: adr-0018
+    // @source: adr-0020
     pub fn run(&mut self, until: Stop) -> StopReason {
         match until {
             Stop::Instructions(count) => {
@@ -272,8 +266,8 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
                 StopReason::Completed
             }
             Stop::Scanlines(count) => {
-                let target = self.state.bus.timing.lines + u64::from(count);
-                while self.state.bus.timing.lines < target {
+                let target = self.state.bus.timing.lines() + u64::from(count);
+                while self.state.bus.timing.lines() < target {
                     self.step();
                 }
                 StopReason::Completed
@@ -289,19 +283,21 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         }
     }
 
-    /// Runs `count` frame boundaries.
+    /// Runs `count` frame boundaries (ADR 0020, point 7).
     // @source: adr-0018
+    // @source: adr-0020
     fn run_frames(&mut self, count: u32) {
-        let target = self.state.meta.frame + u64::from(count);
-        while self.state.meta.frame < target {
+        let target = self.state.bus.timing.frames() + u64::from(count);
+        while self.state.bus.timing.frames() < target {
             self.step();
         }
     }
 
-    /// One CPU step with its observer events (ADR 0018, point 5), then any line and frame
-    /// boundaries it crossed.
+    /// One CPU step with its observer events (ADR 0018, point 5). The bus reports the line
+    /// and frame boundaries it crosses (ADR 0020, point 8).
     // @source: adr-0004
     // @source: adr-0018
+    // @source: adr-0020
     fn step(&mut self) {
         let State { cpu, bus, .. } = &mut self.state;
         let at = bus.now;
@@ -323,29 +319,6 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
                 }
                 (StepKind::Interrupt(interrupt), _) => self.observer.on_interrupt(interrupt, at),
                 (StepKind::Instruction | StepKind::Halted, _) => {}
-            }
-        }
-        self.advance_timing();
-    }
-
-    /// Reports and counts every line and frame boundary the clock has passed.
-    // @source: adr-0018
-    fn advance_timing(&mut self) {
-        let now = self.state.bus.now;
-        while let Some((boundary, at)) = self.state.bus.timing.next_due(now) {
-            match boundary {
-                Boundary::Line(line) => {
-                    if O::ACTIVE {
-                        self.observer.on_scanline(line, at);
-                    }
-                }
-                Boundary::Frame => {
-                    self.state.meta.frame += 1;
-                    if O::ACTIVE {
-                        self.observer.on_frame_end(self.state.meta.frame);
-                        self.observer.on_scanline(0, at);
-                    }
-                }
             }
         }
     }
@@ -411,11 +384,12 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         self.state.meta.seed
     }
 
-    /// Frames completed since power-on.
+    /// Frames completed since power-on: vertical blanks begun (ADR 0020, point 7).
     // @source: adr-0018
+    // @source: adr-0020
     #[must_use]
     pub const fn frame(&self) -> u64 {
-        self.state.meta.frame
+        self.state.bus.timing.frames()
     }
 
     /// Master cycles since power-on.
@@ -514,6 +488,7 @@ mod tests {
         Read(u32, u8),
         Write(u32, u8),
         FrameEnd(u64),
+        Scanline(u16, Cycles),
     }
 
     #[derive(Clone, Debug, Default)]
@@ -539,6 +514,10 @@ mod tests {
         // @source: adr-0018
         fn on_frame_end(&mut self, frame: u64) {
             self.0.push(Event::FrameEnd(frame));
+        }
+        // @source: adr-0020
+        fn on_scanline(&mut self, line: u16, at: Cycles) {
+            self.0.push(Event::Scanline(line, at));
         }
     }
 
@@ -708,19 +687,23 @@ mod tests {
     }
 
     // @source: anomie-timing#s-cpu/clocks-and-refresh
+    // @source: anomie-timing#s-ppu/blanking-periods
     // @source: fullsnes#snestimingoscillators
     // @source: adr-0018
+    // @source: adr-0020
     #[test]
     fn stops_end_at_the_first_step_at_or_after_their_target() {
         let mut snes = recorded(&PROGRAM);
         snes.run(Stop::Cycles(1000));
         assert!(snes.cycles() >= Cycles(1054) && snes.cycles() < Cycles(1054 + 12));
+        // Frame 1 ends when vertical blank begins, at the start of line 225.
         snes.run(Stop::Frames(1));
         assert_eq!(snes.frame(), 1);
-        assert!(snes.cycles() >= Cycles(357_368) && snes.cycles() < Cycles(357_368 + 12));
+        assert!(snes.cycles() >= Cycles(306_900) && snes.cycles() < Cycles(306_900 + 12));
         assert!(snes.observer().0.contains(&Event::FrameEnd(1)));
         snes.run(Stop::Scanlines(2));
-        assert!(snes.cycles() >= Cycles(357_368 + 2 * 1364));
+        let line_227 = 306_900 + 2 * 1364;
+        assert!(snes.cycles() >= Cycles(line_227) && snes.cycles() < Cycles(line_227 + 12));
         assert_eq!(
             snes.run(Stop::Watch { max_frames: 1 }),
             StopReason::FrameLimit
@@ -728,9 +711,62 @@ mod tests {
         assert_eq!(snes.frame(), 2);
     }
 
+    // @source: anomie-timing#s-ppu/blanking-periods
+    // @source: fullsnes#snestiminghvevents
+    // @source: adr-0020
+    #[test]
+    fn each_line_start_is_reported_and_the_frame_ends_before_line_225() {
+        let mut snes = recorded(&PROGRAM);
+        snes.run(Stop::Frames(1));
+        snes.run(Stop::Scanlines(1));
+        let events = snes
+            .observer()
+            .0
+            .iter()
+            .filter(|event| matches!(event, Event::Scanline(..) | Event::FrameEnd(_)))
+            .copied()
+            .collect::<Vec<_>>();
+        let mut expected = (1..=224)
+            .map(|line| Event::Scanline(line, Cycles(u64::from(line) * 1364)))
+            .collect::<Vec<_>>();
+        expected.extend([
+            Event::FrameEnd(1),
+            Event::Scanline(225, Cycles(306_900)),
+            Event::Scanline(226, Cycles(306_900 + 1364)),
+        ]);
+        assert_eq!(events, expected);
+    }
+
+    // @source: anomie-regs#2133
+    // @source: fullsnes#snestiminghvcounters
+    // @source: fullsnes#snestiminghvevents
+    // @source: fullsnes#snesiomap
+    // @source: adr-0020
+    #[test]
+    fn writes_to_setini_reach_the_scheduler() {
+        // LDA #$01; STA $2133; STP: interlace, so the second frame (field 0) has 263 lines.
+        let mut snes = machine(&[0xA9, 0x01, 0x8D, 0x33, 0x21, 0xDB]);
+        snes.run(Stop::Frames(3));
+        let third = 306_900 + (262 + 263) * 1364;
+        assert!(snes.cycles() >= Cycles(third) && snes.cycles() < Cycles(third + 12));
+        // LDA #$04; STA $2133; STP: overscan, so vertical blank begins at line 240.
+        let mut snes = machine(&[0xA9, 0x04, 0x8D, 0x33, 0x21, 0xDB]);
+        snes.run(Stop::Frames(1));
+        let first = 240 * 1364;
+        assert!(snes.cycles() >= Cycles(first) && snes.cycles() < Cycles(first + 12));
+        // Reset clears $2133 (fullsnes#snesiomap): the next vertical blank is at line 225.
+        snes.reset();
+        let reset_at = snes.cycles().0 - 54;
+        snes.state.cpu.run = RunState::Stopped;
+        snes.run(Stop::Frames(1));
+        let next = reset_at + 225 * 1364;
+        assert!(snes.cycles() >= Cycles(next) && snes.cycles() < Cycles(next + 12));
+    }
+
     // @source: fullsnes#snescartridgeromheader
     // @source: fullsnes#snestimingoscillators
     // @source: adr-0018
+    // @source: adr-0020
     #[test]
     fn the_region_comes_from_the_header_the_builder_or_ntsc() {
         let pal = Snes::<Fast>::builder(rom(&PROGRAM, 0x02))
@@ -746,22 +782,28 @@ mod tests {
             .build()
             .expect("builds");
         assert_eq!(forced.video_standard(), Region::Pal);
+        // PAL frames are 312 lines; the first ends at line 225 like NTSC's.
         let mut pal = pal;
-        pal.run(Stop::Frames(1));
-        assert!(pal.cycles() >= Cycles(425_568));
+        pal.run(Stop::Frames(2));
+        let second = 306_900 + 312 * 1364;
+        assert!(pal.cycles() >= Cycles(second) && pal.cycles() < Cycles(second + 12));
     }
 
     // @source: fullsnes#snescontrollersotherinputs
     // @source: anomie-timing
     // @source: adr-0018
+    // @source: adr-0020
     #[test]
     fn reset_keeps_wram_and_power_cycle_refills_it() {
         let mut snes = machine(&PROGRAM);
-        snes.run(Stop::Instructions(3));
+        snes.run(Stop::Scanlines(3));
+        let reset_at = snes.cycles();
         snes.reset();
         assert_eq!(snes.region(RegionId::Wram)[0x10], 0x42);
         assert_eq!(snes.cpu().pc, 0x8000);
-        assert_eq!(snes.state.bus.timing.line, 0);
+        // The reset sequence's 54 cycles run from line 0, H=0.
+        assert_eq!(snes.state.bus.timing.position(snes.cycles()), (0, 13));
+        assert_eq!(snes.cycles(), Cycles(reset_at.0 + 54));
         snes.power_cycle(0);
         let mut expected = vec![0; 0x2_0000];
         SplitMix64::new(0).fill(&mut expected);

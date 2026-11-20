@@ -3,12 +3,13 @@
 // @source: adr-0004
 // @source: adr-0018
 // @source: adr-0019
+// @source: adr-0020
 //! The bus state and the main CPU's view of it (ADR 0019).
 //!
 //! [`Bus`] owns WRAM, the cartridge, the data bus value, the WRAM port, `$420D`, the NMI
-//! latch, the clock and the line timing. [`BusView`] implements `Bus65816` over it: it
-//! decodes each address, syncs the register's owner, performs the access, charges its time
-//! and any refresh that fell due, and tells the observer.
+//! latch, the clock and the scheduler. [`BusView`] implements `Bus65816` over it: it
+//! decodes each address, syncs the register's owner, performs the access, charges its time,
+//! services the deadlines that fell due (ADR 0020) and tells the observer.
 
 mod decode;
 
@@ -21,7 +22,7 @@ use sfes_snes_cpu::{Bus65816, Pending, Pins};
 
 use crate::{
     bus::decode::{BBus, FAST, Target, access_cycles, decode},
-    timing::{REFRESH_LENGTH, Timing},
+    timing::{Event, REFRESH_LENGTH, Timing},
 };
 
 /// The size of WRAM, banks `$7E–$7F`.
@@ -31,6 +32,8 @@ pub(crate) const PORTS: usize = 2;
 
 /// The WRAM port's address is 17 bits (ADR 0019, point 5).
 const WRAM_PORT_MASK: u32 = 0x1_FFFF;
+/// `$2133` SETINI on the B bus, whose interlace and overscan bits the scheduler keeps.
+const SCREEN_MODE: u8 = 0x33;
 /// `$420D` MEMSEL's one bit, FastROM select.
 const FAST_ROM: u8 = 0x01;
 
@@ -58,7 +61,7 @@ pub(crate) struct Bus {
     pub(crate) irq_line: bool,
     /// Master cycles since power-on.
     pub(crate) now: Cycles,
-    /// Line and frame position, and the refresh schedule.
+    /// Line and frame position, the refresh schedule and the deadline table.
     pub(crate) timing: Timing,
     /// The buttons held on each port, latched by the controller ports in #85.
     pub(crate) input: [Buttons; PORTS],
@@ -231,11 +234,18 @@ impl Bus {
     // @source: anomie-regs#2180
     // @source: anomie-regs#2181
     // @source: fullsnes#snesmemoryworkramaccess
+    // @source: anomie-regs#2133
     // @source: adr-0019
+    // @source: adr-0020
     fn write_b_bus(&mut self, device: BBus, value: u8) {
         let [low, middle, high, _] = self.wram_port_address.to_le_bytes();
         match device {
-            BBus::Ppu(_) => self.sync_ppu(),
+            BBus::Ppu(register) => {
+                self.sync_ppu();
+                if register == SCREEN_MODE {
+                    self.timing.write_screen_mode(value);
+                }
+            }
             BBus::Apu(_) => self.sync_apu(),
             BBus::WramData => {
                 if let Some(byte) = self.wram.get_mut(self.wram_port_address as usize) {
@@ -274,14 +284,33 @@ impl Bus {
     )]
     const fn sync_apu(&mut self) {}
 
-    /// Ends a CPU cycle of `cycles` master cycles: advances the clock, then pauses the CPU
-    /// for a refresh that fell due during the cycle or at its end (ADR 0019, point 6).
+    /// Ends a CPU cycle of `cycles` master cycles: advances the clock, then services in time
+    /// order every deadline that fell due during the cycle or at its end (ADR 0020,
+    /// point 9). A refresh pauses the CPU (ADR 0019, point 6); a line start is reported to
+    /// `observer`, after the frame end it may bring (ADR 0020, point 8).
     // @source: anomie-timing#s-cpu/clocks-and-refresh
+    // @source: adr-0001
     // @source: adr-0019
-    const fn charge(&mut self, cycles: u64) {
+    // @source: adr-0020
+    fn charge<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
         self.now = Cycles(self.now.0 + cycles);
-        if self.timing.take_refresh(self.now) {
-            self.now = Cycles(self.now.0 + REFRESH_LENGTH);
+        while self.now >= self.timing.next_deadline() {
+            match self.timing.service(self.now) {
+                Some(Event::Refresh) => self.now = Cycles(self.now.0 + REFRESH_LENGTH),
+                Some(Event::Line {
+                    line,
+                    at,
+                    frame_ended,
+                }) => {
+                    if O::ACTIVE {
+                        if frame_ended {
+                            observer.on_frame_end(self.timing.frames());
+                        }
+                        observer.on_scanline(line, at);
+                    }
+                }
+                None => break,
+            }
         }
     }
 }
@@ -318,6 +347,7 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: anomie-timing#s-cpu/instructions
     // @source: adr-0004
     // @source: adr-0019
+    // @source: adr-0020
     fn read(&mut self, address: Addr24, pins: Pins) -> u8 {
         let at = self.bus.now;
         let raw = address.get();
@@ -329,16 +359,18 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
             }
             None => self.bus.open_bus_value,
         };
-        self.bus.charge(access_cycles(address, self.bus.fast_rom));
         if pins.contains(Pins::VPB) && (raw == NMI_VECTOR_NATIVE || raw == NMI_VECTOR_EMULATION) {
             self.bus.nmi_latched = false;
         }
         if self.first_read.is_none() {
             self.first_read = Some(value);
         }
+        // The observer hears of the access before the deadlines it carries the clock past.
         if O::ACTIVE {
             self.observer.on_read(BusId::Cpu, raw, value, at);
         }
+        self.bus
+            .charge(access_cycles(address, self.bus.fast_rom), self.observer);
         value
     }
 
@@ -348,6 +380,7 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0004
     // @source: adr-0006
     // @source: adr-0019
+    // @source: adr-0020
     fn write(&mut self, address: Addr24, value: u8, _pins: Pins) {
         let at = self.bus.now;
         let raw = address.get();
@@ -357,17 +390,18 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
         let cycles = access_cycles(address, self.bus.fast_rom);
         self.bus.write_target(target, value);
         self.bus.open_bus_value = value;
-        self.bus.charge(cycles);
         if O::ACTIVE {
             self.observer.on_write(BusId::Cpu, raw, value, at);
         }
+        self.bus.charge(cycles, self.observer);
     }
 
     // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: adr-0004
     // @source: adr-0019
+    // @source: adr-0020
     fn idle(&mut self, _address: Addr24, _pins: Pins) {
-        self.bus.charge(FAST);
+        self.bus.charge(FAST, self.observer);
     }
 
     // @source: adr-0004

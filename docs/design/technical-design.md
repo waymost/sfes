@@ -178,8 +178,8 @@ pub enum Stop { Frames(u32), Scanlines(u32), Instructions(u32), Cycles(u64), Wat
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct State {
     cpu: Cpu65816,   // registers and run state only
-    bus: Bus,        // WRAM, PPU, APU, cart, DMA, 5A22 I/O, ports, deadlines
-    meta: Meta,      // seed, region, frame counter, polled flag
+    bus: Bus,        // WRAM, PPU, APU, cart, DMA, 5A22 I/O, ports, deadlines, line and frame counters
+    meta: Meta,      // seed, region, polled flag
 }
 
 pub struct Snes<A: Accuracy = Fast, O: Observer = NoopObserver> {
@@ -255,13 +255,16 @@ The 65C816 drives time: every bus access advances the master clock by its cost, 
 
 The bus keeps a small fixed array of the next scheduled events, each a `Cycles` value:
 
-- NMI at the start of vertical blank, and the frame boundary (FND-04).
+- The DRAM refresh pause and the next line start, which brings the field toggle, vertical blank and the frame boundary (FND-04; ADR 0019, ADR 0020).
+- NMI at the start of vertical blank.
 - H/V IRQ at its exact dot.
 - HDMA setup at frame start and the per-line HDMA transfer.
 - Auto-joypad read start and completion.
 - Coprocessor interrupts and timers.
 
-`next_deadline` is the minimum. After each bus access the CPU path compares `now >= next_deadline`, one branch on the hot path, and services due events in time order.
+`next_deadline` is the minimum. After each bus access the CPU path compares `now >= next_deadline`, one branch on the hot path, and services due events in time order; events due together are serviced in the array's order (ADR 0020).
+
+Lines are 1364 master cycles, except a 1360-cycle NTSC line 240 in non-interlaced field-1 frames and a 1368-cycle PAL line 311 in interlaced field-1 frames. Frames are 262 or 312 lines, one more in interlaced field-0 frames. The H position is the PPU dot, with dots 323 and 327 six cycles long on normal and long lines. A frame ends when vertical blank begins at line 225, or 240 with overscan (ADR 0020).
 
 ### Catch-up rules
 
@@ -678,7 +681,7 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 ### M2 — Bus, DMA and video
 
 - [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O.
-- [ ] Deadline table and catch-up in `BusView`; NTSC and PAL frame timing; DMA and HDMA.
+- [ ] Deadline table and catch-up in `BusView`, and NTSC and PAL frame timing (ADR 0020, #81); DMA and HDMA.
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System` (ADR 0018, #79); `impl System for Snes` waits for the state envelope in M4.
 - [ ] Own test cartridges in 65816 assembly built with ca65/ld65, the built `.sfc` files committed and rebuilt byte-identically in CI (ADR 0013, #73).
