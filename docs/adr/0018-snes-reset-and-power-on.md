@@ -45,7 +45,7 @@ The machine must also say what power-on fills with the seed (FND-02) and which r
    - an interrupt entry calls `on_interrupt` with `Interrupt::Nmi` when an NMI is latched, else `Interrupt::Irq`, at the time the step began. This is the mapping from the core's NMI and IRQ kinds; BRK and COP are instructions and reset is not an interrupt event;
    - a halted step, waiting or stopped, calls neither;
    - every `read` and `write` calls `on_read` or `on_write` on `BusId::Cpu`, with the time the access began. Idle cycles call nothing.
-6. **Until #80, #81 and #82 land:** (amended by ADR 0019, which replaces the first two items: access speed with `$420D`, refresh, decode and open bus)
+6. **Until #80, #81 and #82 land:** (amended by ADR 0019, which replaces the first two items: access speed with `$420D`, refresh, decode and open bus; and by ADR 0020, which replaces the third: lines, frames and the frame boundary)
    - Each access costs anomie-memmap's speed for its address, with `$420D` bit 0 at its reset value, 0. Idle cycles cost 6.
    - Reads that nothing answers return the last value on the data bus, and so do the I/O pages. Writes to them do nothing.
    - Lines are 1364 master cycles and frames 262 or 312 lines, with no short or long lines. The frame boundary is the end of the frame's last line.
