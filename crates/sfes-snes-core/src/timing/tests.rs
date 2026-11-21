@@ -114,7 +114,7 @@ fn ntsc_frames_alternate_with_a_short_line_240() {
 #[test]
 fn ntsc_interlace_adds_line_262_to_field_0() {
     let mut timing = Timing::new(Region::Ntsc, Cycles(0));
-    timing.write_screen_mode(SCREEN_INTERLACE);
+    timing.write_screen_mode(SCREEN_INTERLACE, Cycles(0));
     let [field_1, field_0] = <[_; 2]>::try_from(line_lengths(&mut timing, 2)).expect("2");
     assert_eq!(field_1.len(), 262);
     assert!(field_1.iter().all(|length| *length == 1364));
@@ -122,7 +122,7 @@ fn ntsc_interlace_adds_line_262_to_field_0() {
     assert!(field_0.iter().all(|length| *length == 1364));
     // Two frames take (262 + 263) × 1364 master cycles (fullsnes).
     let mut timing = Timing::new(Region::Ntsc, Cycles(0));
-    timing.write_screen_mode(SCREEN_INTERLACE);
+    timing.write_screen_mode(SCREEN_INTERLACE, Cycles(0));
     let ends = frame_ends(&mut timing, 3);
     assert_eq!(ends[2] - ends[0], 525 * 1364);
 }
@@ -152,7 +152,7 @@ fn pal_frames_are_312_lines() {
 #[test]
 fn pal_interlace_has_a_long_line_311_in_field_1_and_line_312_in_field_0() {
     let mut timing = Timing::new(Region::Pal, Cycles(0));
-    timing.write_screen_mode(SCREEN_INTERLACE);
+    timing.write_screen_mode(SCREEN_INTERLACE, Cycles(0));
     let [field_1, field_0] = <[_; 2]>::try_from(line_lengths(&mut timing, 2)).expect("2");
     assert_eq!(field_1.len(), 312);
     assert_eq!(field_1[311], 1368);
@@ -161,7 +161,7 @@ fn pal_interlace_has_a_long_line_311_in_field_1_and_line_312_in_field_0() {
     assert!(field_0.iter().all(|length| *length == 1364));
     // Two frames take 625 × 1364 + 4 master cycles (fullsnes).
     let mut timing = Timing::new(Region::Pal, Cycles(0));
-    timing.write_screen_mode(SCREEN_INTERLACE);
+    timing.write_screen_mode(SCREEN_INTERLACE, Cycles(0));
     let ends = frame_ends(&mut timing, 3);
     assert_eq!(ends[2] - ends[0], 625 * 1364 + 4);
 }
@@ -173,17 +173,17 @@ fn pal_interlace_has_a_long_line_311_in_field_1_and_line_312_in_field_0() {
 #[test]
 fn overscan_moves_vertical_blank_to_line_240_unless_cleared_before() {
     let mut timing = Timing::new(Region::Ntsc, Cycles(0));
-    timing.write_screen_mode(OVERSCAN);
+    timing.write_screen_mode(OVERSCAN, Cycles(0));
     assert_eq!(frame_ends(&mut timing, 1), [240 * 1364]);
     // Cleared during line 230: vertical blank begins with line 231.
     let mut timing = Timing::new(Region::Ntsc, Cycles(0));
-    timing.write_screen_mode(OVERSCAN);
+    timing.write_screen_mode(OVERSCAN, Cycles(0));
     assert!(
         run_until(&mut timing, 230 * 1364)
             .iter()
             .all(|(_, _, ended)| !ended)
     );
-    timing.write_screen_mode(0);
+    timing.write_screen_mode(0, Cycles(230 * 1364));
     let started = run_until(&mut timing, 232 * 1364);
     assert_eq!(started, [(231, 231 * 1364, true), (232, 232 * 1364, false)]);
 }
@@ -272,7 +272,7 @@ fn a_short_line_keeps_the_refresh_offset() {
 #[test]
 fn restart_returns_to_line_0_field_0_and_a_cleared_screen_mode() {
     let mut timing = Timing::new(Region::Ntsc, Cycles(0));
-    timing.write_screen_mode(SCREEN_INTERLACE | OVERSCAN);
+    timing.write_screen_mode(SCREEN_INTERLACE | OVERSCAN, Cycles(0));
     run_until(&mut timing, 300 * 1364);
     assert_eq!(timing.frames(), 1);
     timing.restart(Cycles(500_000));
@@ -288,4 +288,194 @@ fn restart_returns_to_line_0_field_0_and_a_cleared_screen_mode() {
     assert_eq!(timing.lines(), lines + 1);
     assert_eq!(timing.frames(), 1);
     assert_eq!(frame_ends(&mut timing, 1), [500_000 + 225 * 1364]);
+}
+
+/// Services every deadline due up to and including `end`, at the time each falls due,
+/// and returns the NMI, IRQ and latch events with the times they fell due.
+// @source: adr-0021
+fn interrupt_events(timing: &mut Timing, end: u64) -> Vec<(u64, Event)> {
+    let mut events = Vec::new();
+    while timing.next_deadline().0 <= end {
+        let now = timing.next_deadline();
+        match timing.service(now) {
+            Some(event @ (Event::Nmi | Event::Irq | Event::Latch { .. })) => {
+                events.push((now.0, event));
+            }
+            Some(Event::Refresh | Event::Line { .. }) | None => {}
+        }
+    }
+    events
+}
+
+/// The times of the IRQ trigger points up to `end`.
+// @source: adr-0021
+fn irq_times(timing: &mut Timing, end: u64) -> Vec<u64> {
+    interrupt_events(timing, end)
+        .into_iter()
+        .filter(|(_, event)| *event == Event::Irq)
+        .map(|(at, _)| at)
+        .collect::<Vec<_>>()
+}
+
+/// A timer in mode `enable` with HTIME `horizontal` and VTIME `vertical`, written at `now`.
+// @source: adr-0021
+fn set_timer(timing: &mut Timing, enable: u8, horizontal: u16, vertical: u16, now: Cycles) {
+    let [low, high] = horizontal.to_le_bytes();
+    timing.write_horizontal_timer_low(low, now);
+    timing.write_horizontal_timer_high(high, now);
+    let [low, high] = vertical.to_le_bytes();
+    timing.write_vertical_timer_low(low, now);
+    timing.write_vertical_timer_high(high, now);
+    timing.write_interrupt_enable(enable, now);
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: fullsnes#snestiminghvevents
+// @source: adr-0020
+// @source: adr-0021
+#[test]
+fn the_nmi_flag_falls_half_a_dot_into_vertical_blank() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    // Frame 1 is field 1 without interlace, so its line 240 is 4 cycles short and frame 2
+    // starts at 262 × 1364 − 4 (ADR 0020).
+    let frame_2 = 262 * 1364 - 4;
+    let events = interrupt_events(&mut timing, frame_2 + 226 * 1364);
+    assert_eq!(
+        events,
+        [
+            (225 * 1364 + 2, Event::Nmi),
+            (frame_2 + 225 * 1364 + 2, Event::Nmi),
+        ]
+    );
+    // With overscan the flag waits for line 240.
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    timing.write_screen_mode(OVERSCAN, Cycles(0));
+    assert_eq!(
+        interrupt_events(&mut timing, 241 * 1364),
+        [(240 * 1364 + 2, Event::Nmi)]
+    );
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: anomie-regs#4200
+// @source: fullsnes#snesppuinterrupts
+// @source: adr-0021
+#[test]
+fn an_hv_irq_triggers_once_a_frame_at_its_dot() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    set_timer(&mut timing, 0x30, 100, 5, Cycles(0));
+    let frame_2 = 262 * 1364 - 4;
+    // 14 + 4 × 100 cycles into line 5.
+    assert_eq!(
+        irq_times(&mut timing, frame_2 + 10 * 1364),
+        [5 * 1364 + 414, frame_2 + 5 * 1364 + 414]
+    );
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: adr-0021
+#[test]
+fn an_h_irq_past_the_line_end_falls_in_the_next_line_and_is_kept() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    set_timer(&mut timing, 0x10, 339, 0, Cycles(0));
+    // 14 + 4 × 339 = 1370: 6 cycles into the following line, every line.
+    assert_eq!(
+        irq_times(&mut timing, 3 * 1364 + 1000),
+        [1370, 1364 + 1370, 2 * 1364 + 1370]
+    );
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: fullsnes#snestiminghvevents
+// @source: adr-0021
+#[test]
+fn a_v_irq_falls_10_cycles_in_or_14_after_the_short_line() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    set_timer(&mut timing, 0x20, 0, 7, Cycles(0));
+    assert_eq!(irq_times(&mut timing, 8 * 1364), [7 * 1364 + 10]);
+    // Line 241 follows the 1360-cycle line 240 of frame 1.
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    set_timer(&mut timing, 0x20, 0, 241, Cycles(0));
+    assert_eq!(irq_times(&mut timing, 242 * 1364), [241 * 1364 - 4 + 14]);
+    // Line 0 after power-on counts a normal line before it.
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    set_timer(&mut timing, 0x20, 0, 0, Cycles(0));
+    assert_eq!(irq_times(&mut timing, 100), [10]);
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: adr-0021
+#[test]
+fn a_timer_write_takes_effect_from_its_access() {
+    // A trigger point already passed in this line is not met.
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    run_until(&mut timing, 100);
+    set_timer(&mut timing, 0x10, 10, 0, Cycles(100));
+    assert_eq!(
+        irq_times(&mut timing, 2 * 1364 + 100),
+        [1364 + 54, 2 * 1364 + 54]
+    );
+    // One later in this line is.
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    run_until(&mut timing, 50);
+    set_timer(&mut timing, 0x10, 10, 0, Cycles(50));
+    assert_eq!(irq_times(&mut timing, 100), [54]);
+    // Disabling cancels the pending one.
+    timing.write_interrupt_enable(0x00, Cycles(100));
+    assert_eq!(irq_times(&mut timing, 3 * 1364), []);
+}
+
+// @source: anomie-timing
+// @source: anomie-regs#4201
+// @source: adr-0021
+#[test]
+fn a_latch_takes_the_line_and_dot_when_it_falls_due() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    run_until(&mut timing, 3 * 1364);
+    timing.schedule_latch(Cycles(3 * 1364 + 1300));
+    // 1300 cycles in: past the long dot 323 (1292-1297), dot (1300 - 2) / 4 = 324.
+    assert_eq!(
+        interrupt_events(&mut timing, 4 * 1364),
+        [(3 * 1364 + 1300, Event::Latch { line: 3, dot: 324 })]
+    );
+    // One due with a line start is taken in the new line.
+    timing.schedule_latch(Cycles(5 * 1364));
+    assert_eq!(
+        interrupt_events(&mut timing, 5 * 1364),
+        [(5 * 1364, Event::Latch { line: 5, dot: 0 })]
+    );
+}
+
+// @source: anomie-timing#s-cpu/registers
+// @source: anomie-timing#s-ppu/blanking-periods
+// @source: adr-0021
+#[test]
+fn horizontal_blank_runs_from_dot_274_to_dot_1() {
+    let timing = Timing::new(Region::Ntsc, Cycles(0));
+    assert!(timing.in_horizontal_blank(Cycles(0)));
+    assert!(timing.in_horizontal_blank(Cycles(3)));
+    assert!(!timing.in_horizontal_blank(Cycles(4)));
+    assert!(!timing.in_horizontal_blank(Cycles(274 * 4 - 1)));
+    assert!(timing.in_horizontal_blank(Cycles(274 * 4)));
+    assert!(timing.in_horizontal_blank(Cycles(1363)));
+}
+
+// @source: fullsnes#snesiomap
+// @source: adr-0021
+#[test]
+fn restart_disables_the_irq_and_cancels_the_nmi_flag_and_latch() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    set_timer(&mut timing, 0x10, 10, 0, Cycles(0));
+    run_until(&mut timing, 225 * 1364);
+    timing.schedule_latch(Cycles(225 * 1364 + 100));
+    timing.restart(Cycles(225 * 1364 + 1));
+    assert_eq!(interrupt_events(&mut timing, 225 * 1364 + 3 * 1364), []);
+    // HTIME was kept: re-enabling at the start of line 3 triggers 54 cycles into it and
+    // into each line after.
+    let start = 225 * 1364 + 1 + 3 * 1364;
+    timing.write_interrupt_enable(0x10, Cycles(start));
+    assert_eq!(
+        irq_times(&mut timing, start + 1364 + 54),
+        [start + 54, start + 1364 + 54]
+    );
 }

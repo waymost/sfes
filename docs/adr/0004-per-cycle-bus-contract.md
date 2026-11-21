@@ -95,7 +95,7 @@ The idle cycles of the stopped and waiting states are a modelling choice, not a 
 - `irq` is the level of the IRQ line as the processor would see it at this instruction boundary.
 - `nmi` is an edge latch that the bus owns. The bus sets it on a high-to-low transition and clears it when it sees a `read` with `Pins::VPB` at the NMI vector address. No acknowledge method is needed.
 
-How late in an instruction a line may change and still be recognized at the next boundary is therefore decided inside the bus implementation, not in the CPU core. The datasheet is silent on it; `sfes-snes-core` settles it in M2 with its own ADR and timing tests.
+How late in an instruction a line may change and still be recognized at the next boundary is therefore decided inside the bus implementation, not in the CPU core. The datasheet is silent on it; `sfes-snes-core` settles it in M2 with its own ADR and timing tests: ADR 0021, point 1.
 
 ### Vector harness
 
