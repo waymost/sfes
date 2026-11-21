@@ -1,6 +1,7 @@
 // @source: adr-0019
 //! Unit tests of the bus: decode, the WRAM port, open bus, access speed, refresh, the
-//! interrupt and timer registers, the math unit, the controller ports and DMA.
+//! interrupt and timer registers, the math unit, the controller ports, DMA and the APU
+//! ports' placeholder.
 
 use alloc::{vec, vec::Vec};
 
@@ -118,7 +119,7 @@ fn write_only_and_unanswered_addresses_read_open_bus() {
         0x00_420D, // MEMSEL, write-only
         0x00_4202, 0x00_4203, 0x00_4204, 0x00_4205, 0x00_4206, // the math operands
         0x00_2000, 0x00_2184, 0x00_21FF, 0x00_2200, 0x00_4400, 0x00_5FFF, // unused
-        0x00_2100, 0x00_2140, // PPU and APU, until those chips exist
+        0x00_2100, // the PPU, until it exists
         0x00_4000, 0x00_4015, 0x00_4018, 0x00_41FF, 0x00_4220, // unused CPU registers
     ] {
         assert_eq!(read(&mut bus, address), 0x5C, "{address:06X}");
@@ -1164,4 +1165,68 @@ fn hdma_runs_between_dma_bytes_and_ends_a_dma_on_its_channel() {
     assert_eq!(bus.peek(0x00_4315), (0x11, false));
     assert_eq!(bus.peek(0x00_4316), (0x01, false));
     assert_eq!(cost, 1148 - 14 + 6 + 6);
+}
+
+// @source: anomie-regs#2140
+// @source: adr-0019
+// @source: adr-0027
+#[test]
+fn the_apu_ports_read_zero_and_keep_the_cpus_writes_for_the_apu() {
+    let mut bus = bus();
+    for (port, address) in (0..4).zip([0x00_2140, 0x00_2141, 0x80_2142, 0x3F_217F]) {
+        write(&mut bus, 0x00_4200, 0x5C);
+        // The value written is not the value read back; the read is answered, so the
+        // data bus takes its $00 (ADR 0027, point 4).
+        write(&mut bus, address, 0xA0 | port);
+        assert_eq!(read(&mut bus, address), 0x00, "{address:06X}");
+        assert_eq!(bus.open_bus_value, 0x00);
+        assert_eq!(bus.peek(address), (0x00, false));
+        // The address's low two bits pick the port: $217F is port 3 (anomie-regs#2140).
+        assert_eq!(bus.apu.written(port), 0xA0 | port, "{address:06X}");
+    }
+    // Every mirror of a port is the same latch.
+    write(&mut bus, 0x00_2145, 0x77);
+    assert_eq!(bus.apu.written(1), 0x77);
+    // A port is a fast B-bus register (ADR 0019, point 3).
+    assert_eq!(read_cost(&mut bus, 0x00_2140), 6);
+}
+
+// @source: adr-0027
+#[test]
+fn reset_clears_the_apu_ports() {
+    let mut bus = bus();
+    for address in 0x00_2140..=0x00_2143 {
+        write(&mut bus, address, 0xFF);
+    }
+    bus.reset();
+    for port in 0..4 {
+        assert_eq!(bus.apu.written(port), 0x00);
+    }
+    assert_eq!(read(&mut bus, 0x00_2140), 0x00);
+}
+
+// @source: anomie-regs#2140
+// @source: anomie-regs#43x0
+// @source: anomie-regs#43x1
+// @source: adr-0025
+// @source: adr-0027
+#[test]
+fn dma_reaches_the_apu_ports_as_the_cpu_does() {
+    let mut bus = bus();
+    // Mode 4, ROM $00:8010 to $2140-$2143: one byte to each port.
+    set_channel(&mut bus, 0, 0x04, 0x40, 0x00_8010, 4);
+    let (_, log) = start_dma(&mut bus, 0x01, 0x00_8000);
+    assert_eq!(log.len(), 4);
+    for port in 0..4 {
+        assert_eq!(bus.apu.written(port), 0x10 + port);
+    }
+    // B bus to A bus, $2140 to WRAM $00:0100: the port reads $00.
+    write(&mut bus, 0x00_0100, 0xEE);
+    set_channel(&mut bus, 1, 0x80, 0x40, 0x00_0100, 1);
+    let (_, log) = start_dma(&mut bus, 0x02, 0x00_8000);
+    assert_eq!(
+        log.iter().map(|event| event.value).collect::<Vec<_>>(),
+        [0x00]
+    );
+    assert_eq!(read(&mut bus, 0x00_0100), 0x00);
 }

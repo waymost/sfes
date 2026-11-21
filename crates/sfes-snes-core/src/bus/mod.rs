@@ -9,16 +9,18 @@
 // @source: adr-0024
 // @source: adr-0025
 // @source: adr-0026
+// @source: adr-0027
 //! The bus state and the main CPU's view of it (ADR 0019).
 //!
 //! [`Bus`] owns WRAM, the cartridge, the data bus value, the WRAM port, `$420D`, the
 //! interrupt state, `$4201`, the counter latch, the multiply and divide unit (ADR 0023), the
-//! controller ports (ADR 0024), the DMA channels and HDMA (ADR 0025, ADR 0026), the clock and
-//! the scheduler. [`BusView`]
+//! controller ports (ADR 0024), the DMA channels and HDMA (ADR 0025, ADR 0026), the APU
+//! ports' placeholder (ADR 0027), the clock and the scheduler. [`BusView`]
 //! implements `Bus65816` over it: it records the interrupt lines (ADR 0021), decodes each
 //! address, syncs the register's owner, performs the access, charges its time, services the
 //! deadlines that fell due (ADR 0020) and tells the observer.
 
+mod apu;
 mod counters;
 mod decode;
 mod dma;
@@ -35,6 +37,7 @@ use sfes_snes_cpu::{Bus65816, Pending, Pins};
 
 use crate::{
     bus::{
+        apu::Apu,
         counters::CounterLatch,
         decode::{BBus, FAST, Target, access_cycles, decode},
         dma::Dma,
@@ -120,6 +123,8 @@ pub(crate) struct Bus {
     /// $420B, $420C and $4300–$437F: the DMA channels, a requested transfer and HDMA's
     /// state (ADR 0025, ADR 0026).
     pub(crate) dma: Dma,
+    /// $2140–$2143: the APU ports, a placeholder until M3 (ADR 0027).
+    pub(crate) apu: Apu,
     /// Master cycles since power-on.
     pub(crate) now: Cycles,
     /// Line and frame position, the refresh schedule and the deadline table.
@@ -140,6 +145,7 @@ impl fmt::Debug for Bus {
             .field("math", &self.math)
             .field("ports", &self.ports)
             .field("dma", &self.dma)
+            .field("apu", &self.apu)
             .field("now", &self.now)
             .field("timing", &self.timing)
             .finish_non_exhaustive()
@@ -172,6 +178,7 @@ impl Bus {
             math: Math::power_on(),
             ports: Ports::power_on(),
             dma: Dma::power_on(),
+            apu: Apu::power_on(),
             now: Cycles(0),
             timing,
         }
@@ -198,6 +205,7 @@ impl Bus {
     // @source: adr-0025
     // @source: anomie-regs#420c
     // @source: adr-0026
+    // @source: adr-0027
     pub(crate) fn reset(&mut self) {
         self.wram_port_address = 0;
         self.fast_rom = false;
@@ -205,6 +213,7 @@ impl Bus {
         self.io_port = IO_PORT_RESET;
         self.ports.reset();
         self.dma.reset();
+        self.apu.reset();
     }
 
     /// The interrupt requests as the CPU sees them at an instruction boundary: those
@@ -237,13 +246,16 @@ impl Bus {
     // @source: adr-0024
     // @source: anomie-regs#43x0
     // @source: fullsnes#snesdmaandhdmachannel07registers
+    // @source: anomie-regs#2140
     // @source: adr-0025
+    // @source: adr-0027
     pub(crate) fn peek(&self, address: u32) -> (u8, bool) {
         match decode(self.cartridge.map(), address) {
             Target::BBus(BBus::WramData) => (self.wram_port_byte(), true),
             Target::BBus(BBus::Ppu(SOFTWARE_LATCH)) => (self.open_bus_value, true),
             Target::BBus(BBus::Ppu(HORIZONTAL_COUNTER)) => (self.counters.peek_horizontal(), true),
             Target::BBus(BBus::Ppu(VERTICAL_COUNTER)) => (self.counters.peek_vertical(), true),
+            Target::BBus(BBus::Apu(port)) => (self.apu.peek_port(port), false),
             Target::Cpu(0x4210) => (self.nmi_flag_byte(self.interrupts.nmi_flag()), true),
             Target::Cpu(0x4211) => (self.irq_flag_byte(self.interrupts.irq_flag()), true),
             Target::Cpu(0x4212) => (self.status_byte(), false),
@@ -410,7 +422,9 @@ impl Bus {
     // @source: adr-0024
     // @source: anomie-regs#43x0
     // @source: fullsnes#snesdmaandhdmachannel07registers
+    // @source: anomie-regs#2140
     // @source: adr-0025
+    // @source: adr-0027
     pub(crate) fn read_target(&mut self, target: Target) -> Option<u8> {
         match target {
             Target::BBus(device) => match device {
@@ -429,9 +443,9 @@ impl Bus {
                         _ => None,
                     }
                 }
-                BBus::Apu(_) => {
+                BBus::Apu(port) => {
                     self.sync_apu();
-                    None
+                    Some(self.apu.read_port(port))
                 }
                 BBus::WramData => {
                     let value = self.wram_port_byte();
@@ -558,6 +572,8 @@ impl Bus {
     // @source: anomie-regs#2133
     // @source: adr-0019
     // @source: adr-0020
+    // @source: anomie-regs#2140
+    // @source: adr-0027
     pub(crate) fn write_b_bus(&mut self, device: BBus, value: u8) {
         let [low, middle, high, _] = self.wram_port_address.to_le_bytes();
         match device {
@@ -567,7 +583,10 @@ impl Bus {
                     self.timing.write_screen_mode(value, self.now);
                 }
             }
-            BBus::Apu(_) => self.sync_apu(),
+            BBus::Apu(port) => {
+                self.sync_apu();
+                self.apu.write_port(port, value);
+            }
             BBus::WramData => {
                 if let Some(byte) = self.wram.get_mut(self.wram_port_address as usize) {
                     *byte = value;
@@ -597,13 +616,12 @@ impl Bus {
     const fn sync_ppu(&mut self) {}
 
     /// Runs the APU up to `now` before an access to its ports (technical design section 4,
-    /// catch-up rule 1). There is no APU to run until the APU issues land.
+    /// catch-up rule 1; ADR 0027, point 3).
     // @source: adr-0019
-    #[expect(
-        clippy::unused_self,
-        reason = "the hook the APU's catch-up fills in (ADR 0019, point 2)"
-    )]
-    const fn sync_apu(&mut self) {}
+    // @source: adr-0027
+    const fn sync_apu(&mut self) {
+        self.apu.run_until(self.now);
+    }
 
     /// Ends a CPU cycle of `cycles` master cycles: advances the clock, then services in time
     /// order every deadline that fell due during the cycle or at its end (ADR 0020,

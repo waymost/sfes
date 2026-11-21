@@ -61,7 +61,7 @@ Issue #80 replaces the provisional bus of ADR 0018, point 6, with the main CPU's
    - `$4000–$43FF` holds the CPU's internal registers.
    - The rest of the I/O pages are Address Bus A, which no chip on the console answers.
 
-   Until a chip answers its registers, they read as open bus and ignore writes.
+   Until a chip answers its registers, they read as open bus and ignore writes. (The APU ports answer from a placeholder until M3: ADR 0027.)
 2. **Owner sync.** Before every access to B-bus `$00–$3F` the bus calls the PPU's sync hook, and before `$40–$7F` the APU's (technical design, catch-up rule 1). The hooks do nothing until those chips exist.
 3. **Access speed.** Each access costs anomie-memmap's speed for its address, and an internal cycle 6. Memory-2 is Fast while `$420D` bit 0 is set. An access's cost is fixed when it starts, so a write to `$420D` changes the speed from the next access. `$420D` is write-only, reads as open bus, and is 0 at power-on and after reset.
 4. **Open bus.**

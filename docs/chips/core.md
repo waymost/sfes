@@ -71,7 +71,7 @@ The cartridge's memory map (ADR 0017) says what answers each 8 KiB page: WRAM, R
 | `$4000–$43FF` | Internal | The 5A22's registers |
 | `$2000–$20FF`, `$2200–$3FFF`, `$4400–$5FFF` | A | Nothing on the console; only a cartridge could answer |
 
-Before an access to the PPU's or the APU's registers the bus calls that chip's sync hook, so the chip runs up to `now` (technical design, section 4, catch-up rule 1). The hooks do nothing until the chips exist, and until then their registers read as open bus.
+Before an access to the PPU's or the APU's registers the bus calls that chip's sync hook, so the chip runs up to `now` (technical design, section 4, catch-up rule 1). The PPU's hook does nothing until the PPU exists, and until then its registers read as open bus. The APU's ports answer from a placeholder (below; ADR 0027).
 
 ### Access time
 
@@ -465,6 +465,27 @@ Each data byte reports `on_dma` with `hdma: true` (point 10).
 - the table addresses and line counts the channels end with;
 - the one-byte pointer read of the last-channel case.
 
+## The APU ports until M3
+
+The SPC700 arrives in M3, but ROMs touch `$2140–$2143` during boot. [`bus/apu.rs`](../../crates/sfes-snes-core/src/bus/apu.rs) holds a placeholder for the APU unit. It is not hardware behaviour (ADR 0027).
+
+The shape follows `anomie-regs#2140` (points 1 and 2):
+- each port has two latches, one the CPU writes and one the CPU reads, so a read never returns the CPU's own write;
+- `$2140–$217F` mirror the four ports every four bytes;
+- DMA and HDMA reach the ports the same way the CPU does.
+
+What the placeholder does (points 3 to 6):
+- every read returns `$00`, and the data bus takes it;
+- every write is kept for the SPC700;
+- the sync hook calls `Apu::run_until(now)`, which does nothing;
+- power-on and reset set all eight latches to `$00`.
+
+M3 replaces the inside of `Apu` and keeps the bus's calls into it (point 7).
+
+What it rules out until M3 (point 8):
+- any ROM that waits for the APU, which is almost every commercial game;
+- goldens from any ROM that reads the ports, since M3 changes what it sees. None of the approved test ROMs is known to read them.
+
 ## Decisions
 
 - [ADR 0018](../adr/0018-snes-reset-and-power-on.md): RESB timing, the page-1 reads, power-on and reset, the default region, observer events and the provisional timing.
@@ -476,3 +497,4 @@ Each data byte reports `on_dma` with `hdma: true` (point 10).
 - [ADR 0024](../adr/0024-controller-ports-and-the-auto-joypad-read.md): the pad, `$4016/$4017`, when the auto-read starts and takes its bits, reset, and the polled flag.
 - [ADR 0025](../adr/0025-general-dma.md): the channel registers, when the pause begins and how long it lasts, where each byte falls, what the A and B buses reach, open bus, deadlines and the math unit during a transfer, and `on_dma`.
 - [ADR 0026](../adr/0026-hdma.md): `$420C` and the HDMA flags, when setup and each line's transfer fall due, the pause and its costs, the table steps and the last-channel case, mid-frame enabling, and pre-empting a DMA.
+- [ADR 0027](../adr/0027-apu-port-placeholder-until-m3.md): the APU ports' placeholder until M3: the register shape, reads of `$00`, kept writes, the sync hook, reset, and the ROMs and goldens it rules out.
