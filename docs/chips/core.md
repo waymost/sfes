@@ -178,11 +178,9 @@ The CPU checks for interrupts "just before the final CPU cycle of the instructio
 - the jump begins 6 to 12 master cycles after the line changes at the earliest, as anomie-timing says;
 - a waiting processor's steps are single halted cycles, so it wakes on the step after the first cycle that starts with the line low.
 
-Not modelled yet:
-- the old I flag that CLI, SEI, PLP, REP and SEP leave to the check;
-- the 12-cycle end of WAI.
-
-Both are CPU-core changes, to follow in `sfes-snes-cpu` with an amendment to ADR 0004 (ADR 0021, point 2).
+The CPU core adds two rules of its own ([ADR 0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md)):
+- CLI, SEI, PLP, REP and SEP change I in their final cycle, so the IRQ check at the next boundary still uses the old I flag. The machine's step classification asks the CPU for that flag (`Cpu65816::irq_disabled_at_boundary`).
+- The step that ends a WAI first spends two internal cycles, 12 master cycles. The observer stamps an interrupt taken from a wait with that step's start, before the two cycles.
 
 ### NMI
 
@@ -264,3 +262,4 @@ Until the PPU exists:
 - [ADR 0019](../adr/0019-snes-bus-decode-and-refresh.md): decode, access speed, open bus, the WRAM port, refresh and read-modify-write writes to registers.
 - [ADR 0020](../adr/0020-snes-scanlines-frames-and-deadlines.md): line lengths and dots, frames, the field, vertical blank and overscan, the frame boundary, line and frame events, and the deadline table.
 - [ADR 0021](../adr/0021-snes-interrupts-timers-and-counter-latch.md): when a changed NMI or IRQ line is seen, the NMI and H/V timer trigger points, `$4210–$4212`, the counter latch, and their reset values.
+- [ADR 0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md) (CPU core): the IRQ check uses the I flag from before the last cycle, and WAI ends two internal cycles after a request.

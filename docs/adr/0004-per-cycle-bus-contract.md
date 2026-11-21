@@ -74,7 +74,7 @@ pub trait Bus65816 {
 `step(&mut self, bus: &mut impl Bus65816)` does exactly one of the following, chosen in this order.
 
 1. **Stopped.** One `idle` call and nothing else. Only `Cpu65816::reset` leaves this state (`#7.14`).
-2. **Waiting.** `step` reads `interrupts()`. With nothing pending it makes one `idle` call and stays waiting. With an NMI pending, or an IRQ pending and the I flag clear, it leaves the waiting state and performs the interrupt entry below. With an IRQ pending and the I flag set, it leaves the waiting state and executes the next instruction (`#7.13`).
+2. **Waiting.** (amended by ADR 0022: the wake-up first makes two `idle` calls.) `step` reads `interrupts()`. With nothing pending it makes one `idle` call and stays waiting. With an NMI pending, or an IRQ pending and the I flag clear, it leaves the waiting state and performs the interrupt entry below. With an IRQ pending and the I flag set, it leaves the waiting state and executes the next instruction (`#7.13`).
 3. **Interrupt entry.** If the state is running and `interrupts()` reports an NMI, or an IRQ with the I flag clear, `step` performs the hardware interrupt sequence of `#table-5-7-22a` and executes no instruction. NMI wins over IRQ (`#7.19`).
 4. **One instruction**, from its opcode fetch to its last cycle as listed in its Table 5-7 row. The next instruction's opcode fetch, which the table prints as a final cycle 1, belongs to the next `step`.
 
@@ -88,7 +88,7 @@ The idle cycles of the stopped and waiting states are a modelling choice, not a 
 
 ### When `interrupts()` is sampled
 
-`step` calls `interrupts()` once, before the opcode fetch (cases 2 and 3 above). The core never samples in the middle of an instruction. This is the datasheet's "after the current instruction is completed", and for block moves the documents' "between moving one byte and moving the next".
+`step` calls `interrupts()` once, before the opcode fetch (cases 2 and 3 above). (Amended by ADR 0022: the I flag an IRQ is tested against is the one from before the previous step's last cycle.) The core never samples in the middle of an instruction. This is the datasheet's "after the current instruction is completed", and for block moves the documents' "between moving one byte and moving the next".
 
 `Pending` reports what the processor has recognized, not the raw lines:
 

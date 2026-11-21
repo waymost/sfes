@@ -122,6 +122,7 @@ fn bus_timing_cart_runs_fast_rom_the_wram_port_and_a_refresh() {
 // @source: adr-0019
 // @source: adr-0020
 // @source: adr-0021
+// @source: adr-0022
 #[test]
 fn interrupts_cart_takes_the_hv_irq_and_the_nmi_on_time() {
     let rom = include_bytes!("../../../tests/assets/carts/interrupts.sfc");
@@ -139,7 +140,9 @@ fn interrupts_cart_takes_the_hv_irq_and_the_nmi_on_time() {
     // and 5994 (ADR 0019), so its idle cycles restart at 578, 1938, 3310, 4670 and 6036.
     // The trigger point is 5 × 1364 + 14 + 4 × 100 = 7234 (anomie-timing), inside the
     // cycle 7230-7236. The cycle 7236-7242 is the first to start with the line low, so the
-    // entry starts at 7242 (ADR 0021, point 1).
+    // step that ends the wait starts at 7242 (ADR 0021, point 1). The observer stamps the
+    // interrupt with that step's start; its two internal cycles end the wait at 7254, where
+    // row 22a begins (ADR 0022).
     let [irq, nmi] = <[_; 2]>::try_from(snes.observer().0.clone()).expect("two entries");
     assert_eq!(irq, (Interrupt::Irq, Cycles(7242)));
     // The NMI flag is set at 225 × 1364 + 2 (fullsnes#snestiminghvevents); the first
@@ -152,13 +155,14 @@ fn interrupts_cart_takes_the_hv_irq_and_the_nmi_on_time() {
     );
 
     // The IRQ entry is 54 cycles: a Slow opcode read, an internal cycle, three Slow pushes
-    // and two Slow vector reads (row 22a), so the handler starts at 7296.
-    // - LDA $4211 reads at 7320: the flag over open bus $42, the operand's high byte.
-    // - STA $0000 writes at 7350-7358, the cycle the refresh at 7354 falls in; 40 later,
-    //   LDA $2137 reads at 7422, 602 cycles into line 5 (from 6820): dot 150.
+    // and two Slow vector reads (row 22a), so the handler starts at 7308.
+    // - LDA $4211 reads at 7332: the flag over open bus $42, the operand's high byte.
+    // - STA $0000's operand low byte is read at 7346-7354, the cycle the refresh at 7354
+    //   ends; 40 later its operand high byte and the write follow, and LDA $2137 reads at
+    //   7434, 614 cycles into line 5 (from 6820): dot 153.
     // - Each high byte has bit 8 of the counter, 0, over the last PPU2 value read.
     // The NMI handler reads $4210 with the flag set over open bus $42 and version 2, $4212 in
     // vertical blank and outside horizontal blank, and $4210 again with the flag cleared.
     let wram = snes.region(RegionId::Wram);
-    assert_eq!(wram[..8], [0xC2, 150, 150, 5, 4, 0xC2, 0x82, 0x42]);
+    assert_eq!(wram[..8], [0xC2, 153, 152, 5, 4, 0xC2, 0x82, 0x42]);
 }

@@ -90,6 +90,12 @@ pub struct Cpu65816 {
     pub e: bool,
     /// Whether the processor is running, waiting or stopped.
     pub run: RunState,
+    /// The I flag that the IRQ check at the next instruction boundary uses in place of P's,
+    /// when the step just run changed P in its final cycle: PLP, REP, SEP and the flag
+    /// instructions of row 19a. It holds the I flag from before that cycle, so a change of I
+    /// by CLI, SEI, PLP, REP #$04 or SEP #$04 is seen one boundary late (ADR 0022). `None`
+    /// otherwise; every step clears it.
+    pub delayed_irq_disable: Option<bool>,
 }
 
 impl Cpu65816 {
@@ -115,7 +121,29 @@ impl Cpu65816 {
             p: Flags::M.union(Flags::X).union(Flags::I),
             e: true,
             run: RunState::Running,
+            delayed_irq_disable: None,
         }
+    }
+
+    /// Whether the IRQ check at the next instruction boundary finds IRQs disabled: the I flag
+    /// from before the last cycle of the step just run (ADR 0022). That is P's I flag, unless
+    /// the step changed P in its final cycle.
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0022
+    #[must_use]
+    pub const fn irq_disabled_at_boundary(&self) -> bool {
+        match self.delayed_irq_disable {
+            Some(disabled) => disabled,
+            None => self.p.contains(Flags::I),
+        }
+    }
+
+    /// Called by an instruction that changes P in its final cycle, before the change: keeps
+    /// the I flag as it stood for the IRQ check at the next boundary (ADR 0022).
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0022
+    pub(crate) const fn delay_irq_disable(&mut self) {
+        self.delayed_irq_disable = Some(self.p.contains(Flags::I));
     }
 
     /// Switches between emulation and native mode. Entering emulation mode sets the M and X

@@ -68,7 +68,7 @@ The documents agree on the register values, the emulation-mode length and the ve
      6. and 7. the vector reads at `00FFFC` and `00FFFD` with VPB.
    - The program counter takes the vector. Nothing is written.
 2. **Halted cycles.** A waiting or stopped processor's step repeats WAI's or STP's third cycle: an internal cycle at PBR,PC (the "PBR,PC+1" of the row), RWB high, with the E, M and X signals. The cycles 1c to 1a of row 19c are the cycles in which RESB is held low. The machine spends them as stopped steps before it calls `reset`.
-3. **WAI wake-up adds no cycles.** The step that sees the request runs row 22a at once. Its first two cycles, at PBR,PC (WAI's PBR,PC+1), are row 19d's final cycle and the two cycles of note 9. With the I flag set, an IRQ ends the wait and the same step fetches the next opcode.
+3. **WAI wake-up adds no cycles.** (Superseded by ADR 0022: the wake-up adds two internal cycles before row 22a.) The step that sees the request runs row 22a at once. Its first two cycles, at PBR,PC (WAI's PBR,PC+1), are row 19d's final cycle and the two cycles of note 9. With the I flag set, an IRQ ends the wait and the same step fetches the next opcode.
 4. **DBR is kept** by BRK, COP, NMI and IRQ, as all 40,000 BRK and COP vectors show. 7.4.1.3 applies to an aborted interrupt sequence, which this core does not model (ADR 0004).
 
 ## Consequences

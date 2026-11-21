@@ -140,7 +140,7 @@ impl Cpu65816 {
 
     /// WAI (row 19d): two internal cycles at PBR,PC+1, then the processor waits for an
     /// interrupt with the program counter on the next instruction (7.13). [`Cpu65816::step`]
-    /// ends the wait.
+    /// ends the wait, two internal cycles later (ADR 0022).
     // @source: wdc-w65c816s#table-5-7-19d
     // @source: wdc-w65c816s#7.13
     // @source: wdc-w65c816s#2.24
@@ -189,6 +189,7 @@ impl Cpu65816 {
         self.p.remove(Flags::D);
         self.p.insert(Flags::I);
         self.run = RunState::Running;
+        self.delayed_irq_disable = None;
 
         self.discarded_opcode_cycles(bus);
         for _ in 0..3 {
@@ -475,6 +476,8 @@ mod tests {
     // @source: wdc-w65c816s#2.24
     // @source: 6502org-65c816-opcodes#6.9
     // @source: adr-0011
+    // @source: anomie-timing#s-cpu/instructions
+    // @source: adr-0022
     #[test]
     fn wai_waits_in_internal_cycles_and_an_irq_wakes_it_into_the_handler() {
         let mut cpu = native(Flags::empty());
@@ -503,12 +506,18 @@ mod tests {
         bus.cycles.clear();
         bus.pending = IRQ;
         cpu.step(&mut bus);
-        // Row 19d's last cycle, an opcode fetch at PBR,PC+1, is the first of row 22a.
+        // Two internal cycles end the wait (ADR 0022), then row 22a begins with its opcode
+        // fetch at PBR,PC+1.
         assert_eq!(
-            bus.cycles[..2],
-            [Cycle::Opcode(0x12_8001), Cycle::Internal(0x12_8001)]
+            bus.cycles[..4],
+            [
+                Cycle::Internal(0x12_8001),
+                Cycle::Internal(0x12_8001),
+                Cycle::Opcode(0x12_8001),
+                Cycle::Internal(0x12_8001),
+            ]
         );
-        assert_eq!(bus.cycles.len(), 8);
+        assert_eq!(bus.cycles.len(), 10);
         assert_eq!([bus.byte(0x01FE), bus.byte(0x01FD)], [0x80, 0x01]);
         assert_eq!(
             (cpu.run, cpu.pbr, cpu.pc),
@@ -521,6 +530,8 @@ mod tests {
     // @source: wdc-65816-manual#chapter-18-wai
     // @source: 6502org-65c816-opcodes#6.9
     // @source: adr-0011
+    // @source: anomie-timing#s-cpu/instructions
+    // @source: adr-0022
     #[test]
     fn wai_with_irqs_disabled_resumes_at_the_next_instruction() {
         let mut cpu = native(Flags::I);
@@ -531,7 +542,12 @@ mod tests {
         cpu.step(&mut bus);
         assert_eq!(
             bus.cycles,
-            [Cycle::Opcode(0x12_8001), Cycle::Internal(0x12_8002)]
+            [
+                Cycle::Internal(0x12_8001),
+                Cycle::Internal(0x12_8001),
+                Cycle::Opcode(0x12_8001),
+                Cycle::Internal(0x12_8002),
+            ]
         );
         assert_eq!((cpu.run, cpu.x), (RunState::Running, 0x0001));
     }

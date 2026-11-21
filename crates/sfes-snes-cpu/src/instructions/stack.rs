@@ -132,14 +132,19 @@ impl Cpu65816 {
     }
 
     /// PLP: pulls the status register, always one byte. In emulation mode M and X stay set,
-    /// and a set X flag clears the high bytes of X and Y, as for any change of P.
+    /// and a set X flag clears the high bytes of X and Y, as for any change of P. P is pulled
+    /// in the final cycle, so the IRQ check at the next boundary still uses the old I flag
+    /// (ADR 0022).
     // @source: wdc-w65c816s#table-5-7-22b
     // @source: wdc-w65c816s#table-5-7-note-12
     // @source: wdc-w65c816s#7.20
     // @source: wdc-65816-manual#chapter-18-plp
     // @source: 6502org-65c816-opcodes#6.8.3
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0022
     pub(crate) fn plp(&mut self, bus: &mut impl Bus65816) {
         self.pull_internal_cycles(bus);
+        self.delay_irq_disable();
         let value = self.pull(bus, StackWrap::PageOne);
         self.set_status(Flags::from_bits_retain(value));
     }

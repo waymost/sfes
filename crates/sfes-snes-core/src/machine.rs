@@ -12,7 +12,7 @@ use sfes_api::{
     RegionId, Stop, StopReason, VideoFrame,
 };
 use sfes_snes_cart::{CartError, Cartridge, Mapping, Options};
-use sfes_snes_cpu::{Cpu65816, Flags, Pending, RunState};
+use sfes_snes_cpu::{Cpu65816, Pending, RunState};
 
 use crate::{
     Region,
@@ -428,17 +428,19 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
 }
 
 /// Which of ADR 0004's cases the next step takes: stopped steps idle; an NMI, or an IRQ with
-/// I clear, enters its handler, even from a wait; a wait with nothing pending idles; anything
-/// else, including a wait ended by an IRQ with I set, runs an instruction.
+/// IRQs enabled at the boundary (ADR 0022), enters its handler, even from a wait; a wait with
+/// nothing pending idles; anything else, including a wait ended by an IRQ with I set, runs an
+/// instruction.
 // @source: adr-0004
 // @source: adr-0018
+// @source: adr-0022
 fn step_kind(cpu: &Cpu65816, pending: Pending) -> StepKind {
     let Pending { nmi, irq } = pending;
     if cpu.run == RunState::Stopped {
         StepKind::Halted
     } else if nmi {
         StepKind::Interrupt(Interrupt::Nmi)
-    } else if irq && !cpu.p.contains(Flags::I) {
+    } else if irq && !cpu.irq_disabled_at_boundary() {
         StepKind::Interrupt(Interrupt::Irq)
     } else if cpu.run == RunState::Waiting && !irq {
         StepKind::Halted
@@ -452,6 +454,7 @@ mod tests {
     use alloc::{vec, vec::Vec};
 
     use sfes_api::SplitMix64;
+    use sfes_snes_cpu::Flags;
 
     use super::*;
 
@@ -658,6 +661,7 @@ mod tests {
     }
 
     // @source: adr-0004
+    // @source: adr-0022
     #[test]
     fn steps_are_classified_as_adr_0004_orders_them() {
         let mut cpu = Cpu65816::new();
@@ -682,6 +686,10 @@ mod tests {
         assert_eq!(step_kind(&cpu, irq), StepKind::Instruction);
         cpu.set_status(Flags::empty());
         assert_eq!(step_kind(&cpu, irq), StepKind::Interrupt(Interrupt::Irq));
+        // After CLI, the check still uses the old I flag (ADR 0022).
+        cpu.run = RunState::Running;
+        cpu.delayed_irq_disable = Some(true);
+        assert_eq!(step_kind(&cpu, irq), StepKind::Instruction);
         cpu.run = RunState::Stopped;
         assert_eq!(step_kind(&cpu, nmi), StepKind::Halted);
     }

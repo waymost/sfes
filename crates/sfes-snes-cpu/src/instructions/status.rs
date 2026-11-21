@@ -22,7 +22,8 @@ use crate::{
 
 impl Cpu65816 {
     /// CLC, CLD, CLI, CLV, SEC, SED and SEI: one internal cycle (row 19a), then `flag` set to
-    /// `value`. None of them is M or X, so no width changes.
+    /// `value`. None of them is M or X, so no width changes. P changes in the final cycle, so
+    /// the IRQ check at the next boundary still uses the old I flag (ADR 0022).
     // @source: wdc-w65c816s#table-5-7-19a
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-65816-manual#chapter-18-clc
@@ -33,35 +34,46 @@ impl Cpu65816 {
     // @source: wdc-65816-manual#chapter-18-sed
     // @source: wdc-65816-manual#chapter-18-sei
     // @source: 6502org-65c816-opcodes#6.4.1
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0022
     pub(crate) fn set_flag(&mut self, bus: &mut impl Bus65816, flag: Flags, value: bool) {
         self.internal_at_program_counter(bus);
+        self.delay_irq_disable();
         self.p.set(flag, value);
     }
 
     /// REP: clears each status bit that is set in the immediate operand. Note 1: always 3
     /// cycles, the third an internal cycle at PBR,PC+1, the operand's address. In emulation
-    /// mode M and X stay set.
+    /// mode M and X stay set. P changes in the final cycle, so the IRQ check at the next
+    /// boundary still uses the old I flag (ADR 0022).
     // @source: wdc-w65c816s#table-5-7-18
     // @source: wdc-w65c816s#table-5-7-note-1
     // @source: wdc-w65c816s#7.8.3.1
     // @source: wdc-65816-manual#chapter-18-rep
     // @source: 6502org-65c816-opcodes#6.4.2
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0022
     pub(crate) fn rep(&mut self, bus: &mut impl Bus65816) {
         let operand = Flags::from_bits_retain(self.fetch(bus));
         self.internal_at_last_fetch(bus);
+        self.delay_irq_disable();
         self.set_status(self.p.difference(operand));
     }
 
     /// SEP: sets each status bit that is set in the immediate operand; cycles as REP. A set
-    /// X flag clears the high bytes of X and Y.
+    /// X flag clears the high bytes of X and Y. As for REP, the next IRQ check uses the old I
+    /// flag (ADR 0022).
     // @source: wdc-w65c816s#table-5-7-18
     // @source: wdc-w65c816s#table-5-7-note-1
     // @source: wdc-w65c816s#2.7
     // @source: wdc-65816-manual#chapter-18-sep
     // @source: 6502org-65c816-opcodes#6.4.2
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0022
     pub(crate) fn sep(&mut self, bus: &mut impl Bus65816) {
         let operand = Flags::from_bits_retain(self.fetch(bus));
         self.internal_at_last_fetch(bus);
+        self.delay_irq_disable();
         self.set_status(self.p.union(operand));
     }
 

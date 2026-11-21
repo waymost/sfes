@@ -104,7 +104,7 @@ The documents agree on most trigger points. They leave these questions open or d
    - The IRQ is taken only if the line is still low at the next boundary's record (`wdc-w65c816s#2.18`).
    - The same rule applies to a waiting processor, whose steps are single halted cycles.
 2. **What is not modelled here.**
-   - The old I flag that CLI, SEI, PLP, REP and SEP leave to the check is a CPU-core change, and so is the 12-cycle end of WAI. A follow-up in `sfes-snes-cpu` amends ADR 0004 for both.
+   - The old I flag that CLI, SEI, PLP, REP and SEP leave to the check is a CPU-core change, and so is the 12-cycle end of WAI. ADR 0022 models both in `sfes-snes-cpu` and amends ADR 0004.
    - The NMI that a DMA delays comes with DMA (#83).
    - A `$4211` read at the moment of the trigger, which fullsnes says reads 1 without clearing it, is not modelled. Neither document says how long the "condition" lasts.
 3. **The moment a read or a latch sees.**
@@ -160,7 +160,7 @@ The documents agree on most trigger points. They leave these questions open or d
 
 ## Consequences
 
-- ADR 0004's open question is settled: the check sits at the start of the last cycle of each step. ADR 0004 stands otherwise; the follow-up on I and WAI amends it.
+- ADR 0004's open question is settled: the check sits at the start of the last cycle of each step. ADR 0004 stands otherwise; ADR 0022 amends it for the I flag and WAI.
 - `$4210`, `$4211`, `$4212`, `$2137`, `$213C` and `$213D` read with side effects, so `peek_bus` reports them as latched, with the value a read would return.
 - The PPU issue takes over `$213C`, `$213D` and the latch flag together with `$213F` and PPU2 open bus. Until then the counter latch lives in the bus.
 - Point 3's choice of the access's start is the least certain decision here. A test ROM that reads `$4212` or latches `$2137` across a refresh or a line boundary, half a dot apart, reopens it.
