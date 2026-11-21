@@ -2,12 +2,13 @@
 // @source: adr-0019
 // @source: adr-0021
 // @source: adr-0023
+// @source: adr-0024
 //! Runs the project's own test cartridges (ADR 0013) and checks what they leave against
 //! values computed from the documents.
 
 use alloc::{sync::Arc, vec::Vec};
 
-use sfes_api::{Cycles, Fast, InstrEvent, Interrupt, Observer, RegionId, Stop};
+use sfes_api::{Buttons, Cycles, Fast, InstrEvent, Interrupt, Observer, RegionId, Stop};
 use sfes_snes_cpu::RunState;
 
 use crate::Snes;
@@ -203,4 +204,53 @@ fn math_cart_reads_results_when_they_appear() {
         0xFF, 0x40,
     ];
     assert_eq!(wram[..expected.len()], expected);
+}
+
+// @source: anomie-regs#controllers/generic
+// @source: anomie-regs#controllers/joypads
+// @source: anomie-regs#4016
+// @source: anomie-regs#4017
+// @source: anomie-regs#4200
+// @source: anomie-regs#4212
+// @source: anomie-regs#4218
+// @source: anomie-memmap#hardware/data-bus
+// @source: anomie-timing#s-cpu/auto-joypad-read
+// @source: fullsnes#snescontrollersioportsmanualreading
+// @source: fullsnes#snescontrollersioportsautomaticreading
+// @source: wdc-w65c816s#table-5-7-1a
+// @source: adr-0024
+#[test]
+fn joypad_cart_reads_the_pads_by_hand_and_by_the_auto_read() {
+    let rom = include_bytes!("../../../tests/assets/carts/joypad.sfc");
+    let mut snes = Snes::<Fast>::builder(Arc::from(rom.as_slice()))
+        .build()
+        .expect("builds");
+    snes.set_input(
+        0,
+        Buttons::B | Buttons::SELECT | Buttons::RIGHT | Buttons::X,
+    );
+    snes.set_input(1, Buttons::Y | Buttons::UP | Buttons::L);
+    // The reads by hand fall in the first frame, the auto-read just after it ends.
+    snes.run(Stop::Frames(1));
+    assert!(snes.polled());
+    snes.run(Stop::Frames(1));
+    assert_eq!(snes.cpu().run, RunState::Stopped);
+    assert!(snes.polled());
+    snes.run(Stop::Frames(1));
+    assert!(!snes.polled(), "a stopped CPU reads nothing: a lag frame");
+
+    let wram = snes.region(RegionId::Wram);
+    // Port 1 in serial order, B Y Select Start Up Down Left Right A X L R, then ID 0000
+    // and a 17th bit of 1, each over the open-bus $40 of the address's high byte.
+    let by_hand = [
+        0x41, 0x40, 0x41, 0x40, 0x40, 0x40, 0x40, 0x41, 0x40, 0x41, 0x40, 0x40, 0x40, 0x40, 0x40,
+        0x40, 0x41,
+    ];
+    assert_eq!(wram[..0x11], by_hand);
+    // Port 2's B and Y, with bits 4-2 of $4017 set.
+    assert_eq!(wram[0x11..0x13], [0x5C, 0x5D]);
+    // With the latch high, B every time.
+    assert_eq!(wram[0x13..0x16], [0x41; 3]);
+    // byetUDLR axlr0000: port 1 is $A140 and port 2 $4820; Data2 is not connected.
+    assert_eq!(wram[0x16..0x1E], [0x40, 0xA1, 0x20, 0x48, 0, 0, 0, 0]);
 }

@@ -301,7 +301,7 @@ fn interrupt_events(timing: &mut Timing, end: u64) -> Vec<(u64, Event)> {
             Some(event @ (Event::Nmi | Event::Irq | Event::Latch { .. })) => {
                 events.push((now.0, event));
             }
-            Some(Event::Refresh | Event::Line { .. }) | None => {}
+            Some(Event::Refresh | Event::Line { .. } | Event::Joypad { .. }) | None => {}
         }
     }
     events
@@ -478,4 +478,49 @@ fn restart_disables_the_irq_and_cancels_the_nmi_flag_and_latch() {
         irq_times(&mut timing, start + 1364 + 54),
         [start + 54, start + 1364 + 54]
     );
+}
+
+/// The auto-read starts of the next `count` frames, each with the start of the line it
+/// falls in.
+// @source: adr-0024
+fn auto_read_starts(timing: &mut Timing, count: usize) -> Vec<(u64, u64)> {
+    let mut starts = Vec::new();
+    let mut line_start = 0;
+    while starts.len() < count {
+        let now = timing.next_deadline();
+        match timing.service(now) {
+            Some(Event::Line { at, .. }) => line_start = at.0,
+            Some(Event::Joypad { at }) => starts.push((at.0, line_start)),
+            _ => {}
+        }
+    }
+    starts
+}
+
+// @source: anomie-timing#s-cpu/auto-joypad-read
+// @source: adr-0024
+#[test]
+fn the_auto_read_starts_at_dot_74_5_then_on_a_256_cycle_grid_from_dot_32_5() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    let starts = auto_read_starts(&mut timing, 12);
+    // Dot 74.5 of line 225 on the first frame.
+    assert_eq!(starts[0], (225 * 1364 + 298, 225 * 1364));
+    for &(at, line_start) in &starts {
+        assert_eq!((at - starts[0].0) % 256, 0, "{at}");
+        assert!(
+            (130..386).contains(&(at - line_start)),
+            "{at} in line at {line_start}"
+        );
+    }
+}
+
+// @source: anomie-timing#s-cpu/auto-joypad-read
+// @source: adr-0024
+#[test]
+fn a_restart_starts_the_auto_read_grid_over_and_drops_a_pending_event() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    timing.schedule_joypad(Some(Cycles(5000)));
+    timing.restart(Cycles(1001));
+    let starts = auto_read_starts(&mut timing, 1);
+    assert_eq!(starts[0].0, 1001 + 225 * 1364 + 298);
 }

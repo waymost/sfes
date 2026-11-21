@@ -139,7 +139,7 @@ The documents agree on most trigger points. They leave these questions open or d
 6. **`$4212`.**
    - Bit 7 is vertical blank as ADR 0020 has it, from H=0 of its first line to H=0 of line 0.
    - Bit 6 is horizontal blank, from H=274 to H=1, read from the dot at the access's start (anomie-timing over anomie-regs's approximate values).
-   - Bit 0, auto-joypad busy, reads 0 until #85.
+   - Bit 0, auto-joypad busy, reads 0 until #84. ADR 0024, point 6, gives it.
    - Bits 5–1 are open bus.
 7. **The counter latch.**
    - A `$2137` read latches the counters when `$4201` bit 7 is set, and returns open bus. A `$4201` write that changes bit 7 from 1 to 0 latches them one dot later (point 3).

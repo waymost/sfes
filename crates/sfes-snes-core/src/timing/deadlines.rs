@@ -1,8 +1,10 @@
 // @source: adr-0001
 // @source: adr-0020
 // @source: adr-0021
+// @source: adr-0024
 //! The deadline table: the next time each scheduled event is due, and the earliest of them
-//! (technical design section 4; ADR 0001, point 3; ADR 0020, point 9; ADR 0021, point 9).
+//! (technical design section 4; ADR 0001, point 3; ADR 0020, point 9; ADR 0021, point 9;
+//! ADR 0024, point 9).
 
 use sfes_api::Cycles;
 
@@ -22,15 +24,25 @@ pub(crate) enum Deadline {
     Irq,
     /// The counter latch of a `$4201` write (ADR 0021, point 7).
     Latch,
+    /// The auto-joypad read's next event (ADR 0024, points 5, 6 and 9).
+    Joypad,
 }
 
 impl Deadline {
     /// Every event, in service order.
-    const ALL: [Self; 5] = [Self::Refresh, Self::Line, Self::Nmi, Self::Irq, Self::Latch];
+    const ALL: [Self; 6] = [
+        Self::Refresh,
+        Self::Line,
+        Self::Nmi,
+        Self::Irq,
+        Self::Latch,
+        Self::Joypad,
+    ];
 
     /// The event's slot in the table.
     // @source: adr-0020
     // @source: adr-0021
+    // @source: adr-0024
     const fn index(self) -> usize {
         match self {
             Self::Refresh => 0,
@@ -38,6 +50,7 @@ impl Deadline {
             Self::Nmi => 2,
             Self::Irq => 3,
             Self::Latch => 4,
+            Self::Joypad => 5,
         }
     }
 }
@@ -126,10 +139,12 @@ mod tests {
 
     // @source: adr-0020
     // @source: adr-0021
+    // @source: adr-0024
     #[test]
     fn events_due_together_are_serviced_in_table_order() {
         let mut deadlines = Deadlines::new();
         for deadline in [
+            Deadline::Joypad,
             Deadline::Latch,
             Deadline::Irq,
             Deadline::Nmi,

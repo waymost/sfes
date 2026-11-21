@@ -15,7 +15,7 @@ This page explains the SNES machine and how the crate models it (QA-08). It grow
 | Part | What | Cloned? |
 | --- | --- | --- |
 | `State::cpu` | The 65C816's registers and run state | yes |
-| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the multiply and divide unit, the clock, the scheduler (line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table), and the held buttons | yes |
+| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the multiply and divide unit, the controller ports (the held buttons, the pads, `$4016`, the auto-read and `$4218–$421F`, and the polled flags), the clock, and the scheduler (line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table) | yes |
 | `State::meta` | The seed and the video standard | yes |
 | `observer` | The observer | yes |
 | `outputs` | The frame buffer | no: a clone starts empty (technical design section 5) |
@@ -28,7 +28,7 @@ The cartridge's ROM and memory map are `Arc`-shared, so a clone copies WRAM and 
 - `.seed(u64)` sets the power-on seed, 0 by default (FND-02);
 - `.observer(o)` attaches an observer.
 
-Until `impl System` arrives in M4, the machine has an inherent API with the same shapes: `run(Stop)`, `set_input`, `reset`, `power_cycle`, `region` and `region_mut`, `peek_bus` and `video` (FND-06, FND-08).
+Until `impl System` arrives in M4, the machine has an inherent API with the same shapes: `run(Stop)`, `set_input`, `polled`, `reset`, `power_cycle`, `region` and `region_mut`, `peek_bus` and `video` (FND-06, FND-08).
 
 ## Power-on and reset
 
@@ -165,7 +165,7 @@ A stop overshoots its target by at most one step.
 
 ### The deadline table
 
-The bus keeps the next time each scheduled event is due: the refresh pause, the next line start, the NMI flag, the next H/V timer trigger point and a `$4201` counter latch, with HDMA and auto-joypad to follow. After every CPU cycle one comparison with the earliest of them decides whether any is due. Due events are serviced in time order, and events due together in the table's order (technical design section 4, ADR 0001, ADR 0020, point 9, ADR 0021, point 9).
+The bus keeps the next time each scheduled event is due: the refresh pause, the next line start, the NMI flag, the next H/V timer trigger point, a `$4201` counter latch and the auto-joypad read's next event (ADR 0024, point 9), with HDMA to follow. After every CPU cycle one comparison with the earliest of them decides whether any is due. Due events are serviced in time order, and events due together in the table's order (technical design section 4, ADR 0001, ADR 0020, point 9, ADR 0021, point 9).
 
 ## Interrupts and the H/V timer
 
@@ -227,7 +227,7 @@ Each read sees the machine at the start of its access (ADR 0021, point 3):
 | --- | --- | --- |
 | `$4210 RDNMI` | NMI flag, cleared by the read | bits 6–4 open bus, bits 3–0 version 2 |
 | `$4211 TIMEUP` | IRQ flag, cleared by the read | open bus |
-| `$4212 HVBJOY` | vertical blank, from H=0 of its first line to H=0 of line 0 | bit 6 horizontal blank, H=274 to H=1; bits 5–1 open bus; bit 0 auto-joypad busy, 0 until #85 |
+| `$4212 HVBJOY` | vertical blank, from H=0 of its first line to H=0 of line 0 | bit 6 horizontal blank, H=274 to H=1; bits 5–1 open bus; bit 0 auto-joypad busy (ADR 0024, point 6) |
 
 Sources: `anomie-timing#s-cpu/registers`, `anomie-regs#4210`, `#4211`, `#4212`, `fullsnes#snesppuinterrupts`.
 
@@ -270,11 +270,68 @@ The unit counts CPU cycles, not master cycles (fullsnes). The results appear tog
 
 `$4202` is `$FF` and `$4204–$4205` `$FFFF` at power-on. The results are 0. Reset changes nothing in the unit.
 
-`$4213` RDIO reads the I/O port's lines: a bit `$4201` drives low reads 0, and a high bit reads 1 unless a device pulls it low (`anomie-regs#4213`). Nothing pulls a line low until the controller ports, so it reads back `$4201` (ADR 0023, point 6). `$4201` bit 7 is also the PPU latch line (see [The counter latch](#the-counter-latch)).
+`$4213` RDIO reads the I/O port's lines: a bit `$4201` drives low reads 0, and a high bit reads 1 unless a device pulls it low (`anomie-regs#4213`). A standard pad leaves IOBit unconnected, so nothing pulls a line low and it reads back `$4201` (ADR 0023, point 6; ADR 0024, point 2). `$4201` bit 7 is also the PPU latch line (see [The counter latch](#the-counter-latch)).
 
 ### Test cartridge
 
 [`tests/carts/math`](../../tests/carts/math/math.s) multiplies and divides, and reads each result one CPU cycle before it appears and in the cycle it does. It also divides by zero and reads `$4213` before and after a `$4201` write. A test in `src/carts.rs` checks every value it stores.
+
+## Controller ports and the auto-joypad read
+
+[`bus/ports.rs`](../../crates/sfes-snes-core/src/bus/ports.rs) models both controller ports, with a standard pad always plugged into each (ADR 0024, point 1).
+
+### The pad
+
+- **Latch.** `$4016` bit 0 drives the Latch line of both ports (`anomie-regs#controllers/generic`). While it is high, the pad loads its 16 bits: B, Y, Select, Start, Up, Down, Left, Right, A, X, L, R, then four 0 ID bits (`anomie-regs#4016`, `fullsnes#snescontrollershardwareidcodes`). A pressed button is 1 (`fullsnes#snescontrollersjoypad`).
+- **Clock.** Reading `$4016` clocks port 1 and reading `$4017` clocks port 2. Each read returns the current bit, then the pad moves to the next. After 16 bits it returns 1 until latched again (`anomie-regs#controllers/joypads`).
+- **Latch held high.** With Latch still high, a clock returns B and the pad does not advance (`fullsnes#snescontrollersioportsautomaticreading`).
+- **Buttons.** The pad takes the buttons `set_input` last gave when it latches, so input set before a frame is what the frame reads.
+- **Not connected.** Data2 and IOBit are not connected on a pad.
+- **Power-on.** A pad returns 1 until first latched (ADR 0024, point 2).
+
+| Register | Bits |
+| --- | --- |
+| `$4016` read | bit 0 port 1 Data1, bit 1 Data2 (0), bits 7–2 open bus |
+| `$4017` read | bit 0 port 2 Data1, bit 1 Data2 (0), bits 4–2 always 1, bits 7–5 open bus |
+| `$4016` write | bit 0 Latch; bits 1–2 not connected |
+
+Sources: `anomie-regs#4016`, `#4017`, the open-bus rule in anomie-regs' introduction, and `fullsnes#snescontrollersioportsmanualreading`. A peek returns the bits without clocking the pad and reports a side effect.
+
+### The auto-read
+
+`$4200` bit 0 enables a read of 16 bits from each port into `$4218–$421F`, once a frame (`anomie-regs#4200`, `#4218`). Port 1 Data1 goes to `$4218/9`, port 2 Data1 to `$421A/B`, and the Data2 lines to `$421C–$421F`. The first bit read ends in bit 15, so a pad reads `byetUDLR axlr0000`.
+
+When it runs (`anomie-timing#s-cpu/auto-joypad-read`):
+- The read starts on the line that begins vertical blank, between dots 32.5 and 95.5.
+- On the first frame after power-on or reset it starts at dot 74.5, then a multiple of 256 master cycles after that. The machine takes the earliest grid time at or after dot 32.5, which is at most dot 96.25 (ADR 0024, point 5).
+- It lasts 4224 master cycles, with `$4212` bit 0 set throughout.
+
+The documents give the steps of the read only as anomie-regs' pseudo-code: pulse Latch, then 16 times read `$4016/$4017` and rotate each bit into its register. The machine (ADR 0024, point 6):
+- pulses Latch at the start;
+- takes a bit every 256 master cycles, the 16th at 4096;
+- clears the busy flag at 4224.
+
+What the CPU sees during a read:
+- `$4218–$421F` show the bits rotated in so far.
+- A `$4016/$4017` read or a `$4016` write acts on the same pads, so it moves the auto-read's bits.
+- A game that leaves `$4016` bit 0 set gets B in all 16 bits (fullsnes).
+
+Power-on and reset:
+- `$4016` bit 0 and `$4200` bit 0 are 0 at power-on and reset.
+- `$4218–$421F` are 0 at power-on and kept on reset.
+- Reset abandons a read in progress (ADR 0024, points 3, 5 and 7).
+
+### The polled flag
+
+A CPU read of `$4016`, `$4017` or `$4218–$421F` sets the frame's polled flag. The auto-read's own clocks and peeks do not. At each frame end the flag is kept and cleared for the next frame, and `Snes::polled()` returns the last ended frame's value. A frame that reads neither port is a lag frame (technical design section 7, ADR 0024, point 8).
+
+### Test cartridge
+
+[`tests/carts/joypad`](../../tests/carts/joypad/joypad.s) latches the pads and reads:
+- port 1 seventeen times and port 2 twice;
+- port 1 three times with the latch held high.
+
+It then enables the auto-read, waits for `$4212` bit 0 to set and clear, and copies `$4218–$421F`. A test in `src/carts.rs` sets the buttons on both ports and checks every byte, including the open-bus `$40` in the unused bits. It also checks the polled flag over three frames.
 
 ## Decisions
 
@@ -284,3 +341,4 @@ The unit counts CPU cycles, not master cycles (fullsnes). The results appear tog
 - [ADR 0021](../adr/0021-snes-interrupts-timers-and-counter-latch.md): when a changed NMI or IRQ line is seen, the NMI and H/V timer trigger points, `$4210–$4212`, the counter latch, and their reset values.
 - [ADR 0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md) (CPU core): the IRQ check uses the I flag from before the last cycle, and WAI ends two internal cycles after a request.
 - [ADR 0023](../adr/0023-snes-multiply-divide-unit-and-io-port.md): the multiply and divide results, their latency in CPU cycles, reads before the result, and RDIO.
+- [ADR 0024](../adr/0024-controller-ports-and-the-auto-joypad-read.md): the pad, `$4016/$4017`, when the auto-read starts and takes its bits, reset, and the polled flag.

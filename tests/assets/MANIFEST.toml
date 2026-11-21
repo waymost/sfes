@@ -72,6 +72,12 @@ sha256 = "efc6af7e85c356439c3c3d680903e4f2d73f8ab4332cbcefe97ac5a4fe286483"
 notes = "Own test cartridge: multiplies and divides and reads $4214-$4217 one CPU cycle before and when the results appear, divides by zero, and reads $4213 before and after a $4201 write (ADR 0023). Built from tests/carts/math/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/joypad.sfc"
+license = "own"
+sha256 = "825872693709554195f3735ebe2cefcc9e57e6dc415110e0398bb2c283bff145"
+notes = "Own test cartridge: latches the pads through $4016, reads both ports by hand and with the latch held high, then waits out one auto-joypad read and copies $4218-$421F. Built from tests/carts/joypad/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"

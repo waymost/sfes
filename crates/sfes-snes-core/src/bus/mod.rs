@@ -6,11 +6,12 @@
 // @source: adr-0020
 // @source: adr-0021
 // @source: adr-0023
+// @source: adr-0024
 //! The bus state and the main CPU's view of it (ADR 0019).
 //!
 //! [`Bus`] owns WRAM, the cartridge, the data bus value, the WRAM port, `$420D`, the
 //! interrupt state, `$4201`, the counter latch, the multiply and divide unit (ADR 0023), the
-//! clock and the scheduler. [`BusView`]
+//! controller ports (ADR 0024), the clock and the scheduler. [`BusView`]
 //! implements `Bus65816` over it: it records the interrupt lines (ADR 0021), decodes each
 //! address, syncs the register's owner, performs the access, charges its time, services the
 //! deadlines that fell due (ADR 0020) and tells the observer.
@@ -19,11 +20,12 @@ mod counters;
 mod decode;
 mod interrupts;
 mod math;
+mod ports;
 
 use alloc::{boxed::Box, vec};
 use core::fmt;
 
-use sfes_api::{Addr24, BusId, Buttons, Cycles, Observer, SplitMix64};
+use sfes_api::{Addr24, BusId, Cycles, Observer, SplitMix64};
 use sfes_snes_cart::Cartridge;
 use sfes_snes_cpu::{Bus65816, Pending, Pins};
 
@@ -33,6 +35,7 @@ use crate::{
         decode::{BBus, FAST, Target, access_cycles, decode},
         interrupts::Interrupts,
         math::Math,
+        ports::Ports,
     },
     timing::{Event, REFRESH_LENGTH, Timing, WRIO_LATCH_DELAY},
 };
@@ -70,6 +73,14 @@ const NMI_FLAG_OPEN_BUS: u8 = 0x70;
 const IRQ_FLAG_OPEN_BUS: u8 = 0x7F;
 /// The open-bus bits of `$4212`.
 const STATUS_OPEN_BUS: u8 = 0x3E;
+/// `$4212` bit 0: auto-joypad read busy.
+const AUTO_READ_BUSY: u8 = 0x01;
+/// The open-bus bits of `$4016`.
+const PORT_1_OPEN_BUS: u8 = 0xFC;
+/// The open-bus bits of `$4017`.
+const PORT_2_OPEN_BUS: u8 = 0xE0;
+/// `$4017` bits 4–2, tied to ground and read as 1.
+const PORT_2_GROUNDED: u8 = 0x1C;
 
 /// The NMI vector's low byte in native mode, read with VPB.
 const NMI_VECTOR_NATIVE: u32 = 0x00_FFEA;
@@ -98,12 +109,13 @@ pub(crate) struct Bus {
     pub(crate) counters: CounterLatch,
     /// $4202–$4206 and $4214–$4217: the multiply and divide unit (ADR 0023).
     pub(crate) math: Math,
+    /// The pads, $4016, the auto-joypad read into $4218–$421F and the polled flag
+    /// (ADR 0024).
+    pub(crate) ports: Ports,
     /// Master cycles since power-on.
     pub(crate) now: Cycles,
     /// Line and frame position, the refresh schedule and the deadline table.
     pub(crate) timing: Timing,
-    /// The buttons held on each port, latched by the controller ports in #85.
-    pub(crate) input: [Buttons; PORTS],
 }
 
 impl fmt::Debug for Bus {
@@ -118,9 +130,9 @@ impl fmt::Debug for Bus {
             .field("io_port", &self.io_port)
             .field("counters", &self.counters)
             .field("math", &self.math)
+            .field("ports", &self.ports)
             .field("now", &self.now)
             .field("timing", &self.timing)
-            .field("input", &self.input)
             .finish_non_exhaustive()
     }
 }
@@ -134,6 +146,7 @@ impl Bus {
     // @source: adr-0019
     // @source: adr-0021
     // @source: adr-0023
+    // @source: adr-0024
     pub(crate) fn power_on(cartridge: Cartridge, timing: Timing, seed: u64) -> Self {
         let mut wram = vec![0; WRAM_SIZE].into_boxed_slice();
         SplitMix64::new(seed).fill(&mut wram);
@@ -147,16 +160,18 @@ impl Bus {
             io_port: IO_PORT_RESET,
             counters: CounterLatch::power_on(),
             math: Math::power_on(),
+            ports: Ports::power_on(),
             now: Cycles(0),
             timing,
-            input: [Buttons::empty(); PORTS],
         }
     }
 
     /// Sets the registers reset changes to their reset values: `$2181–$2183` and `$420D`
     /// are 0 (`fullsnes#snesiomap`, ADR 0019), `$4200` and the interrupt flags are clear and
-    /// `$4201` is `$FF` (ADR 0021, point 8). WRAM, the data bus, the counter latch and the
-    /// multiply and divide unit are kept (ADR 0018, ADR 0021, ADR 0023).
+    /// `$4201` is `$FF` (ADR 0021, point 8), and `$4016` bit 0 and the auto-read are off with
+    /// a read in progress abandoned (ADR 0024, points 3, 5 and 7). WRAM, the data bus, the
+    /// counter latch, the multiply and divide unit and `$4218–$421F` are kept (ADR 0018,
+    /// ADR 0021, ADR 0023, ADR 0024).
     // @source: fullsnes#snesiomap
     // @source: fullsnes#snesmemorycontrol
     // @source: anomie-regs#4202
@@ -164,11 +179,13 @@ impl Bus {
     // @source: adr-0019
     // @source: adr-0021
     // @source: adr-0023
+    // @source: adr-0024
     pub(crate) fn reset(&mut self) {
         self.wram_port_address = 0;
         self.fast_rom = false;
         self.interrupts = Interrupts::power_on();
         self.io_port = IO_PORT_RESET;
+        self.ports.reset();
     }
 
     /// The interrupt requests as the CPU sees them at an instruction boundary: those
@@ -192,9 +209,13 @@ impl Bus {
     // @source: anomie-regs#4213
     // @source: anomie-regs#4214
     // @source: anomie-regs#4216
+    // @source: anomie-regs#4016
+    // @source: anomie-regs#4017
+    // @source: anomie-regs#4218
     // @source: adr-0019
     // @source: adr-0021
     // @source: adr-0023
+    // @source: adr-0024
     pub(crate) fn peek(&self, address: u32) -> (u8, bool) {
         match decode(self.cartridge.map(), address) {
             Target::BBus(BBus::WramData) => (self.wram_port_byte(), true),
@@ -205,6 +226,11 @@ impl Bus {
             Target::Cpu(0x4211) => (self.irq_flag_byte(self.interrupts.irq_flag()), true),
             Target::Cpu(0x4212) => (self.status_byte(), false),
             Target::Cpu(register @ 0x4213..=0x4217) => (self.port_or_result(register), false),
+            Target::Cpu(0x4016) => (self.port_1_byte(self.ports.peek_data(0)), true),
+            Target::Cpu(0x4017) => (self.port_2_byte(self.ports.peek_data(1)), true),
+            Target::Cpu(register @ 0x4218..=0x421F) => {
+                (self.ports.joypad(register - 0x4218), false)
+            }
             target => (self.memory(target).unwrap_or(self.open_bus_value), false),
         }
     }
@@ -228,11 +254,13 @@ impl Bus {
     }
 
     /// `$4212` HVBJOY at the start of the access: vertical and horizontal blank, bits 5–1
-    /// open bus, and auto-joypad busy 0 until #85 (ADR 0021, point 6).
+    /// open bus (ADR 0021, point 6), and auto-joypad busy (ADR 0024, point 6).
     // @source: anomie-timing#s-cpu/registers
+    // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: anomie-regs#4212
     // @source: fullsnes#snesppuinterrupts
     // @source: adr-0021
+    // @source: adr-0024
     const fn status_byte(&self) -> u8 {
         let vertical = if self.timing.in_vertical_blank() {
             FLAG
@@ -244,7 +272,32 @@ impl Bus {
         } else {
             0
         };
-        vertical | horizontal | (self.open_bus_value & STATUS_OPEN_BUS)
+        let busy = if self.ports.auto_read_busy() {
+            AUTO_READ_BUSY
+        } else {
+            0
+        };
+        vertical | horizontal | busy | (self.open_bus_value & STATUS_OPEN_BUS)
+    }
+
+    /// `$4016` JOYSER0 with port 1's data bits `data`: bits 7–2 open bus (ADR 0024,
+    /// point 4).
+    // @source: anomie-regs
+    // @source: anomie-regs#4016
+    // @source: fullsnes#snescontrollersioportsmanualreading
+    // @source: adr-0024
+    const fn port_1_byte(&self, data: u8) -> u8 {
+        (self.open_bus_value & PORT_1_OPEN_BUS) | data
+    }
+
+    /// `$4017` JOYSER1 with port 2's data bits `data`: bits 4–2 set and bits 7–5 open bus
+    /// (ADR 0024, point 4).
+    // @source: anomie-regs
+    // @source: anomie-regs#4017
+    // @source: fullsnes#snescontrollersioportsmanualreading
+    // @source: adr-0024
+    const fn port_2_byte(&self, data: u8) -> u8 {
+        (self.open_bus_value & PORT_2_OPEN_BUS) | PORT_2_GROUNDED | data
     }
 
     /// `$4213` RDIO or one of the results `$4214–$4217`, none of which a read changes.
@@ -265,11 +318,13 @@ impl Bus {
     }
 
     /// `$4213` RDIO: each line of the I/O port, low where `$4201` drives it low or a device
-    /// pulls it low. Nothing is connected to pull a line low until the controller ports
-    /// (#85), so it reads back `$4201` (ADR 0023, point 6).
+    /// pulls it low. A standard pad leaves `IOBit` unconnected (ADR 0024, point 2), so it
+    /// reads back `$4201` (ADR 0023, point 6).
     // @source: anomie-regs#4213
+    // @source: anomie-regs#controllers/joypads
     // @source: fullsnes#snescontrollersioportsmanualreading
     // @source: adr-0023
+    // @source: adr-0024
     const fn io_port_input(&self) -> u8 {
         self.io_port
     }
@@ -320,9 +375,13 @@ impl Bus {
     // @source: anomie-regs#4213
     // @source: anomie-regs#4214
     // @source: anomie-regs#4216
+    // @source: anomie-regs#4016
+    // @source: anomie-regs#4017
+    // @source: anomie-regs#4218
     // @source: adr-0019
     // @source: adr-0021
     // @source: adr-0023
+    // @source: adr-0024
     fn read_target(&mut self, target: Target) -> Option<u8> {
         match target {
             Target::BBus(device) => match device {
@@ -365,6 +424,17 @@ impl Bus {
             }
             Target::Cpu(0x4212) => Some(self.status_byte()),
             Target::Cpu(register @ 0x4213..=0x4217) => Some(self.port_or_result(register)),
+            Target::Cpu(0x4016) => {
+                let data = self.ports.read_data(0);
+                Some(self.port_1_byte(data))
+            }
+            Target::Cpu(0x4017) => {
+                let data = self.ports.read_data(1);
+                Some(self.port_2_byte(data))
+            }
+            Target::Cpu(register @ 0x4218..=0x421F) => {
+                Some(self.ports.read_joypad(register - 0x4218))
+            }
             // $420D and every other internal register is write-only or not yet modelled.
             Target::Cpu(_) => None,
             memory => self.memory(memory),
@@ -388,9 +458,11 @@ impl Bus {
     // @source: anomie-regs#4208
     // @source: anomie-regs#4209
     // @source: anomie-regs#420a
+    // @source: anomie-regs#4016
     // @source: adr-0019
     // @source: adr-0021
     // @source: adr-0023
+    // @source: adr-0024
     fn write_target(&mut self, target: Target, value: u8) {
         match target {
             Target::Wram(offset) => {
@@ -404,9 +476,11 @@ impl Bus {
                 }
             }
             Target::BBus(device) => self.write_b_bus(device, value),
+            Target::Cpu(0x4016) => self.ports.write_latch(value),
             Target::Cpu(0x4200) => {
                 self.interrupts.write_enable(value);
                 self.timing.write_interrupt_enable(value, self.now);
+                self.ports.write_auto_read_enable(value);
             }
             Target::Cpu(0x4201) => self.write_io_port(value),
             Target::Cpu(0x4202) => self.math.write_multiplicand(value),
@@ -497,8 +571,9 @@ impl Bus {
     /// point 9). A refresh pauses the CPU (ADR 0019, point 6); a line start is reported to
     /// `observer`, after the frame end it may bring (ADR 0020, point 8), and line 0 clears
     /// the NMI flag; the NMI flag, a trigger point and a `$4201` latch change the interrupt
-    /// state and the counters (ADR 0021). The multiply and divide unit counts the cycle
-    /// (ADR 0023, point 2).
+    /// state and the counters (ADR 0021). A frame end closes the frame's polled flag and the
+    /// auto-read takes its next step (ADR 0024, points 6, 8 and 9). The multiply and divide
+    /// unit counts the cycle (ADR 0023, point 2).
     // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: anomie-timing#s-cpu/interrupts
     // @source: anomie-timing#s-cpu/registers
@@ -508,6 +583,7 @@ impl Bus {
     // @source: adr-0020
     // @source: adr-0021
     // @source: adr-0023
+    // @source: adr-0024
     fn charge<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
         self.math.clock();
         self.now = Cycles(self.now.0 + cycles);
@@ -522,6 +598,9 @@ impl Bus {
                     if line == 0 {
                         self.interrupts.end_vertical_blank();
                     }
+                    if frame_ended {
+                        self.ports.end_frame();
+                    }
                     if O::ACTIVE {
                         if frame_ended {
                             observer.on_frame_end(self.timing.frames());
@@ -532,6 +611,10 @@ impl Bus {
                 Some(Event::Nmi) => self.interrupts.set_nmi_flag(),
                 Some(Event::Irq) => self.interrupts.set_irq_flag(),
                 Some(Event::Latch { line, dot }) => self.counters.latch(line, dot),
+                Some(Event::Joypad { at }) => {
+                    let next = self.ports.auto_read_event(at);
+                    self.timing.schedule_joypad(next);
+                }
                 None => break,
             }
         }
