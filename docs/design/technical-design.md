@@ -272,7 +272,7 @@ Lines are 1364 master cycles, except a 1360-cycle NTSC line 240 in non-interlace
 1. **Owner sync.** Before an access to a component's registers or shared memory, that component runs to `now`: PPU `$2100–$213F`, APU ports `$2140–$217F`, coprocessor registers and their shared RAM.
 2. **Scanline rendering (`Fast`).** PPU catch-up renders every line whose start time is ≤ `now` and has not yet been drawn, using registers as they stand at that moment. A register write in the middle of line *L* therefore takes effect on line *L+1*, matching EMU-01. HDMA for a line runs as a deadline before that line renders.
 3. **APU laziness.** The SPC700 and S-DSP run only on port access, at frame end, and when the audio buffer needs samples. This is the largest performance win of the model.
-4. **General DMA.** A write to `$420B` executes the transfer inside the bus, advancing the clock per byte and checking the HDMA deadline between bytes, so HDMA pre-empts DMA (EMU-05).
+4. **General DMA.** A write to `$420B` executes the transfer inside the bus, advancing the clock per byte and checking the HDMA deadline between bytes, so HDMA pre-empts DMA (EMU-05). The transfer starts at the start of the second CPU cycle after the write, and the other deadlines are serviced between its bytes too (ADR 0025).
 5. **Stop conditions.** `run(Stop)` checks its target after each instruction. A `Watch` stop is raised by the observer layer and also ends at the next instruction boundary. The frame boundary is the first instruction boundary at or after vertical-blank start, which is also when the next frame's input is latched (FND-04).
 
 The diagram below shows the path of one CPU bus access.
@@ -681,8 +681,8 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 
 ### M2 — Bus, DMA and video
 
-- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82), the multiply and divide unit, WRIO and RDIO (ADR 0023, #83); the controller ports and the auto-joypad read (ADR 0024, #84).
-- [ ] Deadline table and catch-up in `BusView`, and NTSC and PAL frame timing (ADR 0020, #81); DMA and HDMA.
+- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82), the multiply and divide unit, WRIO and RDIO (ADR 0023, #83); the controller ports and the auto-joypad read (ADR 0024, #84); general DMA (ADR 0025, #85).
+- [ ] Deadline table and catch-up in `BusView`, and NTSC and PAL frame timing (ADR 0020, #81); HDMA.
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System` (ADR 0018, #79); `impl System for Snes` waits for the state envelope in M4.
 - [ ] Own test cartridges in 65816 assembly built with ca65/ld65, the built `.sfc` files committed and rebuilt byte-identically in CI (ADR 0013, #73).

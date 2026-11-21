@@ -86,7 +86,7 @@ const fn decode_system_area(offset: u16) -> Target {
 // @source: anomie-memmap#hardware/address-bus-b
 // @source: anomie-regs#2140
 // @source: adr-0019
-const fn decode_b_bus(address: u8) -> BBus {
+pub(crate) const fn decode_b_bus(address: u8) -> BBus {
     match address {
         0x00..=0x3F => BBus::Ppu(address),
         0x40..=0x7F => BBus::Apu(address & 0x03),

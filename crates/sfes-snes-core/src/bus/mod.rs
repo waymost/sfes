@@ -7,17 +7,19 @@
 // @source: adr-0021
 // @source: adr-0023
 // @source: adr-0024
+// @source: adr-0025
 //! The bus state and the main CPU's view of it (ADR 0019).
 //!
 //! [`Bus`] owns WRAM, the cartridge, the data bus value, the WRAM port, `$420D`, the
 //! interrupt state, `$4201`, the counter latch, the multiply and divide unit (ADR 0023), the
-//! controller ports (ADR 0024), the clock and the scheduler. [`BusView`]
+//! controller ports (ADR 0024), the DMA channels (ADR 0025), the clock and the scheduler. [`BusView`]
 //! implements `Bus65816` over it: it records the interrupt lines (ADR 0021), decodes each
 //! address, syncs the register's owner, performs the access, charges its time, services the
 //! deadlines that fell due (ADR 0020) and tells the observer.
 
 mod counters;
 mod decode;
+mod dma;
 mod interrupts;
 mod math;
 mod ports;
@@ -33,6 +35,7 @@ use crate::{
     bus::{
         counters::CounterLatch,
         decode::{BBus, FAST, Target, access_cycles, decode},
+        dma::Dma,
         interrupts::Interrupts,
         math::Math,
         ports::Ports,
@@ -112,6 +115,8 @@ pub(crate) struct Bus {
     /// The pads, $4016, the auto-joypad read into $4218–$421F and the polled flag
     /// (ADR 0024).
     pub(crate) ports: Ports,
+    /// $420B and $4300–$437F: the DMA channels and a requested transfer (ADR 0025).
+    pub(crate) dma: Dma,
     /// Master cycles since power-on.
     pub(crate) now: Cycles,
     /// Line and frame position, the refresh schedule and the deadline table.
@@ -131,6 +136,7 @@ impl fmt::Debug for Bus {
             .field("counters", &self.counters)
             .field("math", &self.math)
             .field("ports", &self.ports)
+            .field("dma", &self.dma)
             .field("now", &self.now)
             .field("timing", &self.timing)
             .finish_non_exhaustive()
@@ -147,6 +153,7 @@ impl Bus {
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
+    // @source: adr-0025
     pub(crate) fn power_on(cartridge: Cartridge, timing: Timing, seed: u64) -> Self {
         let mut wram = vec![0; WRAM_SIZE].into_boxed_slice();
         SplitMix64::new(seed).fill(&mut wram);
@@ -161,6 +168,7 @@ impl Bus {
             counters: CounterLatch::power_on(),
             math: Math::power_on(),
             ports: Ports::power_on(),
+            dma: Dma::power_on(),
             now: Cycles(0),
             timing,
         }
@@ -169,9 +177,10 @@ impl Bus {
     /// Sets the registers reset changes to their reset values: `$2181–$2183` and `$420D`
     /// are 0 (`fullsnes#snesiomap`, ADR 0019), `$4200` and the interrupt flags are clear and
     /// `$4201` is `$FF` (ADR 0021, point 8), and `$4016` bit 0 and the auto-read are off with
-    /// a read in progress abandoned (ADR 0024, points 3, 5 and 7). WRAM, the data bus, the
-    /// counter latch, the multiply and divide unit and `$4218–$421F` are kept (ADR 0018,
-    /// ADR 0021, ADR 0023, ADR 0024).
+    /// a read in progress abandoned (ADR 0024, points 3, 5 and 7), and `$420B` is 0 with a
+    /// transfer not yet started dropped (ADR 0025, point 2). WRAM, the data bus, the
+    /// counter latch, the multiply and divide unit, `$4218–$421F` and the DMA channels'
+    /// registers are kept (ADR 0018, ADR 0021, ADR 0023, ADR 0024, ADR 0025).
     // @source: fullsnes#snesiomap
     // @source: fullsnes#snesmemorycontrol
     // @source: anomie-regs#4202
@@ -180,12 +189,16 @@ impl Bus {
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
+    // @source: anomie-regs#420b
+    // @source: anomie-regs#43x0
+    // @source: adr-0025
     pub(crate) fn reset(&mut self) {
         self.wram_port_address = 0;
         self.fast_rom = false;
         self.interrupts = Interrupts::power_on();
         self.io_port = IO_PORT_RESET;
         self.ports.reset();
+        self.dma.reset();
     }
 
     /// The interrupt requests as the CPU sees them at an instruction boundary: those
@@ -216,6 +229,9 @@ impl Bus {
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
+    // @source: anomie-regs#43x0
+    // @source: fullsnes#snesdmaandhdmachannel07registers
+    // @source: adr-0025
     pub(crate) fn peek(&self, address: u32) -> (u8, bool) {
         match decode(self.cartridge.map(), address) {
             Target::BBus(BBus::WramData) => (self.wram_port_byte(), true),
@@ -231,6 +247,10 @@ impl Bus {
             Target::Cpu(register @ 0x4218..=0x421F) => {
                 (self.ports.joypad(register - 0x4218), false)
             }
+            Target::Cpu(register @ 0x4300..=0x43FF) => (
+                self.dma.read(register).unwrap_or(self.open_bus_value),
+                false,
+            ),
             target => (self.memory(target).unwrap_or(self.open_bus_value), false),
         }
     }
@@ -382,7 +402,10 @@ impl Bus {
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
-    fn read_target(&mut self, target: Target) -> Option<u8> {
+    // @source: anomie-regs#43x0
+    // @source: fullsnes#snesdmaandhdmachannel07registers
+    // @source: adr-0025
+    pub(crate) fn read_target(&mut self, target: Target) -> Option<u8> {
         match target {
             Target::BBus(device) => match device {
                 BBus::Ppu(register) => {
@@ -435,6 +458,7 @@ impl Bus {
             Target::Cpu(register @ 0x4218..=0x421F) => {
                 Some(self.ports.read_joypad(register - 0x4218))
             }
+            Target::Cpu(register @ 0x4300..=0x43FF) => self.dma.read(register),
             // $420D and every other internal register is write-only or not yet modelled.
             Target::Cpu(_) => None,
             memory => self.memory(memory),
@@ -463,7 +487,11 @@ impl Bus {
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
-    fn write_target(&mut self, target: Target, value: u8) {
+    // @source: anomie-regs#420b
+    // @source: anomie-regs#43x0
+    // @source: fullsnes#snesdmaandhdmachannel07registers
+    // @source: adr-0025
+    pub(crate) fn write_target(&mut self, target: Target, value: u8) {
         match target {
             Target::Wram(offset) => {
                 if let Some(byte) = self.wram.get_mut(offset as usize) {
@@ -492,7 +520,9 @@ impl Bus {
             Target::Cpu(0x4208) => self.timing.write_horizontal_timer_high(value, self.now),
             Target::Cpu(0x4209) => self.timing.write_vertical_timer_low(value, self.now),
             Target::Cpu(0x420A) => self.timing.write_vertical_timer_high(value, self.now),
+            Target::Cpu(0x420B) => self.dma.write_enable(value),
             Target::Cpu(0x420D) => self.fast_rom = value & FAST_ROM != 0,
+            Target::Cpu(register @ 0x4300..=0x43FF) => self.dma.write(register, value),
             Target::Rom(_) | Target::Cpu(_) | Target::Unanswered => {}
         }
     }
@@ -519,7 +549,7 @@ impl Bus {
     // @source: anomie-regs#2133
     // @source: adr-0019
     // @source: adr-0020
-    fn write_b_bus(&mut self, device: BBus, value: u8) {
+    pub(crate) fn write_b_bus(&mut self, device: BBus, value: u8) {
         let [low, middle, high, _] = self.wram_port_address.to_le_bytes();
         match device {
             BBus::Ppu(register) => {
@@ -573,7 +603,8 @@ impl Bus {
     /// the NMI flag; the NMI flag, a trigger point and a `$4201` latch change the interrupt
     /// state and the counters (ADR 0021). A frame end closes the frame's polled flag and the
     /// auto-read takes its next step (ADR 0024, points 6, 8 and 9). The multiply and divide
-    /// unit counts the cycle (ADR 0023, point 2).
+    /// unit counts the cycle (ADR 0023, point 2), and so does a requested DMA transfer's
+    /// countdown to its pause (ADR 0025, point 3).
     // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: anomie-timing#s-cpu/interrupts
     // @source: anomie-timing#s-cpu/registers
@@ -584,8 +615,25 @@ impl Bus {
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
+    // @source: anomie-timing#s-cpu/dma
+    // @source: adr-0025
     fn charge<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
         self.math.clock();
+        self.dma.cycle_ended();
+        self.advance(cycles, observer);
+    }
+
+    /// Advances the clock by `cycles` master cycles of a CPU cycle or a DMA transfer, then
+    /// services in time order every deadline that fell due (ADR 0020, point 9; ADR 0025,
+    /// point 9).
+    // @source: anomie-timing#s-cpu/clocks-and-refresh
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0019
+    // @source: adr-0020
+    // @source: adr-0021
+    // @source: adr-0024
+    // @source: adr-0025
+    fn advance<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
         self.now = Cycles(self.now.0 + cycles);
         while self.now >= self.timing.next_deadline() {
             match self.timing.service(self.now) {
@@ -655,7 +703,11 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
+    // @source: anomie-timing#s-cpu/dma
+    // @source: adr-0025
     fn read(&mut self, address: Addr24, pins: Pins) -> u8 {
+        let cycles = access_cycles(address, self.bus.fast_rom);
+        self.bus.start_due_dma(cycles, self.observer);
         self.bus.interrupts.record();
         let at = self.bus.now;
         let raw = address.get();
@@ -677,8 +729,7 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
         if O::ACTIVE {
             self.observer.on_read(BusId::Cpu, raw, value, at);
         }
-        self.bus
-            .charge(access_cycles(address, self.bus.fast_rom), self.observer);
+        self.bus.charge(cycles, self.observer);
         value
     }
 
@@ -690,14 +741,17 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
+    // @source: anomie-timing#s-cpu/dma
+    // @source: adr-0025
     fn write(&mut self, address: Addr24, value: u8, _pins: Pins) {
+        // The access's speed is the one in force when it starts, so a write to $420D takes
+        // effect from the next access.
+        let cycles = access_cycles(address, self.bus.fast_rom);
+        self.bus.start_due_dma(cycles, self.observer);
         self.bus.interrupts.record();
         let at = self.bus.now;
         let raw = address.get();
         let target = decode(self.bus.cartridge.map(), raw);
-        // The access's speed is the one in force when it starts, so a write to $420D takes
-        // effect from the next access.
-        let cycles = access_cycles(address, self.bus.fast_rom);
         self.bus.write_target(target, value);
         self.bus.open_bus_value = value;
         if O::ACTIVE {
@@ -711,7 +765,10 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
+    // @source: anomie-timing#s-cpu/dma
+    // @source: adr-0025
     fn idle(&mut self, _address: Addr24, _pins: Pins) {
+        self.bus.start_due_dma(FAST, self.observer);
         self.bus.interrupts.record();
         self.bus.charge(FAST, self.observer);
     }

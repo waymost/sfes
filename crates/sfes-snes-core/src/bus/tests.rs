@@ -1,9 +1,10 @@
 // @source: adr-0019
-//! Unit tests of the bus: decode, the WRAM port, open bus, access speed and refresh.
+//! Unit tests of the bus: decode, the WRAM port, open bus, access speed, refresh, the
+//! interrupt and timer registers, the math unit, the controller ports and DMA.
 
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 
-use sfes_api::{Addr24, Buttons, Cycles, NoopObserver};
+use sfes_api::{Addr24, Buttons, Cycles, DmaEvent, NoopObserver};
 use sfes_snes_cart::{Cartridge, Options, Region};
 use sfes_snes_cpu::{Bus65816, Pins};
 
@@ -565,4 +566,279 @@ fn reset_clears_the_latch_and_the_enable_and_keeps_joy1() {
     assert_eq!(read(&mut bus, 0x00_4016) & 0x03, 1);
     assert_eq!(read(&mut bus, 0x00_4016) & 0x03, 0);
     assert_eq!(read(&mut bus, 0x00_4219), 0x80);
+}
+
+/// An observer that keeps every byte a DMA moves.
+#[derive(Clone, Debug, Default)]
+struct DmaLog(Vec<DmaEvent>);
+
+impl Observer for DmaLog {
+    // @source: adr-0025
+    fn on_dma(&mut self, event: &DmaEvent) {
+        self.0.push(*event);
+    }
+}
+
+/// Sets channel `channel`'s `$43x0–$43x6` through CPU writes.
+// @source: anomie-regs#43x0
+// @source: anomie-regs#43x1
+// @source: anomie-regs#43x2
+// @source: anomie-regs#43x5
+fn set_channel(
+    bus: &mut Bus,
+    channel: u32,
+    control: u8,
+    b_address: u8,
+    a_address: u32,
+    count: u16,
+) {
+    let base = 0x00_4300 | (channel << 4);
+    let [low, high, bank, _] = a_address.to_le_bytes();
+    let [count_low, count_high] = count.to_le_bytes();
+    for (register, value) in [control, b_address, low, high, bank, count_low, count_high]
+        .into_iter()
+        .enumerate()
+    {
+        write(bus, base + u32::try_from(register).expect("small"), value);
+    }
+}
+
+/// "STA $420B : NOP": the `$420B` write, the next opcode fetched from `next`, then the
+/// NOP's internal cycle, before which the pause falls. Returns the master cycles from the
+/// start of that internal cycle to its end, and the bytes moved.
+// @source: anomie-timing#s-cpu/dma
+// @source: adr-0025
+fn start_dma(bus: &mut Bus, channels: u8, next: u32) -> (u64, Vec<DmaEvent>) {
+    let mut log = DmaLog::default();
+    BusView::new(bus, &mut log).write(Addr24::new(0x00_420B), channels, Pins::empty());
+    BusView::new(bus, &mut log).read(Addr24::new(next), Pins::empty());
+    let before = bus.now.0;
+    BusView::new(bus, &mut log).idle(Addr24::new(0), Pins::empty());
+    (bus.now.0 - before, log.0)
+}
+
+// @source: anomie-regs#420b
+// @source: anomie-regs#43x0
+// @source: fullsnes#snesdmaandhdmachannel07registers
+// @source: adr-0025
+#[test]
+fn the_cpu_reads_and_writes_the_channel_registers_and_not_mdmaen() {
+    let mut bus = bus();
+    assert_eq!(bus.peek(0x00_4302), (0xFF, false));
+    write(&mut bus, 0x80_4362, 0x9A);
+    assert_eq!(read(&mut bus, 0x00_4362), 0x9A);
+    assert_eq!(bus.peek(0x00_4362), (0x9A, false));
+    // $420B is write-only and $43xC and $4380 are open bus.
+    read(&mut bus, 0x00_8077);
+    assert_eq!(read(&mut bus, 0x00_420B), 0x77);
+    assert_eq!(read(&mut bus, 0x00_436C), 0x77);
+    assert_eq!(read(&mut bus, 0x00_4380), 0x77);
+}
+
+// @source: anomie-timing#s-cpu/dma
+// @source: anomie-regs#dma-and-hdma/dma
+// @source: anomie-regs#2180
+// @source: adr-0025
+#[test]
+fn the_pause_reproduces_anomies_four_worked_examples() {
+    // The pause starts 14 cycles after `start`: 6 for the $420B write, 8 for the opcode
+    // fetch from Slow ROM. Pauses 6, 4, 2 and 0 cycles past a multiple of 8 take 48, 48,
+    // 48 and 54 cycles (anomie-timing), then the NOP's 6-cycle internal cycle runs.
+    // (start, wait to a multiple of 8, pause)
+    for (start, wait, pause) in [(104, 2, 48), (102, 4, 48), (100, 6, 48), (106, 8, 54)] {
+        let mut bus = bus();
+        set_channel(&mut bus, 0, 0x00, 0x80, 0x00_8000, 3);
+        bus.now = Cycles(start);
+        let (cost, log) = start_dma(&mut bus, 0x01, 0x00_8000);
+        assert_eq!(cost, pause + 6, "pause at {}", start + 14);
+        // The three ROM bytes 0, 1 and 2 reach WRAM through $2180.
+        assert_eq!(&bus.wram[0..3], &[0, 1, 2]);
+        assert_eq!(bus.wram_port_address, 3);
+        assert_eq!(log.len(), 3);
+        // The first byte's slot follows the wait to 8, the transfer's 8 and the channel's 8.
+        let first = start + 14 + wait + 16;
+        for (index, event) in (0..).zip(&log) {
+            assert_eq!(
+                *event,
+                DmaEvent {
+                    channel: 0,
+                    hdma: false,
+                    source: 0x00_8000 + index,
+                    destination: 0x2180,
+                    value: u8::try_from(index).expect("small"),
+                    at: Cycles(first + 8 * u64::from(index)),
+                }
+            );
+        }
+        // The count ends at 0 and the address has moved on; the bank has not.
+        assert_eq!(bus.peek(0x00_4305), (0x00, false));
+        assert_eq!(bus.peek(0x00_4306), (0x00, false));
+        assert_eq!(bus.peek(0x00_4302), (0x03, false));
+        assert_eq!(bus.peek(0x00_4304), (0x00, false));
+    }
+}
+
+// @source: anomie-regs#43x0
+// @source: anomie-regs#43x1
+// @source: anomie-regs#43x5
+// @source: adr-0025
+#[test]
+fn a_four_register_mode_wraps_within_21xx_and_stops_at_the_count() {
+    let mut bus = bus();
+    set_channel(&mut bus, 3, 0x04, 0xFE, 0x00_8010, 5);
+    let (_, log) = start_dma(&mut bus, 0x08, 0x00_8000);
+    let destinations = log
+        .iter()
+        .map(|event| event.destination)
+        .collect::<Vec<_>>();
+    assert_eq!(destinations, [0x21FE, 0x21FF, 0x2100, 0x2101, 0x21FE]);
+    assert!(log.iter().all(|event| event.channel == 3));
+}
+
+// @source: anomie-regs#43x0
+// @source: anomie-regs#43x5
+// @source: anomie-regs#dma-and-hdma/dma
+// @source: adr-0020
+// @source: adr-0025
+#[test]
+fn a_count_of_0_moves_65536_bytes_while_lines_go_on() {
+    let mut bus = bus();
+    // Fixed address, to $21FF where nothing answers.
+    set_channel(&mut bus, 0, 0x08, 0xFF, 0x00_8000, 0);
+    let (_, log) = start_dma(&mut bus, 0x01, 0x00_8000);
+    assert_eq!(log.len(), 0x1_0000);
+    assert_eq!(bus.peek(0x00_4305), (0x00, false));
+    assert_eq!(bus.peek(0x00_4302), (0x00, false));
+    assert_eq!(bus.peek(0x00_4303), (0x80, false));
+    // 524288 cycles of bytes span more than 384 lines.
+    assert!(bus.timing.lines() >= 384);
+}
+
+// @source: anomie-regs#420b
+// @source: anomie-timing#s-cpu/dma
+// @source: fullsnes#snesdmaandhdmastartenableregisters
+// @source: adr-0025
+#[test]
+fn several_channels_run_in_order_each_with_its_overhead() {
+    let mut bus = bus();
+    set_channel(&mut bus, 2, 0x00, 0xFF, 0x00_8020, 1);
+    set_channel(&mut bus, 0, 0x00, 0xFF, 0x00_8000, 2);
+    bus.now = Cycles(100);
+    let (cost, log) = start_dma(&mut bus, 0x05, 0x00_8000);
+    let channels = log.iter().map(|event| event.channel).collect::<Vec<_>>();
+    assert_eq!(channels, [0, 0, 2]);
+    // From the pause at 114: 6 to 120, 8, then 8 + 16 and 8 + 8, 54 in all; a whole
+    // number of 6-cycle clocks needs 6 more, then the internal cycle's 6.
+    assert_eq!(cost, 6 + 8 + 24 + 16 + 6 + 6);
+    // Channel 1 was not set and keeps its count.
+    assert_eq!(bus.peek(0x00_4315), (0xFF, false));
+}
+
+// @source: anomie-regs#dma-and-hdma/dma
+// @source: anomie-regs#43x2
+// @source: fullsnes#snesunpredictablethings
+// @source: anomie-regs#4214
+// @source: adr-0023
+// @source: adr-0025
+#[test]
+fn the_a_bus_does_not_reach_b_bus_dma_or_slow_registers() {
+    // The opcode fetched before the pause, $42, is the open-bus value.
+    for (address, expected) in [
+        (0x00_2118, 0x42), // a B-bus register through the A bus
+        (0x00_4016, 0x42), // $4000-$41FF
+        (0x00_4017, 0x5E), // with bits 4-2 set
+        (0x00_4300, 0x42), // the DMA registers
+        (0x00_420B, 0x42),
+        (0x00_4214, 0x00), // $4210-$421F work: the power-on quotient
+        (0x00_8055, 0x55), // ROM
+    ] {
+        let mut bus = bus();
+        set_channel(&mut bus, 0, 0x00, 0x80, address, 1);
+        start_dma(&mut bus, 0x01, 0x00_8042);
+        assert_eq!(bus.wram[0], expected, "{address:#08x}");
+    }
+    // Writes to them are lost: channel 1's control is untouched.
+    let mut bus = bus();
+    set_channel(&mut bus, 0, 0x80, 0x80, 0x00_4310, 1);
+    start_dma(&mut bus, 0x01, 0x00_8000);
+    assert_eq!(bus.peek(0x00_4310), (0xFF, false));
+}
+
+// @source: anomie-regs#2180
+// @source: anomie-regs#2181
+// @source: anomie-regs#dma-and-hdma/dma
+// @source: fullsnes#snesmemoryworkramaccess
+// @source: adr-0025
+#[test]
+fn wram_through_both_buses_leaves_the_port_alone() {
+    // From WRAM to $2180: WRAM is not written and the port does not move.
+    let mut bus = bus();
+    let before = bus.wram[0];
+    set_channel(&mut bus, 0, 0x00, 0x80, 0x7E_0100, 2);
+    start_dma(&mut bus, 0x01, 0x00_8000);
+    assert_eq!(bus.wram[0], before);
+    assert_eq!(bus.wram_port_address, 0);
+    // From $2180 to WRAM: WRAM takes the open-bus value.
+    let mut bus = self::bus();
+    set_channel(&mut bus, 0, 0x80, 0x80, 0x7E_0100, 1);
+    start_dma(&mut bus, 0x01, 0x00_8042);
+    assert_eq!(bus.wram[0x100], 0x42);
+    assert_eq!(bus.wram_port_address, 0);
+    // From WRAM to $2181: no effect.
+    let mut bus = self::bus();
+    set_channel(&mut bus, 0, 0x00, 0x81, 0x7E_0100, 1);
+    start_dma(&mut bus, 0x01, 0x00_8000);
+    assert_eq!(bus.wram_port_address, 0);
+}
+
+// @source: anomie-timing#s-cpu/clocks-and-refresh
+// @source: anomie-timing#s-cpu/dma
+// @source: adr-0019
+// @source: adr-0025
+#[test]
+fn a_refresh_pauses_a_transfer_after_the_slot_it_falls_in() {
+    let mut bus = bus();
+    set_channel(&mut bus, 0, 0x08, 0xFF, 0x00_8000, 60);
+    bus.now = Cycles(100);
+    let (cost, log) = start_dma(&mut bus, 0x01, 0x00_8000);
+    // Slots from 136; the refresh due at 538 falls in the slot at 536 and follows it.
+    assert_eq!(log[50].at, Cycles(536));
+    assert_eq!(log[51].at, Cycles(536 + 8 + 40));
+    // The bytes end at 656, 542 cycles after the pause; 4 more reach a whole clock.
+    assert_eq!(cost, 542 + 4 + 6);
+}
+
+// @source: anomie-regs#4203
+// @source: anomie-regs#4216
+// @source: fullsnes#snesmathsmultiplydivide
+// @source: adr-0023
+// @source: adr-0025
+#[test]
+fn the_math_unit_does_not_count_during_a_transfer() {
+    let mut bus = bus();
+    set_channel(&mut bus, 0, 0x08, 0xFF, 0x00_8000, 100);
+    write(&mut bus, 0x00_4202, 200);
+    write(&mut bus, 0x00_4203, 250);
+    // Cycles 1 to 3, the transfer before the third; then 4 to 7, and a read in the eighth.
+    start_dma(&mut bus, 0x01, 0x00_8000);
+    for _ in 0..4 {
+        idle(&mut bus);
+    }
+    assert_eq!(read(&mut bus, 0x00_4216), 0x00);
+    assert_eq!(read(&mut bus, 0x00_4216), 0x50);
+}
+
+// @source: anomie-regs#420b
+// @source: adr-0025
+#[test]
+fn reset_drops_a_transfer_not_yet_started() {
+    let mut bus = bus();
+    set_channel(&mut bus, 0, 0x00, 0xFF, 0x00_8000, 4);
+    write(&mut bus, 0x00_420B, 0x01);
+    bus.reset();
+    read(&mut bus, 0x00_8000);
+    let before = bus.now.0;
+    idle(&mut bus);
+    assert_eq!(bus.now.0 - before, 6);
+    assert_eq!(bus.peek(0x00_4305), (0x04, false));
 }

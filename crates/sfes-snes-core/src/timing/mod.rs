@@ -284,6 +284,14 @@ impl Timing {
         Cycles(earliest + wait)
     }
 
+    /// When the frame started at power-on or the last reset: DMA's 8-cycle grid counts from
+    /// it (ADR 0025, point 4).
+    // @source: anomie-timing#s-cpu/dma
+    // @source: adr-0025
+    pub(crate) const fn origin(&self) -> Cycles {
+        self.origin
+    }
+
     /// Whether vertical blank has begun and not yet ended: `$4212` bit 7 (ADR 0021,
     /// point 6).
     // @source: anomie-timing#s-cpu/registers
