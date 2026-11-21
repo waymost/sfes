@@ -86,6 +86,7 @@ impl State {
             p: Flags::from_bits_retain(self.p),
             e: emulation,
             run: RunState::Running,
+            delayed_irq_disable: None,
         }
     }
 }

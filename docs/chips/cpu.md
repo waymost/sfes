@@ -30,6 +30,7 @@ The model is `Cpu65816` in [`registers.rs`](../../crates/sfes-snes-cpu/src/regis
 | `p` | Processor Status | 8 bits | See below. |
 | `e` | Emulation flag | 1 bit | Not part of P; exchanged with the carry by `XCE` (2.8). |
 | `run` | Run state | | `Running`, `Waiting` (after `WAI`) or `Stopped` (after `STP`). |
+| `delayed_irq_disable` | Delayed I flag | | The I flag the next IRQ check uses, when the last step changed P in its final cycle; `None` otherwise (ADR 0022). |
 
 ### The status register
 
@@ -68,7 +69,7 @@ An instruction such as `LDA` exists in an 8-bit and a 16-bit form, chosen by the
 [ADR 0004](../adr/0004-per-cycle-bus-contract.md) defines both.
 
 - **Bus.** The core makes one call to `Bus65816::read`, `write` or `idle` for every clock cycle. Each call carries the cycle's 24-bit address and a `Pins` value with the eight output signals VDA, VPA, VPB, RWB, E, M, X and MLB (datasheet 2.17 to 2.28). The bus is the only clock.
-- **Step.** `Cpu65816::step` runs one instruction, one interrupt entry, one byte of a block move, or one idle cycle while waiting or stopped. It reads the interrupt requests once, before the opcode fetch.
+- **Step.** `Cpu65816::step` runs one instruction, one interrupt entry, one byte of a block move, or one idle cycle while waiting or stopped. It reads the interrupt requests once, before the opcode fetch, and tests an IRQ against the I flag from before the previous step's last cycle ([ADR 0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md)).
 
 Every instruction starts the same way: a read at PBR,PC with VDA and VPA both active, which is how the chip marks an opcode fetch (2.26; cycle 1 of every row of Table 5-7).
 
@@ -353,12 +354,19 @@ Emulation mode leaves out the PBR push (note 7), so its sequences are one cycle 
 
 BRK and COP fetch a signature byte that nothing uses (7.22, 7.15). They push P as it is, so in emulation mode bit 4, the break flag, is set. A hardware interrupt in emulation mode pushes bit 4 clear (note 11), which is how a handler on the shared BRK/IRQ vector tells the two apart. The 6502.org tutorial calls the break flag "bit 5" but tests `#$10`; the datasheet's bit 4 is right.
 
-**Hardware NMI and IRQ** are taken by `step` in place of an instruction, as ADR 0004 sets out: an NMI whenever one is latched, an IRQ when the I flag is clear, with the NMI first (7.19). Cycle 1 reads the next opcode with VDA and VPA active and discards it. Cycle 2 is internal at the same address. The pushes and the vector follow: 8 cycles in native mode, 7 in emulation mode. The program counter pushed is that of the instruction not executed.
+**Hardware NMI and IRQ** are taken by `step` in place of an instruction, as ADR 0004 sets out: an NMI whenever one is latched, an IRQ when IRQs are enabled at the boundary, with the NMI first (7.19). Cycle 1 reads the next opcode with VDA and VPA active and discards it. Cycle 2 is internal at the same address. The pushes and the vector follow: 8 cycles in native mode, 7 in emulation mode. The program counter pushed is that of the instruction not executed.
 
 **RTI** (row 22g) runs two internal cycles, then pulls P, the program counter (low byte first) and, in native mode, PBR. The program counter is used as pulled, unlike RTS's. The pulled P takes effect after the last cycle, through `set_status`: in emulation mode M and X stay set, and a set X flag clears the index high bytes. Every cycle of RTI reports the old M and X signals, as the vectors record.
 
+**The IRQ check after a change of I.** The check happens just before an instruction's final cycle (`anomie-timing#s-cpu/interrupts`). PLP, REP, SEP and the flag instructions of row 19a change P in that final cycle, so the check at the next boundary still sees the old I flag ([ADR 0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md)):
+- after CLI, REP #$04 or a PLP that clears I, one more instruction runs before a pending IRQ is taken;
+- after SEI, SEP #$04 or a PLP that sets I, a pending IRQ is still taken, and the P it pushes has I set.
+
+Each of these instructions stores the I flag from before its final cycle in `delayed_irq_disable`. `irq_disabled_at_boundary()` returns that value, or P's I flag when there is none, and every step clears the field. RTI pulls P, and BRK and COP set I, before their last cycle, so their change is seen at once. The unit tests in `step.rs` include anomie-timing's four examples.
+
 **WAI** (row 19d) and **STP** (row 19c) run two internal cycles at the next instruction's address, then wait or stop. Each later step of a waiting or stopped processor is one more internal cycle there (ADR 0011).
-- A waiting processor wakes for an NMI, or for an IRQ with the I flag clear, and runs the interrupt sequence in that same step. Its first cycle, at the address after WAI, is the last cycle of row 19d.
+- A request ends the wait two internal cycles later, at the same address (`anomie-timing#s-cpu/instructions`, note 9; ADR 0022). Those cycles start the step that sees the request.
+- For an NMI, or an IRQ with the I flag clear, that step then runs the interrupt sequence, from its opcode fetch at the address after WAI.
 - With the I flag set, an IRQ ends the wait without the handler, and the same step runs the next instruction (7.13).
 - A stopped processor ignores both requests. Only reset restarts it (7.14).
 
@@ -426,8 +434,9 @@ The documents left these points open or got them wrong. Each ADR quotes the sour
 | [0008](../adr/0008-emulation-stack-in-calls-and-indexed-jump-pointers.md) | Which instructions leave page 1 in emulation mode; the `(a,x)` pointer cycles are data cycles | high |
 | [0009](../adr/0009-emulation-stack-in-plb.md) | PLB leaves page 1 in emulation mode | medium |
 | [0010](../adr/0010-wdm-second-cycle.md) | WDM's second cycle is internal | high |
-| [0011](../adr/0011-reset-and-halted-cycles.md) | The reset sequence, halted cycles, WAI wake-up, DBR kept by interrupts | medium for reset; high for the rest |
+| [0011](../adr/0011-reset-and-halted-cycles.md) | The reset sequence, halted cycles, WAI wake-up (superseded by 0022), DBR kept by interrupts | medium for reset; high for the rest |
 | [0012](../adr/0012-misprinted-dex-and-tay-entries.md) | The misprinted DEX and TAY entries | high |
+| [0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md) | The IRQ check uses the I flag from before the last cycle; WAI ends two internal cycles after a request (amends 0004, supersedes 0011 point 3) | high for the I flag; medium for the end of WAI |
 
 ADRs 0001 to 0003 predate M1 and cover the machine as a whole.
 
@@ -439,7 +448,7 @@ The milestone's exit criterion is EMU-02 (feature specification, section 3). It 
 | --- | --- |
 | All 256 opcodes match the vectors in native and emulation mode | All 512 files pass: 5,080,400 tests, none failing. CI runs the full set on Linux and the first 500 tests of each file on macOS and Windows, with missing vectors treated as a failure. |
 | Including the cycle-by-cycle bus record | Every cycle's address, value and all eight signals are compared (ADR 0004). |
-| Interrupts, WAI and STP covered by separate tests | The project's own tests in `instructions/interrupt.rs` and `step.rs` cover NMI and IRQ in both modes, NMI before IRQ, a masked IRQ, BRK, COP, RTI, WAI woken into the handler and past it, STP, and reset from the stopped and waiting states. BRK, COP, RTI, WAI and STP also pass their vector files. ABORT is not modelled (ADR 0004). |
+| Interrupts, WAI and STP covered by separate tests | The project's own tests in `instructions/interrupt.rs` and `step.rs` cover NMI and IRQ in both modes, NMI before IRQ, a masked IRQ, BRK, COP, RTI, WAI woken into the handler and past it, STP, and reset from the stopped and waiting states. Since ADR 0022 they also cover the delayed I flag, with anomie-timing's four examples, and the two cycles that end WAI. BRK, COP, RTI, WAI and STP also pass their vector files. ABORT is not modelled (ADR 0004). |
 
 Two details differ from EMU-02's wording:
 - **Test counts.** EMU-02 expects 10,000 tests per file. The MVN and MVP files hold 100 each, but each test is a whole move of up to 1,000 bytes. Every other file holds 10,000.
