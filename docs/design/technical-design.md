@@ -230,7 +230,7 @@ pub trait Bus65816 {
 }
 ```
 
-The core makes exactly one of the three cycle calls for every clock cycle, each with the cycle's address and a `Pins` bitflags value holding the eight output signals the test vectors record (VDA, VPA, VPB, RWB, E, M, X, MLB). A bus that ignores `pins` pays nothing for them after inlining. The bus owns the NMI edge latch and clears it when it sees the vector-pull read of the NMI vector (ADR 0004).
+The core makes exactly one of the three cycle calls for every clock cycle, each with the cycle's address and a `Pins` bitflags value holding the eight output signals the test vectors record (VDA, VPA, VPB, RWB, E, M, X, MLB). A bus that ignores `pins` pays nothing for them after inlining. The bus owns the NMI edge latch and clears it when it sees the vector-pull read of the NMI vector (ADR 0004). It records the latch and the IRQ line at the start of every cycle, and `interrupts()` returns the record from the start of the step's last cycle, where the 5A22 makes its check (ADR 0021).
 
 The main CPU's `BusView` and the SA-1's bus inside `sfes-snes-cart` both implement it, so one `Cpu65816` type serves both (MS-01). Static dispatch through `&mut impl Bus65816` keeps every access inlinable.
 
@@ -256,8 +256,9 @@ The 65C816 drives time: every bus access advances the master clock by its cost, 
 The bus keeps a small fixed array of the next scheduled events, each a `Cycles` value:
 
 - The DRAM refresh pause and the next line start, which brings the field toggle, vertical blank and the frame boundary (FND-04; ADR 0019, ADR 0020).
-- NMI at the start of vertical blank.
-- H/V IRQ at its exact dot.
+- The NMI flag at H=0.5 of vertical blank's first line (ADR 0021).
+- The H/V IRQ at its trigger point, from anomie's master-cycle formula (ADR 0021).
+- The `$4201` counter latch, one dot after the write (ADR 0021).
 - HDMA setup at frame start and the per-line HDMA transfer.
 - Auto-joypad read start and completion.
 - Coprocessor interrupts and timers.
@@ -680,7 +681,7 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 
 ### M2 — Bus, DMA and video
 
-- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O.
+- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82).
 - [ ] Deadline table and catch-up in `BusView`, and NTSC and PAL frame timing (ADR 0020, #81); DMA and HDMA.
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System` (ADR 0018, #79); `impl System for Snes` waits for the state envelope in M4.

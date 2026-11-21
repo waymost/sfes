@@ -1,11 +1,12 @@
 // @source: adr-0013
 // @source: adr-0019
+// @source: adr-0021
 //! Runs the project's own test cartridges (ADR 0013) and checks what they leave against
 //! values computed from the documents.
 
 use alloc::{sync::Arc, vec::Vec};
 
-use sfes_api::{Cycles, Fast, InstrEvent, Observer, RegionId, Stop};
+use sfes_api::{Cycles, Fast, InstrEvent, Interrupt, Observer, RegionId, Stop};
 use sfes_snes_cpu::RunState;
 
 use crate::Snes;
@@ -18,6 +19,17 @@ impl Observer for Instructions {
     // @source: adr-0018
     fn on_instruction(&mut self, event: &InstrEvent) {
         self.0.push((event.pc, event.at));
+    }
+}
+
+/// Records each interrupt entry and its start time.
+#[derive(Clone, Debug, Default)]
+struct Interrupts(Vec<(Interrupt, Cycles)>);
+
+impl Observer for Interrupts {
+    // @source: adr-0018
+    fn on_interrupt(&mut self, interrupt: Interrupt, at: Cycles) {
+        self.0.push((interrupt, at));
     }
 }
 
@@ -92,4 +104,61 @@ fn bus_timing_cart_runs_fast_rom_the_wram_port_and_a_refresh() {
     assert_eq!(wram[0x1_0100..0x1_0102], [0x5A, 0xC3]);
     // INC $2180 read $7F:0200, then wrote the value read and the result (ADR 0019, point 7).
     assert_eq!(wram[0x1_0200..0x1_0203], [0x40, 0x40, 0x41]);
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: anomie-timing#s-cpu/clocks-and-refresh
+// @source: anomie-timing#s-cpu/registers
+// @source: anomie-regs#4210
+// @source: anomie-regs#4211
+// @source: anomie-regs#4212
+// @source: anomie-regs#2137
+// @source: anomie-regs#213c
+// @source: anomie-regs#213d
+// @source: fullsnes#snestiminghvevents
+// @source: wdc-w65c816s#table-5-7-22a
+// @source: wdc-w65c816s#table-5-7-19d
+// @source: adr-0004
+// @source: adr-0019
+// @source: adr-0020
+// @source: adr-0021
+#[test]
+fn interrupts_cart_takes_the_hv_irq_and_the_nmi_on_time() {
+    let rom = include_bytes!("../../../tests/assets/carts/interrupts.sfc");
+    let mut snes = Snes::<Fast>::builder(Arc::from(rom.as_slice()))
+        .observer(Interrupts::default())
+        .build()
+        .expect("builds");
+    snes.run(Stop::Frames(2));
+    assert_eq!(snes.cpu().run, RunState::Stopped);
+
+    // The set-up runs from 54, after the reset sequence, in emulation mode from Slow ROM
+    // (anomie-memmap#memory-map): LDA # 16 cycles, STA/STZ abs to $42xx 3 × 8 + 6, CLI and
+    // WAI 8 + 6 and 8 + 6 + 6. WAI ends at 286, then the CPU idles in 6-cycle steps.
+    // Refreshes pause it 40 cycles after the cycle each falls in: at 538, 1898, 3266, 4626
+    // and 5994 (ADR 0019), so its idle cycles restart at 578, 1938, 3310, 4670 and 6036.
+    // The trigger point is 5 × 1364 + 14 + 4 × 100 = 7234 (anomie-timing), inside the
+    // cycle 7230-7236. The cycle 7236-7242 is the first to start with the line low, so the
+    // entry starts at 7242 (ADR 0021, point 1).
+    let [irq, nmi] = <[_; 2]>::try_from(snes.observer().0.clone()).expect("two entries");
+    assert_eq!(irq, (Interrupt::Irq, Cycles(7242)));
+    // The NMI flag is set at 225 × 1364 + 2 (fullsnes#snestiminghvevents); the first
+    // 6-cycle idle that starts at or after it is followed by the entry.
+    let (kind, at) = nmi;
+    assert_eq!(kind, Interrupt::Nmi);
+    assert!(
+        (Cycles(306_908)..Cycles(306_914)).contains(&at),
+        "NMI entry at {at:?}"
+    );
+
+    // The IRQ entry is 54 cycles: a Slow opcode read, an internal cycle, three Slow pushes
+    // and two Slow vector reads (row 22a), so the handler starts at 7296.
+    // - LDA $4211 reads at 7320: the flag over open bus $42, the operand's high byte.
+    // - STA $0000 writes at 7350-7358, the cycle the refresh at 7354 falls in; 40 later,
+    //   LDA $2137 reads at 7422, 602 cycles into line 5 (from 6820): dot 150.
+    // - Each high byte has bit 8 of the counter, 0, over the last PPU2 value read.
+    // The NMI handler reads $4210 with the flag set over open bus $42 and version 2, $4212 in
+    // vertical blank and outside horizontal blank, and $4210 again with the flag cleared.
+    let wram = snes.region(RegionId::Wram);
+    assert_eq!(wram[..8], [0xC2, 150, 150, 5, 4, 0xC2, 0x82, 0x42]);
 }

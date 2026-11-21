@@ -38,6 +38,18 @@ impl LineKind {
         }
     }
 
+    /// The number of dots in the line: 341 on a long line, 340 otherwise.
+    // @source: fullsnes#snestiminghvcounters
+    // @source: fullsnes#snesppuinterrupts
+    // @source: adr-0020
+    // @source: adr-0021
+    pub(crate) const fn dots(self) -> u16 {
+        match self {
+            Self::Normal | Self::Short => 340,
+            Self::Long => 341,
+        }
+    }
+
     /// The dot running `offset` master cycles into the line. An offset past the line's end
     /// gives the line's last dot.
     // @source: anomie-timing#s-ppu/rendering
@@ -138,6 +150,17 @@ mod tests {
         assert_eq!(lengths[340], 4);
         assert_eq!(LineKind::Long.dot_at(1364), 340);
         assert_eq!(LineKind::Long.dot_at(1367), 340);
+    }
+
+    // @source: anomie-regs#213c
+    // @source: fullsnes#snestiminghvcounters
+    // @source: fullsnes#snesppuinterrupts
+    // @source: adr-0021
+    #[test]
+    fn a_long_line_has_one_more_dot() {
+        assert_eq!(LineKind::Normal.dots(), 340);
+        assert_eq!(LineKind::Short.dots(), 340);
+        assert_eq!(LineKind::Long.dots(), 341);
     }
 
     // @source: adr-0020

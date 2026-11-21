@@ -15,7 +15,7 @@ This page explains the SNES machine and how the crate models it (QA-08). It grow
 | Part | What | Cloned? |
 | --- | --- | --- |
 | `State::cpu` | The 65C816's registers and run state | yes |
-| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the NMI latch and IRQ line, the clock, the scheduler (line, field, vertical blank, line and frame counts, refresh and the deadline table), and the held buttons | yes |
+| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the clock, the scheduler (line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table), and the held buttons | yes |
 | `State::meta` | The seed and the video standard | yes |
 | `observer` | The observer | yes |
 | `outputs` | The frame buffer | no: a clone starts empty (technical design section 5) |
@@ -113,10 +113,9 @@ In emulation mode a read-modify-write instruction writes twice: first the value 
 
 ### Still provisional
 
-Until #82 and M4 (ADR 0018, point 6):
+Until M4 (ADR 0018, point 6):
 
 - **Watches.** `Stop::Watch` runs to its frame limit, since watches arrive in M4.
-- **Interrupts.** The NMI latch is cleared by the vector-pull read of the NMI vector (ADR 0004). Nothing sets it, or the IRQ line, until #82.
 - **Video.** No PPU renders yet, so `video()` is a 0 × 0 frame.
 
 ### Test cartridge
@@ -166,10 +165,102 @@ A stop overshoots its target by at most one step.
 
 ### The deadline table
 
-The bus keeps the next time each scheduled event is due: the refresh pause and the next line start, with NMI, IRQ, HDMA and auto-joypad to follow. After every CPU cycle one comparison with the earliest of them decides whether any is due. Due events are serviced in time order, and events due together in the table's order (technical design section 4, ADR 0001, ADR 0020, point 9).
+The bus keeps the next time each scheduled event is due: the refresh pause, the next line start, the NMI flag, the next H/V timer trigger point and a `$4201` counter latch, with HDMA and auto-joypad to follow. After every CPU cycle one comparison with the earliest of them decides whether any is due. Due events are serviced in time order, and events due together in the table's order (technical design section 4, ADR 0001, ADR 0020, point 9, ADR 0021, point 9).
+
+## Interrupts and the H/V timer
+
+[`bus/interrupts.rs`](../../crates/sfes-snes-core/src/bus/interrupts.rs) holds the 5A22's interrupt outputs and the CPU's view of them; [`timing/irq.rs`](../../crates/sfes-snes-core/src/timing/irq.rs) works out where the H/V timer's trigger points fall (ADR 0021).
+
+### When the CPU sees a line
+
+The CPU checks for interrupts "just before the final CPU cycle of the instruction" (`anomie-timing#s-cpu/interrupts`). At the start of every CPU cycle the bus records the NMI edge latch and the IRQ line, and `interrupts()` returns the record from the start of the step's last cycle. Events due at the moment a cycle starts are serviced before it, so that cycle's record sees them (ADR 0021, point 1). This settles the question ADR 0004 left to the machine:
+- a line that changes during an instruction's final cycle is seen one instruction later;
+- the jump begins 6 to 12 master cycles after the line changes at the earliest, as anomie-timing says;
+- a waiting processor's steps are single halted cycles, so it wakes on the step after the first cycle that starts with the line low.
+
+Not modelled yet:
+- the old I flag that CLI, SEI, PLP, REP and SEP leave to the check;
+- the 12-cycle end of WAI.
+
+Both are CPU-core changes, to follow in `sfes-snes-cpu` with an amendment to ADR 0004 (ADR 0021, point 2).
+
+### NMI
+
+| Event | When | Source |
+| --- | --- | --- |
+| `$4210` bit 7 set | H=0.5 of the line that starts vertical blank, 2 cycles in, whether or not NMIs are enabled | `anomie-timing#s-cpu/interrupts`, `fullsnes#snestiminghvevents` |
+| `$4210` bit 7 cleared | H=0 of line 0, or a `$4210` read | the same |
+| /NMI low | while the flag and `$4200` bit 7 are both set | `fullsnes#snesppuinterrupts` |
+| Edge latched | each high-to-low change of /NMI; the NMI vector read clears it | `wdc-w65c816s#2.21`, ADR 0004 |
+
+Enabling NMIs while the flag is set is a fresh edge, so an NMI follows. Writing `$4200` never clears the flag (ADR 0021, point 4).
+
+### H/V timer IRQ
+
+`$4200` bits 4 and 5 select the trigger (`anomie-regs#4200`, `fullsnes#snesppuinterrupts`):
+
+| yx | Trigger |
+| --- | --- |
+| 00 | none |
+| 01 | every line at HTIME |
+| 10 | line VTIME at H=0 |
+| 11 | line VTIME at HTIME |
+
+The trigger point is anomie-timing's formula (`anomie-timing#s-cpu/interrupts`):
+- for H=0: 1374 master cycles after the previous line started, usually 10 cycles into the line (H=2.5);
+- otherwise: 14 + 4×H cycles into the line (H=HTIME+3.5).
+
+The formula counts cycles, so a trigger for H ≥ 338 falls in the next line. The scheduler keeps the previous line's trigger point for that case.
+
+No trigger is met:
+- for an H past the line's last dot;
+- for a VTIME past the frame's last line;
+- for H=153 on a short line or on a frame's last line.
+
+At a trigger point `$4211` bit 7 is set, and /IRQ is low while it is. A `$4211` read and a `$4200` write with bits 4 and 5 clear acknowledge it; a write to `$4211` does nothing (ADR 0021, point 5). A write to `$4200` or `$4207–$420A` takes effect from the start of its access, so a trigger point inside that access is met.
+
+HTIME and VTIME are 9 bits, `$1FF` at power-on and kept on reset (`anomie-regs#4208`, `#420a`, `fullsnes#snesiomap`).
+
+### The status registers
+
+Each read sees the machine at the start of its access (ADR 0021, point 3):
+
+| Register | Bit 7 | Bits 6–0 |
+| --- | --- | --- |
+| `$4210 RDNMI` | NMI flag, cleared by the read | bits 6–4 open bus, bits 3–0 version 2 |
+| `$4211 TIMEUP` | IRQ flag, cleared by the read | open bus |
+| `$4212 HVBJOY` | vertical blank, from H=0 of its first line to H=0 of line 0 | bit 6 horizontal blank, H=274 to H=1; bits 5–1 open bus; bit 0 auto-joypad busy, 0 until #85 |
+
+Sources: `anomie-timing#s-cpu/registers`, `anomie-regs#4210`, `#4211`, `#4212`, `fullsnes#snesppuinterrupts`.
+
+`peek_bus` reports `$4210` and `$4211` as latched, since a read clears them.
+
+### The counter latch
+
+Three things latch the H/V counters, only while `$4201` bit 7 is set (`anomie-regs#2137`, `#4201`, `fullsnes#snespputimersandstatus`):
+- a `$2137` read, at the dot where its access starts;
+- a `$4201` write that clears bit 7, one dot later (`anomie-timing`, preamble);
+- a lightgun, which arrives with the controller ports.
+
+The latched H is the dot and the latched V is the line (ADR 0020, point 3). Each of `$213C` and `$213D` returns the low byte, then bit 8 over PPU2 open bus, on its own flip-flop. A latch does not reset the flip-flops (`anomie-regs#213c`).
+
+Until the PPU exists:
+- the latch lives in the bus;
+- PPU2 open bus is the last value read from `$213C` or `$213D`;
+- the `$213F` read that clears the latch flag and resets the flip-flops is missing (ADR 0021, point 7).
+
+`$4201` is `$FF` at power-on and reset (`fullsnes#snesiomap`). The latched counters are `$1FF` at power-on and kept on reset.
+
+### Test cartridge
+
+[`tests/carts/interrupts`](../../tests/carts/interrupts/interrupts.s) sets an HV-IRQ at H=100, V=5 and waits for it. Its handler acknowledges the IRQ and latches and reads the counters. The cartridge then enables the NMI alone and waits again; the NMI handler reads `$4210` twice and `$4212`. A test in `src/carts.rs` checks:
+- the IRQ entry at master cycle 7242, worked out by hand through five refreshes;
+- the NMI entry within the 6-cycle step after the flag;
+- the latched dot 150 on line 5, and every value the handlers read.
 
 ## Decisions
 
 - [ADR 0018](../adr/0018-snes-reset-and-power-on.md): RESB timing, the page-1 reads, power-on and reset, the default region, observer events and the provisional timing.
 - [ADR 0019](../adr/0019-snes-bus-decode-and-refresh.md): decode, access speed, open bus, the WRAM port, refresh and read-modify-write writes to registers.
 - [ADR 0020](../adr/0020-snes-scanlines-frames-and-deadlines.md): line lengths and dots, frames, the field, vertical blank and overscan, the frame boundary, line and frame events, and the deadline table.
+- [ADR 0021](../adr/0021-snes-interrupts-timers-and-counter-latch.md): when a changed NMI or IRQ line is seen, the NMI and H/V timer trigger points, `$4210–$4212`, the counter latch, and their reset values.

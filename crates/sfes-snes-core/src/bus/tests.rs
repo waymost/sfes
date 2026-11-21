@@ -116,7 +116,7 @@ fn write_only_and_unanswered_addresses_read_open_bus() {
         0x00_420D, // MEMSEL, write-only
         0x00_2000, 0x00_2184, 0x00_21FF, 0x00_2200, 0x00_4400, 0x00_5FFF, // unused
         0x00_2100, 0x00_2140, // PPU and APU, until those chips exist
-        0x00_4016, 0x00_4210, // internal registers not yet modelled
+        0x00_4016, 0x00_4213, // internal registers not yet modelled
     ] {
         assert_eq!(read(&mut bus, address), 0x5C, "{address:06X}");
     }
@@ -175,4 +175,186 @@ fn a_refresh_pauses_the_cpu_for_40_cycles_after_the_cycle_it_falls_in() {
     assert_eq!(bus.now, Cycles(543 + 40));
     // The next one is due 534 cycles into the next line.
     assert_eq!(bus.timing.next_refresh(), Cycles(1364 + 534));
+}
+
+// @source: anomie-regs#4210
+// @source: anomie-regs#4211
+// @source: anomie-regs#4212
+// @source: anomie-timing#s-cpu/registers
+// @source: fullsnes#snesppuinterrupts
+// @source: adr-0021
+#[test]
+fn rdnmi_timeup_and_hvbjoy_read_their_flags_over_open_bus() {
+    let mut bus = bus();
+    // $4210: version 2 in bits 3-0, open bus in bits 6-4.
+    assert_eq!(read(&mut bus, 0x00_4210), 0x02);
+    write(&mut bus, 0x00_0000, 0xF5);
+    assert_eq!(read(&mut bus, 0x00_4210), 0x72);
+    bus.interrupts.set_nmi_flag();
+    assert_eq!(read(&mut bus, 0x00_4210), 0xF2);
+    assert_eq!(read(&mut bus, 0x00_4210), 0x72, "the read cleared the flag");
+    // $4211: open bus in bits 6-0.
+    assert_eq!(read(&mut bus, 0x00_4211), 0x72);
+    bus.interrupts.set_irq_flag();
+    assert_eq!(read(&mut bus, 0x00_4211), 0xF2);
+    assert_eq!(read(&mut bus, 0x00_4211), 0x72, "the read cleared the flag");
+    // A write to $4211 changes nothing.
+    bus.interrupts.set_irq_flag();
+    write(&mut bus, 0x00_4211, 0x00);
+    assert!(bus.interrupts.irq_flag());
+    // $4212 at dot 125 and dot 274 of line 0: open bus in bits 5-1, joypad busy 0.
+    write(&mut bus, 0x00_0000, 0xFF);
+    bus.now = Cycles(500);
+    assert_eq!(read(&mut bus, 0x00_4212), 0x3E);
+    bus.now = Cycles(274 * 4);
+    assert_eq!(read(&mut bus, 0x00_4212), 0x7E);
+    // Vertical blank from line 225.
+    while !bus.timing.in_vertical_blank() {
+        idle(&mut bus);
+    }
+    bus.now = Cycles(225 * 1364 + 100 * 4);
+    assert_eq!(read(&mut bus, 0x00_4212) & 0xC0, 0x80);
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: wdc-w65c816s#2.18
+// @source: adr-0004
+// @source: adr-0021
+#[test]
+fn the_cpu_sees_the_lines_as_they_were_when_its_last_cycle_started() {
+    let mut bus = bus();
+    bus.interrupts.set_irq_flag();
+    assert!(!bus.pending().irq, "not recorded until a cycle starts");
+    idle(&mut bus);
+    assert!(bus.pending().irq);
+    // A read that clears the flag started while it was set.
+    read(&mut bus, 0x00_4211);
+    assert!(bus.pending().irq);
+    idle(&mut bus);
+    assert!(!bus.pending().irq);
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: anomie-regs#4200
+// @source: anomie-regs#4207
+// @source: anomie-regs#4208
+// @source: adr-0021
+#[test]
+fn a_trigger_inside_a_cycle_is_seen_from_the_next_one() {
+    let mut bus = bus();
+    // H-IRQ at HTIME 10: 14 + 4 × 10 = 54 cycles into each line.
+    write(&mut bus, 0x00_4207, 10);
+    write(&mut bus, 0x00_4208, 0);
+    write(&mut bus, 0x00_4200, 0x10);
+    assert_eq!(bus.now, Cycles(18));
+    while bus.now < Cycles(54) {
+        idle(&mut bus);
+    }
+    // The cycle 48-54 met the trigger point at its end; it started before it.
+    assert_eq!(bus.now, Cycles(54));
+    assert!(bus.interrupts.irq_flag());
+    assert!(!bus.pending().irq);
+    idle(&mut bus);
+    assert!(bus.pending().irq);
+    // Disabling the IRQ acknowledges it.
+    write(&mut bus, 0x00_4200, 0x00);
+    assert!(!bus.interrupts.irq_flag());
+}
+
+// @source: anomie-timing#s-cpu/interrupts
+// @source: fullsnes#snesppuinterrupts
+// @source: fullsnes#snestiminghvevents
+// @source: adr-0021
+#[test]
+fn an_enabled_nmi_is_latched_half_a_dot_into_vertical_blank() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_4200, 0x80);
+    let mut before = bus.now;
+    while !bus.interrupts.nmi_flag() {
+        before = bus.now;
+        idle(&mut bus);
+    }
+    // The flag falls 2 cycles after line 225 starts, in the cycle that ended last.
+    assert!(before < Cycles(225 * 1364 + 2) && bus.now >= Cycles(225 * 1364 + 2));
+    idle(&mut bus);
+    assert!(bus.pending().nmi);
+    // Reading $4210 clears the flag; the latch stays until the vector is read.
+    assert_eq!(read(&mut bus, 0x00_4210) & 0x80, 0x80);
+    idle(&mut bus);
+    assert!(bus.pending().nmi);
+    read(&mut bus, 0x00_FFEA);
+    assert!(bus.pending().nmi, "a read without VPB keeps the latch");
+    BusView::new(&mut bus, &mut NoopObserver).read(Addr24::new(0x00_FFEA), Pins::VPB);
+    idle(&mut bus);
+    assert!(!bus.pending().nmi);
+}
+
+// @source: anomie-regs#2137
+// @source: anomie-regs#213c
+// @source: anomie-regs#213d
+// @source: anomie-regs#4201
+// @source: fullsnes#snespputimersandstatus
+// @source: anomie-timing
+// @source: adr-0021
+#[test]
+fn slhv_and_wrio_latch_the_counters() {
+    let mut bus = bus();
+    // A $2137 read latches the dot where its access starts: 400 / 4 = dot 100, line 0.
+    bus.now = Cycles(400);
+    read(&mut bus, 0x00_2137);
+    assert_eq!(read(&mut bus, 0x00_213C), 100);
+    // Bit 8 is 0; bits 7-1 are the last value read from PPU2, 100 ($64).
+    assert_eq!(read(&mut bus, 0x00_213C), 0x64);
+    assert_eq!(read(&mut bus, 0x00_213D), 0x00);
+    assert_eq!(read(&mut bus, 0x00_213D), 0x00);
+    // Clearing $4201 bit 7 latches one dot after the write starts: dot 201.
+    bus.now = Cycles(800);
+    write(&mut bus, 0x00_4201, 0x7F);
+    assert_eq!(read(&mut bus, 0x00_213C), 201);
+    // With bit 7 clear a $2137 read latches nothing.
+    bus.now = Cycles(1200);
+    read(&mut bus, 0x00_2137);
+    assert_eq!(read(&mut bus, 0x00_213C), 0xC9 & 0xFE); // 201 = $C9
+    assert_eq!(read(&mut bus, 0x00_213C), 201);
+    // Nor does writing 0 to a bit already 0.
+    write(&mut bus, 0x00_4201, 0x00);
+    write(&mut bus, 0x00_4201, 0x00);
+    assert_eq!(read(&mut bus, 0x00_213C), 0xC9 & 0xFE); // 201 = $C9
+}
+
+// @source: anomie-regs#2137
+// @source: anomie-regs#213c
+// @source: anomie-regs#4210
+// @source: adr-0021
+#[test]
+fn peek_reports_the_timing_registers_without_their_side_effects() {
+    let mut bus = bus();
+    bus.interrupts.set_nmi_flag();
+    bus.interrupts.set_irq_flag();
+    assert_eq!(bus.peek(0x00_4210), (0x82, true));
+    assert_eq!(bus.peek(0x00_4211), (0x80, true));
+    assert_eq!(bus.peek(0x00_4212), (0x40, false));
+    assert_eq!(bus.peek(0x00_213C), (0xFF, true));
+    assert_eq!(bus.peek(0x00_213D), (0xFF, true));
+    assert_eq!(bus.peek(0x00_2137), (0x00, true));
+    assert!(bus.interrupts.nmi_flag() && bus.interrupts.irq_flag());
+    assert_eq!(read(&mut bus, 0x00_213C), 0xFF);
+    assert_eq!(bus.peek(0x00_213C), (0xFF, true));
+}
+
+// @source: fullsnes#snesiomap
+// @source: anomie-regs#4200
+// @source: adr-0021
+#[test]
+fn reset_clears_the_interrupts_and_sets_wrio() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_4200, 0x80);
+    bus.interrupts.set_nmi_flag();
+    bus.interrupts.set_irq_flag();
+    write(&mut bus, 0x00_4201, 0x00);
+    bus.reset();
+    assert_eq!(bus.interrupts, Interrupts::power_on());
+    assert_eq!(bus.io_port, 0xFF);
+    // The latch from the $4201 write is kept.
+    assert_ne!(bus.counters, CounterLatch::power_on());
 }

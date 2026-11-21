@@ -1,9 +1,13 @@
 // @source: adr-0001
 // @source: adr-0020
+// @source: adr-0021
 //! The deadline table: the next time each scheduled event is due, and the earliest of them
-//! (technical design section 4; ADR 0001, point 3; ADR 0020, point 9).
+//! (technical design section 4; ADR 0001, point 3; ADR 0020, point 9; ADR 0021, point 9).
 
 use sfes_api::Cycles;
+
+/// The due time of an event that is not scheduled.
+pub(crate) const NEVER: Cycles = Cycles(u64::MAX);
 
 /// The scheduled events, in the order events due at the same time are serviced.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12,18 +16,28 @@ pub(crate) enum Deadline {
     Refresh,
     /// The start of the next line.
     Line,
+    /// The NMI flag, at H=0.5 of the line that starts vertical blank (ADR 0021, point 4).
+    Nmi,
+    /// The next H/V timer trigger point (ADR 0021, point 5).
+    Irq,
+    /// The counter latch of a `$4201` write (ADR 0021, point 7).
+    Latch,
 }
 
 impl Deadline {
     /// Every event, in service order.
-    const ALL: [Self; 2] = [Self::Refresh, Self::Line];
+    const ALL: [Self; 5] = [Self::Refresh, Self::Line, Self::Nmi, Self::Irq, Self::Latch];
 
     /// The event's slot in the table.
     // @source: adr-0020
+    // @source: adr-0021
     const fn index(self) -> usize {
         match self {
             Self::Refresh => 0,
             Self::Line => 1,
+            Self::Nmi => 2,
+            Self::Irq => 3,
+            Self::Latch => 4,
         }
     }
 }
@@ -36,12 +50,13 @@ pub(crate) struct Deadlines {
 }
 
 impl Deadlines {
-    /// A table with every event due at `at`.
+    /// A table with no event due.
     // @source: adr-0020
-    pub(crate) const fn new(at: Cycles) -> Self {
+    // @source: adr-0021
+    pub(crate) const fn new() -> Self {
         Self {
-            due: [at; Deadline::ALL.len()],
-            next: at,
+            due: [NEVER; Deadline::ALL.len()],
+            next: NEVER,
         }
     }
 
@@ -58,7 +73,7 @@ impl Deadlines {
         self.due[deadline.index()]
     }
 
-    /// Schedules `deadline` at `at`.
+    /// Schedules `deadline` at `at`, or never at [`NEVER`].
     // @source: adr-0020
     pub(crate) const fn set(&mut self, deadline: Deadline, at: Cycles) {
         self.due[deadline.index()] = at;
@@ -89,13 +104,16 @@ impl Deadlines {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::*;
 
     // @source: adr-0001
     // @source: adr-0020
     #[test]
     fn the_earliest_due_event_is_serviced_first() {
-        let mut deadlines = Deadlines::new(Cycles(0));
+        let mut deadlines = Deadlines::new();
+        assert_eq!(deadlines.first_due(Cycles(u64::MAX - 1)), None);
         deadlines.set(Deadline::Refresh, Cycles(538));
         deadlines.set(Deadline::Line, Cycles(1364));
         assert_eq!(deadlines.next(), Cycles(538));
@@ -107,11 +125,24 @@ mod tests {
     }
 
     // @source: adr-0020
+    // @source: adr-0021
     #[test]
     fn events_due_together_are_serviced_in_table_order() {
-        let mut deadlines = Deadlines::new(Cycles(0));
-        deadlines.set(Deadline::Line, Cycles(100));
-        deadlines.set(Deadline::Refresh, Cycles(100));
-        assert_eq!(deadlines.first_due(Cycles(100)), Some(Deadline::Refresh));
+        let mut deadlines = Deadlines::new();
+        for deadline in [
+            Deadline::Latch,
+            Deadline::Irq,
+            Deadline::Nmi,
+            Deadline::Line,
+            Deadline::Refresh,
+        ] {
+            deadlines.set(deadline, Cycles(100));
+        }
+        let mut order = Vec::new();
+        while let Some(deadline) = deadlines.first_due(Cycles(100)) {
+            order.push(deadline);
+            deadlines.set(deadline, NEVER);
+        }
+        assert_eq!(order, Deadline::ALL);
     }
 }

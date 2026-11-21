@@ -8,11 +8,15 @@
 // @source: adr-0018
 // @source: adr-0019
 // @source: adr-0020
+// @source: anomie-timing#s-cpu/interrupts
+// @source: anomie-timing#s-cpu/registers
+// @source: adr-0021
 //! The scheduler: line and frame position, the interlace field, vertical blank, the refresh
-//! schedule and the deadline table (technical design section 4; ADR 0019, point 6;
-//! ADR 0020).
+//! schedule, the NMI and H/V timer trigger points, the counter latch of `$4201` and the
+//! deadline table (technical design section 4; ADR 0019, point 6; ADR 0020; ADR 0021).
 
 mod deadlines;
+mod irq;
 mod position;
 
 use sfes_api::Cycles;
@@ -20,7 +24,8 @@ use sfes_api::Cycles;
 use crate::{
     Region,
     timing::{
-        deadlines::{Deadline, Deadlines},
+        deadlines::{Deadline, Deadlines, NEVER},
+        irq::{TimedLine, Timer},
         position::LineKind,
     },
 };
@@ -41,6 +46,14 @@ const OVERSCAN_VBLANK_LINE: u16 = 240;
 const SCREEN_INTERLACE: u8 = 0x01;
 /// `$2133` SETINI bit 2: overscan.
 const OVERSCAN: u8 = 0x04;
+/// Where H=0.5, when the NMI flag is set, falls in the line that starts vertical blank.
+const NMI_FLAG: u64 = 2;
+/// The dot at which horizontal blank begins.
+const HBLANK_START: u16 = 274;
+/// The dot at which horizontal blank ends.
+const HBLANK_END: u16 = 1;
+/// How long after the start of a `$4201` write its counter latch falls: one dot.
+pub(crate) const WRIO_LATCH_DELAY: u64 = 4;
 
 /// What servicing a deadline did.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +68,17 @@ pub(crate) enum Event {
         at: Cycles,
         /// Whether it started vertical blank, ending a frame.
         frame_ended: bool,
+    },
+    /// The NMI flag is set (ADR 0021, point 4).
+    Nmi,
+    /// An H/V timer trigger point passed (ADR 0021, point 5).
+    Irq,
+    /// The counters are latched by a `$4201` write (ADR 0021, point 7).
+    Latch {
+        /// The line, the latched V.
+        line: u16,
+        /// The dot, the latched H.
+        dot: u16,
     },
 }
 
@@ -82,7 +106,13 @@ pub(crate) struct Timing {
     frames: u64,
     /// How far into its line the next refresh is due.
     refresh_offset: u64,
-    /// When the next refresh and the next line are due.
+    /// `$4200` bits 4 and 5, HTIME and VTIME.
+    timer: Timer,
+    /// The line before the one now running, whose late trigger point may fall in this one.
+    previous: Option<TimedLine>,
+    /// Trigger points before this time have passed.
+    irq_after: Cycles,
+    /// When the next refresh, line, NMI flag, trigger point and `$4201` latch are due.
     deadlines: Deadlines,
 }
 
@@ -92,7 +122,8 @@ impl Timing {
     // @source: fullsnes#snesiomap
     // @source: adr-0018
     // @source: adr-0020
-    pub(crate) const fn new(region: Region, start: Cycles) -> Self {
+    // @source: adr-0021
+    pub(crate) fn new(region: Region, start: Cycles) -> Self {
         let mut timing = Self {
             region,
             screen_mode: 0,
@@ -104,7 +135,10 @@ impl Timing {
             lines: 0,
             frames: 0,
             refresh_offset: FIRST_REFRESH,
-            deadlines: Deadlines::new(start),
+            timer: Timer::power_on(),
+            previous: None,
+            irq_after: start,
+            deadlines: Deadlines::new(),
         };
         timing.restart(start);
         timing
@@ -112,15 +146,17 @@ impl Timing {
 
     /// Restarts the frame at `start`, as reset does: the SNES "returns to a known timing
     /// position on reset" (ADR 0018), H=0, V=0 with field 0 (ADR 0020, point 4), `$2133` is
-    /// 0 and the refresh schedule starts over (ADR 0019). The counts of lines and frames
-    /// are kept.
+    /// 0 and the refresh schedule starts over (ADR 0019). `$4200` is 0, HTIME and VTIME are
+    /// kept, and no NMI flag or latch is pending (ADR 0021, point 8). The counts of lines and
+    /// frames are kept.
     // @source: anomie-timing
     // @source: fullsnes#snestiminghvevents
     // @source: fullsnes#snesiomap
     // @source: adr-0018
     // @source: adr-0019
     // @source: adr-0020
-    pub(crate) const fn restart(&mut self, start: Cycles) {
+    // @source: adr-0021
+    pub(crate) fn restart(&mut self, start: Cycles) {
         self.screen_mode = 0;
         // Field 0 at H=0; the toggle at H=1 of this line makes the frame field 1.
         self.field = true;
@@ -133,13 +169,92 @@ impl Timing {
             .set(Deadline::Refresh, Cycles(start.0 + FIRST_REFRESH));
         self.deadlines
             .set(Deadline::Line, Cycles(start.0 + LineKind::Normal.length()));
+        self.deadlines.set(Deadline::Nmi, NEVER);
+        self.deadlines.set(Deadline::Latch, NEVER);
+        self.timer.reset();
+        self.previous = None;
+        self.irq_after = start;
+        self.schedule_irq(start);
     }
 
-    /// Takes bits 0 and 2 of a CPU write to `$2133` SETINI (ADR 0020, point 6).
+    /// Takes bits 0 and 2 of a CPU write to `$2133` SETINI at `now` (ADR 0020, point 6).
+    /// Interlace decides the frame's last line, so the trigger point is worked out again
+    /// (ADR 0021, point 9).
     // @source: anomie-regs#2133
     // @source: adr-0020
-    pub(crate) const fn write_screen_mode(&mut self, value: u8) {
+    // @source: adr-0021
+    pub(crate) fn write_screen_mode(&mut self, value: u8, now: Cycles) {
         self.screen_mode = value & (SCREEN_INTERLACE | OVERSCAN);
+        self.schedule_irq(now);
+    }
+
+    /// Takes the IRQ bits of a `$4200` NMITIMEN write at `now` (ADR 0021, points 3 and 5).
+    // @source: anomie-regs#4200
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0021
+    pub(crate) fn write_interrupt_enable(&mut self, value: u8, now: Cycles) {
+        self.timer.write_enable(value);
+        self.schedule_irq(now);
+    }
+
+    /// $4207 HTIMEL, written at `now` (ADR 0021, points 3 and 5).
+    // @source: anomie-regs#4207
+    // @source: adr-0021
+    pub(crate) fn write_horizontal_timer_low(&mut self, value: u8, now: Cycles) {
+        self.timer.write_horizontal_low(value);
+        self.schedule_irq(now);
+    }
+
+    /// $4208 HTIMEH, written at `now` (ADR 0021, points 3 and 5).
+    // @source: anomie-regs#4208
+    // @source: adr-0021
+    pub(crate) fn write_horizontal_timer_high(&mut self, value: u8, now: Cycles) {
+        self.timer.write_horizontal_high(value);
+        self.schedule_irq(now);
+    }
+
+    /// $4209 VTIMEL, written at `now` (ADR 0021, points 3 and 5).
+    // @source: anomie-regs#4209
+    // @source: adr-0021
+    pub(crate) fn write_vertical_timer_low(&mut self, value: u8, now: Cycles) {
+        self.timer.write_vertical_low(value);
+        self.schedule_irq(now);
+    }
+
+    /// $420A VTIMEH, written at `now` (ADR 0021, points 3 and 5).
+    // @source: anomie-regs#420a
+    // @source: adr-0021
+    pub(crate) fn write_vertical_timer_high(&mut self, value: u8, now: Cycles) {
+        self.timer.write_vertical_high(value);
+        self.schedule_irq(now);
+    }
+
+    /// Latches the counters at `at`, for a `$4201` write (ADR 0021, points 3 and 7).
+    // @source: anomie-timing
+    // @source: anomie-regs#4201
+    // @source: adr-0021
+    pub(crate) const fn schedule_latch(&mut self, at: Cycles) {
+        self.deadlines.set(Deadline::Latch, at);
+    }
+
+    /// Whether vertical blank has begun and not yet ended: `$4212` bit 7 (ADR 0021,
+    /// point 6).
+    // @source: anomie-timing#s-cpu/registers
+    // @source: adr-0020
+    // @source: adr-0021
+    pub(crate) const fn in_vertical_blank(&self) -> bool {
+        self.vblank
+    }
+
+    /// Whether the dot at `now` is in horizontal blank, H=274 to H=1: `$4212` bit 6
+    /// (ADR 0021, point 6).
+    // @source: anomie-timing#s-cpu/registers
+    // @source: anomie-timing#s-ppu/blanking-periods
+    // @source: fullsnes#snestiminghvevents
+    // @source: adr-0021
+    pub(crate) const fn in_horizontal_blank(&self, now: Cycles) -> bool {
+        let (_, dot) = self.position(now);
+        dot >= HBLANK_START || dot < HBLANK_END
     }
 
     /// Whether `$2133` has interlace on.
@@ -186,13 +301,6 @@ impl Timing {
     // @source: anomie-regs#213c
     // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0020
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by $2137 and $213C-$213D in #82 and by the PPU"
-        )
-    )]
     pub(crate) const fn position(&self, now: Cycles) -> (u16, u16) {
         let dot = self
             .line_kind
@@ -215,18 +323,75 @@ impl Timing {
     }
 
     /// Services the first deadline due at or before `now`, if any, and schedules its next
-    /// occurrence (ADR 0020, point 9).
+    /// occurrence (ADR 0020, point 9; ADR 0021, point 9).
     // @source: adr-0001
     // @source: adr-0019
     // @source: adr-0020
+    // @source: adr-0021
     pub(crate) fn service(&mut self, now: Cycles) -> Option<Event> {
-        match self.deadlines.first_due(now)? {
+        let deadline = self.deadlines.first_due(now)?;
+        let at = self.deadlines.due(deadline);
+        match deadline {
             Deadline::Refresh => {
                 self.schedule_refresh();
                 Some(Event::Refresh)
             }
             Deadline::Line => Some(self.start_line()),
+            Deadline::Nmi => {
+                self.deadlines.set(Deadline::Nmi, NEVER);
+                Some(Event::Nmi)
+            }
+            Deadline::Irq => {
+                self.irq_after = Cycles(at.0 + 1);
+                self.schedule_irq(at);
+                Some(Event::Irq)
+            }
+            Deadline::Latch => {
+                self.deadlines.set(Deadline::Latch, NEVER);
+                let (line, dot) = self.position(at);
+                Some(Event::Latch { line, dot })
+            }
         }
+    }
+
+    /// The line now running, as the timer sees it.
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0021
+    const fn timed_line(&self) -> TimedLine {
+        let previous_length = match self.previous {
+            Some(previous) => previous.kind.length(),
+            None => LineKind::Normal.length(),
+        };
+        TimedLine {
+            number: self.line,
+            start: self.line_start,
+            kind: self.line_kind,
+            last: self.line == self.last_line(),
+            previous_length,
+        }
+    }
+
+    /// Schedules the earliest trigger point at or after `now` that has not passed, of the
+    /// previous line and of the line now running (ADR 0021, point 9).
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0021
+    fn schedule_irq(&mut self, now: Cycles) {
+        let from = if now.0 > self.irq_after.0 {
+            now
+        } else {
+            self.irq_after
+        };
+        let previous = self
+            .previous
+            .and_then(|previous| self.timer.trigger(&previous));
+        let current = self.timer.trigger(&self.timed_line());
+        let next = [previous, current]
+            .into_iter()
+            .flatten()
+            .filter(|at| *at >= from)
+            .min()
+            .unwrap_or(NEVER);
+        self.deadlines.set(Deadline::Irq, next);
     }
 
     /// Schedules the refresh after the one now due, in the following line (ADR 0019,
@@ -243,15 +408,19 @@ impl Timing {
 
     /// Starts the line that is due: the next line, or line 0 after the frame's last line,
     /// with its length, the field toggle and the start of vertical blank (ADR 0020,
-    /// points 1, 2, 4 and 5).
+    /// points 1, 2, 4 and 5), the NMI flag it brings and its trigger point (ADR 0021,
+    /// points 4 and 9).
     // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: anomie-timing#s-ppu/blanking-periods
     // @source: anomie-regs#2133
     // @source: fullsnes#snestiminghvcounters
     // @source: fullsnes#snestiminghvevents
+    // @source: anomie-timing#s-cpu/interrupts
     // @source: adr-0020
+    // @source: adr-0021
     fn start_line(&mut self) -> Event {
         let at = self.deadlines.due(Deadline::Line);
+        self.previous = Some(self.timed_line());
         self.line = if self.line >= self.last_line() {
             0
         } else {
@@ -269,10 +438,12 @@ impl Timing {
         if frame_ended {
             self.vblank = true;
             self.frames += 1;
+            self.deadlines.set(Deadline::Nmi, Cycles(at.0 + NMI_FLAG));
         }
         self.lines += 1;
         self.deadlines
             .set(Deadline::Line, Cycles(at.0 + self.line_kind.length()));
+        self.schedule_irq(at);
         Event::Line {
             line: self.line,
             at,

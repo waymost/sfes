@@ -4,14 +4,18 @@
 // @source: adr-0018
 // @source: adr-0019
 // @source: adr-0020
+// @source: adr-0021
 //! The bus state and the main CPU's view of it (ADR 0019).
 //!
-//! [`Bus`] owns WRAM, the cartridge, the data bus value, the WRAM port, `$420D`, the NMI
-//! latch, the clock and the scheduler. [`BusView`] implements `Bus65816` over it: it
-//! decodes each address, syncs the register's owner, performs the access, charges its time,
-//! services the deadlines that fell due (ADR 0020) and tells the observer.
+//! [`Bus`] owns WRAM, the cartridge, the data bus value, the WRAM port, `$420D`, the
+//! interrupt state, `$4201`, the counter latch, the clock and the scheduler. [`BusView`]
+//! implements `Bus65816` over it: it records the interrupt lines (ADR 0021), decodes each
+//! address, syncs the register's owner, performs the access, charges its time, services the
+//! deadlines that fell due (ADR 0020) and tells the observer.
 
+mod counters;
 mod decode;
+mod interrupts;
 
 use alloc::{boxed::Box, vec};
 use core::fmt;
@@ -21,8 +25,12 @@ use sfes_snes_cart::Cartridge;
 use sfes_snes_cpu::{Bus65816, Pending, Pins};
 
 use crate::{
-    bus::decode::{BBus, FAST, Target, access_cycles, decode},
-    timing::{Event, REFRESH_LENGTH, Timing},
+    bus::{
+        counters::CounterLatch,
+        decode::{BBus, FAST, Target, access_cycles, decode},
+        interrupts::Interrupts,
+    },
+    timing::{Event, REFRESH_LENGTH, Timing, WRIO_LATCH_DELAY},
 };
 
 /// The size of WRAM, banks `$7E–$7F`.
@@ -36,6 +44,28 @@ const WRAM_PORT_MASK: u32 = 0x1_FFFF;
 const SCREEN_MODE: u8 = 0x33;
 /// `$420D` MEMSEL's one bit, FastROM select.
 const FAST_ROM: u8 = 0x01;
+/// `$2137` SLHV on the B bus.
+const SOFTWARE_LATCH: u8 = 0x37;
+/// `$213C` OPHCT on the B bus.
+const HORIZONTAL_COUNTER: u8 = 0x3C;
+/// `$213D` OPVCT on the B bus.
+const VERTICAL_COUNTER: u8 = 0x3D;
+/// `$4201` WRIO bit 7, the PPU latch line.
+const PPU_LATCH: u8 = 0x80;
+/// `$4201` at power-on and reset (ADR 0021, point 8).
+const IO_PORT_RESET: u8 = 0xFF;
+/// `$4210` bits 3-0: the 5A22 version (ADR 0021, point 4).
+const CPU_VERSION: u8 = 0x02;
+/// Bit 7 of `$4210`, `$4211` and `$4212`: a flag.
+const FLAG: u8 = 0x80;
+/// `$4212` bit 6: horizontal blank.
+const HBLANK: u8 = 0x40;
+/// The open-bus bits of `$4210`.
+const NMI_FLAG_OPEN_BUS: u8 = 0x70;
+/// The open-bus bits of `$4211`.
+const IRQ_FLAG_OPEN_BUS: u8 = 0x7F;
+/// The open-bus bits of `$4212`.
+const STATUS_OPEN_BUS: u8 = 0x3E;
 
 /// The NMI vector's low byte in native mode, read with VPB.
 const NMI_VECTOR_NATIVE: u32 = 0x00_FFEA;
@@ -55,10 +85,13 @@ pub(crate) struct Bus {
     pub(crate) wram_port_address: u32,
     /// $420D MEMSEL bit 0: Memory-2 is Fast when set.
     pub(crate) fast_rom: bool,
-    /// The NMI edge latch (ADR 0004). Nothing sets it until #82.
-    pub(crate) nmi_latched: bool,
-    /// The IRQ line, asserted when set. Nothing sets it until #82.
-    pub(crate) irq_line: bool,
+    /// `$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines
+    /// (ADR 0004, ADR 0021).
+    pub(crate) interrupts: Interrupts,
+    /// $4201 WRIO: the programmable I/O port, whose bit 7 drives the PPU latch line.
+    pub(crate) io_port: u8,
+    /// $213C–$213D OPHCT, OPVCT: the latched H/V counters (ADR 0021, point 7).
+    pub(crate) counters: CounterLatch,
     /// Master cycles since power-on.
     pub(crate) now: Cycles,
     /// Line and frame position, the refresh schedule and the deadline table.
@@ -75,8 +108,9 @@ impl fmt::Debug for Bus {
             .field("open_bus_value", &self.open_bus_value)
             .field("wram_port_address", &self.wram_port_address)
             .field("fast_rom", &self.fast_rom)
-            .field("nmi_latched", &self.nmi_latched)
-            .field("irq_line", &self.irq_line)
+            .field("interrupts", &self.interrupts)
+            .field("io_port", &self.io_port)
+            .field("counters", &self.counters)
             .field("now", &self.now)
             .field("timing", &self.timing)
             .field("input", &self.input)
@@ -91,6 +125,7 @@ impl Bus {
     // @source: fullsnes#snesiomap
     // @source: adr-0018
     // @source: adr-0019
+    // @source: adr-0021
     pub(crate) fn power_on(cartridge: Cartridge, timing: Timing, seed: u64) -> Self {
         let mut wram = vec![0; WRAM_SIZE].into_boxed_slice();
         SplitMix64::new(seed).fill(&mut wram);
@@ -100,8 +135,9 @@ impl Bus {
             open_bus_value: 0,
             wram_port_address: 0,
             fast_rom: false,
-            nmi_latched: false,
-            irq_line: false,
+            interrupts: Interrupts::power_on(),
+            io_port: IO_PORT_RESET,
+            counters: CounterLatch::power_on(),
             now: Cycles(0),
             timing,
             input: [Buttons::empty(); PORTS],
@@ -109,22 +145,26 @@ impl Bus {
     }
 
     /// Sets the registers reset changes to their reset values: `$2181–$2183` and `$420D`
-    /// are 0 (`fullsnes#snesiomap`, ADR 0019). WRAM and the data bus are kept (ADR 0018).
+    /// are 0 (`fullsnes#snesiomap`, ADR 0019), `$4200` and the interrupt flags are clear and
+    /// `$4201` is `$FF` (ADR 0021, point 8). WRAM, the data bus and the counter latch are
+    /// kept (ADR 0018, ADR 0021).
     // @source: fullsnes#snesiomap
     // @source: fullsnes#snesmemorycontrol
     // @source: adr-0019
-    pub(crate) const fn reset(&mut self) {
+    // @source: adr-0021
+    pub(crate) fn reset(&mut self) {
         self.wram_port_address = 0;
         self.fast_rom = false;
+        self.interrupts = Interrupts::power_on();
+        self.io_port = IO_PORT_RESET;
     }
 
-    /// The interrupt requests as the CPU sees them at an instruction boundary (ADR 0004).
+    /// The interrupt requests as the CPU sees them at an instruction boundary: those
+    /// recorded at the start of the step's last cycle (ADR 0004; ADR 0021, point 1).
     // @source: adr-0004
+    // @source: adr-0021
     pub(crate) const fn pending(&self) -> Pending {
-        Pending {
-            nmi: self.nmi_latched,
-            irq: self.irq_line,
-        }
+        self.interrupts.recorded()
     }
 
     /// The byte at `address` as a read would see it, without the read's side effects or
@@ -132,12 +172,62 @@ impl Bus {
     // @source: anomie-memmap#memory-map
     // @source: anomie-memmap#hardware/data-bus
     // @source: anomie-regs#2180
+    // @source: anomie-regs#2137
+    // @source: anomie-regs#213c
+    // @source: anomie-regs#4210
+    // @source: anomie-regs#4211
+    // @source: anomie-regs#4212
     // @source: adr-0019
+    // @source: adr-0021
     pub(crate) fn peek(&self, address: u32) -> (u8, bool) {
         match decode(self.cartridge.map(), address) {
             Target::BBus(BBus::WramData) => (self.wram_port_byte(), true),
+            Target::BBus(BBus::Ppu(SOFTWARE_LATCH)) => (self.open_bus_value, true),
+            Target::BBus(BBus::Ppu(HORIZONTAL_COUNTER)) => (self.counters.peek_horizontal(), true),
+            Target::BBus(BBus::Ppu(VERTICAL_COUNTER)) => (self.counters.peek_vertical(), true),
+            Target::Cpu(0x4210) => (self.nmi_flag_byte(self.interrupts.nmi_flag()), true),
+            Target::Cpu(0x4211) => (self.irq_flag_byte(self.interrupts.irq_flag()), true),
+            Target::Cpu(0x4212) => (self.status_byte(), false),
             target => (self.memory(target).unwrap_or(self.open_bus_value), false),
         }
+    }
+
+    /// `$4210` RDNMI with the NMI flag `flag`: version 2, bits 6–4 open bus (ADR 0021,
+    /// point 4).
+    // @source: anomie-regs#4210
+    // @source: fullsnes#snesppuinterrupts
+    // @source: adr-0021
+    const fn nmi_flag_byte(&self, flag: bool) -> u8 {
+        let flag = if flag { FLAG } else { 0 };
+        flag | CPU_VERSION | (self.open_bus_value & NMI_FLAG_OPEN_BUS)
+    }
+
+    /// `$4211` TIMEUP with the IRQ flag `flag`: bits 6–0 open bus (ADR 0021, point 5).
+    // @source: anomie-regs#4211
+    // @source: adr-0021
+    const fn irq_flag_byte(&self, flag: bool) -> u8 {
+        let flag = if flag { FLAG } else { 0 };
+        flag | (self.open_bus_value & IRQ_FLAG_OPEN_BUS)
+    }
+
+    /// `$4212` HVBJOY at the start of the access: vertical and horizontal blank, bits 5–1
+    /// open bus, and auto-joypad busy 0 until #85 (ADR 0021, point 6).
+    // @source: anomie-timing#s-cpu/registers
+    // @source: anomie-regs#4212
+    // @source: fullsnes#snesppuinterrupts
+    // @source: adr-0021
+    const fn status_byte(&self) -> u8 {
+        let vertical = if self.timing.in_vertical_blank() {
+            FLAG
+        } else {
+            0
+        };
+        let horizontal = if self.timing.in_horizontal_blank(self.now) {
+            HBLANK
+        } else {
+            0
+        };
+        vertical | horizontal | (self.open_bus_value & STATUS_OPEN_BUS)
     }
 
     /// The byte a memory target holds, or `None` for a register or an unanswered address.
@@ -176,13 +266,32 @@ impl Bus {
     // @source: anomie-regs#2180
     // @source: anomie-regs#2181
     // @source: fullsnes#snesiomap
+    // @source: fullsnes#snespputimersandstatus
+    // @source: anomie-regs#2137
+    // @source: anomie-regs#213c
+    // @source: anomie-regs#213d
+    // @source: anomie-regs#4210
+    // @source: anomie-regs#4211
+    // @source: anomie-regs#4212
     // @source: adr-0019
+    // @source: adr-0021
     fn read_target(&mut self, target: Target) -> Option<u8> {
         match target {
             Target::BBus(device) => match device {
-                BBus::Ppu(_) => {
+                BBus::Ppu(register) => {
                     self.sync_ppu();
-                    None
+                    match register {
+                        SOFTWARE_LATCH => {
+                            if self.io_port & PPU_LATCH != 0 {
+                                let (line, dot) = self.timing.position(self.now);
+                                self.counters.latch(line, dot);
+                            }
+                            None
+                        }
+                        HORIZONTAL_COUNTER => Some(self.counters.read_horizontal()),
+                        VERTICAL_COUNTER => Some(self.counters.read_vertical()),
+                        _ => None,
+                    }
                 }
                 BBus::Apu(_) => {
                     self.sync_apu();
@@ -198,6 +307,15 @@ impl Bus {
                 | BBus::WramAddressHigh
                 | BBus::Unanswered => None,
             },
+            Target::Cpu(0x4210) => {
+                let flag = self.interrupts.read_nmi_flag();
+                Some(self.nmi_flag_byte(flag))
+            }
+            Target::Cpu(0x4211) => {
+                let flag = self.interrupts.read_irq_flag();
+                Some(self.irq_flag_byte(flag))
+            }
+            Target::Cpu(0x4212) => Some(self.status_byte()),
             // $420D and every other internal register is write-only or not yet modelled.
             Target::Cpu(_) => None,
             memory => self.memory(memory),
@@ -210,7 +328,14 @@ impl Bus {
     // @source: anomie-regs#2181
     // @source: anomie-regs#420d
     // @source: fullsnes#snesmemorycontrol
+    // @source: anomie-regs#4200
+    // @source: anomie-regs#4201
+    // @source: anomie-regs#4207
+    // @source: anomie-regs#4208
+    // @source: anomie-regs#4209
+    // @source: anomie-regs#420a
     // @source: adr-0019
+    // @source: adr-0021
     fn write_target(&mut self, target: Target, value: u8) {
         match target {
             Target::Wram(offset) => {
@@ -224,9 +349,32 @@ impl Bus {
                 }
             }
             Target::BBus(device) => self.write_b_bus(device, value),
+            Target::Cpu(0x4200) => {
+                self.interrupts.write_enable(value);
+                self.timing.write_interrupt_enable(value, self.now);
+            }
+            Target::Cpu(0x4201) => self.write_io_port(value),
+            Target::Cpu(0x4207) => self.timing.write_horizontal_timer_low(value, self.now),
+            Target::Cpu(0x4208) => self.timing.write_horizontal_timer_high(value, self.now),
+            Target::Cpu(0x4209) => self.timing.write_vertical_timer_low(value, self.now),
+            Target::Cpu(0x420A) => self.timing.write_vertical_timer_high(value, self.now),
             Target::Cpu(0x420D) => self.fast_rom = value & FAST_ROM != 0,
             Target::Rom(_) | Target::Cpu(_) | Target::Unanswered => {}
         }
+    }
+
+    /// A `$4201` WRIO write: a change of bit 7 from 1 to 0 latches the counters one dot
+    /// after the access starts (ADR 0021, points 3 and 7).
+    // @source: anomie-timing
+    // @source: anomie-regs#4201
+    // @source: fullsnes#snespputimersandstatus
+    // @source: adr-0021
+    fn write_io_port(&mut self, value: u8) {
+        if self.io_port & PPU_LATCH != 0 && value & PPU_LATCH == 0 {
+            self.timing
+                .schedule_latch(Cycles(self.now.0 + WRIO_LATCH_DELAY));
+        }
+        self.io_port = value;
     }
 
     /// Writes `value` to a B-bus device.
@@ -243,7 +391,7 @@ impl Bus {
             BBus::Ppu(register) => {
                 self.sync_ppu();
                 if register == SCREEN_MODE {
-                    self.timing.write_screen_mode(value);
+                    self.timing.write_screen_mode(value, self.now);
                 }
             }
             BBus::Apu(_) => self.sync_apu(),
@@ -287,11 +435,15 @@ impl Bus {
     /// Ends a CPU cycle of `cycles` master cycles: advances the clock, then services in time
     /// order every deadline that fell due during the cycle or at its end (ADR 0020,
     /// point 9). A refresh pauses the CPU (ADR 0019, point 6); a line start is reported to
-    /// `observer`, after the frame end it may bring (ADR 0020, point 8).
+    /// `observer`, after the frame end it may bring (ADR 0020, point 8), and line 0 clears
+    /// the NMI flag; the NMI flag, a trigger point and a `$4201` latch change the interrupt
+    /// state and the counters (ADR 0021).
     // @source: anomie-timing#s-cpu/clocks-and-refresh
+    // @source: anomie-timing#s-cpu/interrupts
     // @source: adr-0001
     // @source: adr-0019
     // @source: adr-0020
+    // @source: adr-0021
     fn charge<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
         self.now = Cycles(self.now.0 + cycles);
         while self.now >= self.timing.next_deadline() {
@@ -302,6 +454,9 @@ impl Bus {
                     at,
                     frame_ended,
                 }) => {
+                    if line == 0 {
+                        self.interrupts.end_vertical_blank();
+                    }
                     if O::ACTIVE {
                         if frame_ended {
                             observer.on_frame_end(self.timing.frames());
@@ -309,6 +464,9 @@ impl Bus {
                         observer.on_scanline(line, at);
                     }
                 }
+                Some(Event::Nmi) => self.interrupts.set_nmi_flag(),
+                Some(Event::Irq) => self.interrupts.set_irq_flag(),
+                Some(Event::Latch { line, dot }) => self.counters.latch(line, dot),
                 None => break,
             }
         }
@@ -348,7 +506,9 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0004
     // @source: adr-0019
     // @source: adr-0020
+    // @source: adr-0021
     fn read(&mut self, address: Addr24, pins: Pins) -> u8 {
+        self.bus.interrupts.record();
         let at = self.bus.now;
         let raw = address.get();
         let target = decode(self.bus.cartridge.map(), raw);
@@ -360,7 +520,7 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
             None => self.bus.open_bus_value,
         };
         if pins.contains(Pins::VPB) && (raw == NMI_VECTOR_NATIVE || raw == NMI_VECTOR_EMULATION) {
-            self.bus.nmi_latched = false;
+            self.bus.interrupts.acknowledge_nmi();
         }
         if self.first_read.is_none() {
             self.first_read = Some(value);
@@ -381,7 +541,9 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0006
     // @source: adr-0019
     // @source: adr-0020
+    // @source: adr-0021
     fn write(&mut self, address: Addr24, value: u8, _pins: Pins) {
+        self.bus.interrupts.record();
         let at = self.bus.now;
         let raw = address.get();
         let target = decode(self.bus.cartridge.map(), raw);
@@ -400,11 +562,14 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0004
     // @source: adr-0019
     // @source: adr-0020
+    // @source: adr-0021
     fn idle(&mut self, _address: Addr24, _pins: Pins) {
+        self.bus.interrupts.record();
         self.bus.charge(FAST, self.observer);
     }
 
     // @source: adr-0004
+    // @source: adr-0021
     fn interrupts(&self) -> Pending {
         self.bus.pending()
     }

@@ -635,7 +635,7 @@ mod tests {
     fn an_nmi_is_reported_as_an_interrupt_and_clears_the_latch() {
         let mut snes = recorded(&[0xEA, 0xEA]);
         snes.observer_mut().0.clear();
-        snes.state.bus.nmi_latched = true;
+        snes.state.bus.interrupts.latch_nmi();
         let at = snes.cycles();
         snes.run(Stop::Instructions(1));
         assert_eq!(
@@ -654,7 +654,7 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, Event::Instruction(_)))
         );
-        assert!(!snes.state.bus.nmi_latched);
+        assert!(!snes.state.bus.interrupts.nmi_latched());
     }
 
     // @source: adr-0004
