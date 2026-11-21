@@ -114,9 +114,10 @@ fn write_only_and_unanswered_addresses_read_open_bus() {
     for address in [
         0x00_2181, 0x00_2182, 0x00_2183, // WMADD*, write-only
         0x00_420D, // MEMSEL, write-only
+        0x00_4202, 0x00_4203, 0x00_4204, 0x00_4205, 0x00_4206, // the math operands
         0x00_2000, 0x00_2184, 0x00_21FF, 0x00_2200, 0x00_4400, 0x00_5FFF, // unused
         0x00_2100, 0x00_2140, // PPU and APU, until those chips exist
-        0x00_4016, 0x00_4213, // internal registers not yet modelled
+        0x00_4016, 0x00_4218, // internal registers not yet modelled
     ] {
         assert_eq!(read(&mut bus, address), 0x5C, "{address:06X}");
     }
@@ -357,4 +358,92 @@ fn reset_clears_the_interrupts_and_sets_wrio() {
     assert_eq!(bus.io_port, 0xFF);
     // The latch from the $4201 write is kept.
     assert_ne!(bus.counters, CounterLatch::power_on());
+}
+
+// @source: anomie-regs#4202
+// @source: anomie-regs#4203
+// @source: anomie-regs#4216
+// @source: anomie-regs#4217
+// @source: fullsnes#snesmathsmultiplydivide
+// @source: adr-0023
+#[test]
+fn the_product_is_read_from_the_ninth_cpu_cycle_after_the_write() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_4202, 200);
+    write(&mut bus, 0x00_4203, 250);
+    // Seven cycles of any kind, then a read in the eighth: too early.
+    for _ in 0..6 {
+        idle(&mut bus);
+    }
+    read(&mut bus, 0x00_8000);
+    assert_eq!(read(&mut bus, 0x00_4216), 0x00);
+    // The ninth cycle sees 50000 = $C350, and the read drives the data bus.
+    assert_eq!(read(&mut bus, 0x00_4216), 0x50);
+    assert_eq!(bus.open_bus_value, 0x50);
+    assert_eq!(read(&mut bus, 0x00_4217), 0xC3);
+    assert_eq!(read(&mut bus, 0x00_4214), 250);
+    assert_eq!(read(&mut bus, 0x00_4215), 0x00);
+}
+
+// @source: anomie-regs#4204
+// @source: anomie-regs#4205
+// @source: anomie-regs#4206
+// @source: anomie-regs#4214
+// @source: anomie-regs#4216
+// @source: fullsnes#snesmathsmultiplydivide
+// @source: adr-0023
+#[test]
+fn the_quotient_is_read_from_the_seventeenth_cpu_cycle_after_the_write() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_4204, 0x39);
+    write(&mut bus, 0x00_4205, 0x30);
+    write(&mut bus, 0x00_4206, 100);
+    for _ in 0..15 {
+        idle(&mut bus);
+    }
+    assert_eq!(read(&mut bus, 0x00_4214), 0);
+    // 12345 = 123 × 100 + 45.
+    assert_eq!(read(&mut bus, 0x00_4214), 123);
+    assert_eq!(read(&mut bus, 0x00_4216), 45);
+}
+
+// @source: anomie-regs#4201
+// @source: anomie-regs#4213
+// @source: fullsnes#snescontrollersioportsmanualreading
+// @source: adr-0023
+#[test]
+fn rdio_reads_back_wrio() {
+    let mut bus = bus();
+    assert_eq!(read(&mut bus, 0x00_4213), 0xFF);
+    write(&mut bus, 0x00_4201, 0x40);
+    assert_eq!(read(&mut bus, 0x00_4213), 0x40);
+    assert_eq!(bus.open_bus_value, 0x40);
+}
+
+// @source: anomie-regs#4213
+// @source: anomie-regs#4214
+// @source: anomie-regs#4216
+// @source: anomie-regs#4202
+// @source: anomie-regs#4204
+// @source: adr-0023
+#[test]
+fn the_math_unit_is_peeked_without_side_effects_and_kept_on_reset() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_4202, 2);
+    write(&mut bus, 0x00_4203, 3);
+    for _ in 0..8 {
+        idle(&mut bus);
+    }
+    bus.reset();
+    assert_eq!(bus.peek(0x00_4213), (0xFF, false));
+    assert_eq!(bus.peek(0x00_4214), (3, false));
+    assert_eq!(bus.peek(0x00_4215), (0, false));
+    assert_eq!(bus.peek(0x00_4216), (6, false));
+    assert_eq!(bus.peek(0x00_4217), (0, false));
+    // The multiplicand is kept too.
+    write(&mut bus, 0x00_4203, 5);
+    for _ in 0..8 {
+        idle(&mut bus);
+    }
+    assert_eq!(bus.peek(0x00_4216), (10, false));
 }

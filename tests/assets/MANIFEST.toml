@@ -66,6 +66,12 @@ sha256 = "9ace9f672a8066d6f899a2d942091e6abfe6b5ea7e2e8f89bf2087583038f02b"
 notes = "Own test cartridge: waits for an HV-IRQ at H=100, V=5 and for the vertical-blank NMI, and reads $4210-$4212 and the H/V counter latch (ADR 0021). Built from tests/carts/interrupts/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/math.sfc"
+license = "own"
+sha256 = "efc6af7e85c356439c3c3d680903e4f2d73f8ab4332cbcefe97ac5a4fe286483"
+notes = "Own test cartridge: multiplies and divides and reads $4214-$4217 one CPU cycle before and when the results appear, divides by zero, and reads $4213 before and after a $4201 write (ADR 0023). Built from tests/carts/math/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
