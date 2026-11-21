@@ -119,7 +119,7 @@ No source gives:
    - Deadlines that fall due during a slot or a wait are serviced at its end, in table order, as at the end of a CPU cycle (ADR 0020, point 9). Lines start, the NMI and IRQ flags are set, latches and the auto-joypad read go on (ADR 0021, ADR 0024).
    - A refresh due during a transfer pauses it for 40 cycles, as it pauses the CPU (ADR 0019, point 6): the refresh is a pause of the bus, and no source exempts DMA. Because 40 is a multiple of 8, the slots stay on the 8-cycle grid.
    - The CPU sees an interrupt raised during the transfer in the cycle after it, at its next instruction boundary (ADR 0021, point 1). The 24–30 cycle delay anomie-timing gives is not modelled separately.
-   - HDMA (#86) will be a deadline checked between bytes that pauses or ends the transfer.
+   - HDMA is a deadline checked between bytes that pauses or ends the transfer (ADR 0026, points 3 and 9).
 10. **The multiply and divide unit does not count during a transfer.** It counts CPU cycles (ADR 0023, point 2). A DMA pause, like a refresh, is not one. An operation running when the transfer starts finishes after the CPU resumes.
 11. **Events.**
     - Each byte reports one `on_dma` event: the channel, `hdma: false`, the source and destination as CPU addresses (`$00:21pp` for the B bus), the value and the slot's start time.

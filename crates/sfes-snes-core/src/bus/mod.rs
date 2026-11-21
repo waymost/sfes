@@ -8,11 +8,13 @@
 // @source: adr-0023
 // @source: adr-0024
 // @source: adr-0025
+// @source: adr-0026
 //! The bus state and the main CPU's view of it (ADR 0019).
 //!
 //! [`Bus`] owns WRAM, the cartridge, the data bus value, the WRAM port, `$420D`, the
 //! interrupt state, `$4201`, the counter latch, the multiply and divide unit (ADR 0023), the
-//! controller ports (ADR 0024), the DMA channels (ADR 0025), the clock and the scheduler. [`BusView`]
+//! controller ports (ADR 0024), the DMA channels and HDMA (ADR 0025, ADR 0026), the clock and
+//! the scheduler. [`BusView`]
 //! implements `Bus65816` over it: it records the interrupt lines (ADR 0021), decodes each
 //! address, syncs the register's owner, performs the access, charges its time, services the
 //! deadlines that fell due (ADR 0020) and tells the observer.
@@ -115,7 +117,8 @@ pub(crate) struct Bus {
     /// The pads, $4016, the auto-joypad read into $4218–$421F and the polled flag
     /// (ADR 0024).
     pub(crate) ports: Ports,
-    /// $420B and $4300–$437F: the DMA channels and a requested transfer (ADR 0025).
+    /// $420B, $420C and $4300–$437F: the DMA channels, a requested transfer and HDMA's
+    /// state (ADR 0025, ADR 0026).
     pub(crate) dma: Dma,
     /// Master cycles since power-on.
     pub(crate) now: Cycles,
@@ -178,7 +181,8 @@ impl Bus {
     /// are 0 (`fullsnes#snesiomap`, ADR 0019), `$4200` and the interrupt flags are clear and
     /// `$4201` is `$FF` (ADR 0021, point 8), and `$4016` bit 0 and the auto-read are off with
     /// a read in progress abandoned (ADR 0024, points 3, 5 and 7), and `$420B` is 0 with a
-    /// transfer not yet started dropped (ADR 0025, point 2). WRAM, the data bus, the
+    /// transfer not yet started dropped (ADR 0025, point 2), and `$420C` is 0 with HDMA's
+    /// flags clear (ADR 0026, point 1). WRAM, the data bus, the
     /// counter latch, the multiply and divide unit, `$4218–$421F` and the DMA channels'
     /// registers are kept (ADR 0018, ADR 0021, ADR 0023, ADR 0024, ADR 0025).
     // @source: fullsnes#snesiomap
@@ -192,6 +196,8 @@ impl Bus {
     // @source: anomie-regs#420b
     // @source: anomie-regs#43x0
     // @source: adr-0025
+    // @source: anomie-regs#420c
+    // @source: adr-0026
     pub(crate) fn reset(&mut self) {
         self.wram_port_address = 0;
         self.fast_rom = false;
@@ -491,6 +497,8 @@ impl Bus {
     // @source: anomie-regs#43x0
     // @source: fullsnes#snesdmaandhdmachannel07registers
     // @source: adr-0025
+    // @source: anomie-regs#420c
+    // @source: adr-0026
     pub(crate) fn write_target(&mut self, target: Target, value: u8) {
         match target {
             Target::Wram(offset) => {
@@ -521,6 +529,7 @@ impl Bus {
             Target::Cpu(0x4209) => self.timing.write_vertical_timer_low(value, self.now),
             Target::Cpu(0x420A) => self.timing.write_vertical_timer_high(value, self.now),
             Target::Cpu(0x420B) => self.dma.write_enable(value),
+            Target::Cpu(0x420C) => self.dma.write_hdma_enable(value),
             Target::Cpu(0x420D) => self.fast_rom = value & FAST_ROM != 0,
             Target::Cpu(register @ 0x4300..=0x43FF) => self.dma.write(register, value),
             Target::Rom(_) | Target::Cpu(_) | Target::Unanswered => {}
@@ -625,7 +634,8 @@ impl Bus {
 
     /// Advances the clock by `cycles` master cycles of a CPU cycle or a DMA transfer, then
     /// services in time order every deadline that fell due (ADR 0020, point 9; ADR 0025,
-    /// point 9).
+    /// point 9). An HDMA step is marked due, to run at the next point the bus can pause
+    /// (ADR 0026, point 3).
     // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: anomie-timing#s-cpu/interrupts
     // @source: adr-0019
@@ -633,6 +643,7 @@ impl Bus {
     // @source: adr-0021
     // @source: adr-0024
     // @source: adr-0025
+    // @source: adr-0026
     fn advance<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
         self.now = Cycles(self.now.0 + cycles);
         while self.now >= self.timing.next_deadline() {
@@ -663,6 +674,7 @@ impl Bus {
                     let next = self.ports.auto_read_event(at);
                     self.timing.schedule_joypad(next);
                 }
+                Some(Event::Hdma(step)) => self.dma.hdma_fell_due(step),
                 None => break,
             }
         }
@@ -705,9 +717,11 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0021
     // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
+    // @source: anomie-timing#s-cpu/hdma
+    // @source: adr-0026
     fn read(&mut self, address: Addr24, pins: Pins) -> u8 {
         let cycles = access_cycles(address, self.bus.fast_rom);
-        self.bus.start_due_dma(cycles, self.observer);
+        self.bus.start_due_pause(cycles, self.observer);
         self.bus.interrupts.record();
         let at = self.bus.now;
         let raw = address.get();
@@ -743,11 +757,13 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0021
     // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
+    // @source: anomie-timing#s-cpu/hdma
+    // @source: adr-0026
     fn write(&mut self, address: Addr24, value: u8, _pins: Pins) {
         // The access's speed is the one in force when it starts, so a write to $420D takes
         // effect from the next access.
         let cycles = access_cycles(address, self.bus.fast_rom);
-        self.bus.start_due_dma(cycles, self.observer);
+        self.bus.start_due_pause(cycles, self.observer);
         self.bus.interrupts.record();
         let at = self.bus.now;
         let raw = address.get();
@@ -767,8 +783,10 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
     // @source: adr-0021
     // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
+    // @source: anomie-timing#s-cpu/hdma
+    // @source: adr-0026
     fn idle(&mut self, _address: Addr24, _pins: Pins) {
-        self.bus.start_due_dma(FAST, self.observer);
+        self.bus.start_due_pause(FAST, self.observer);
         self.bus.interrupts.record();
         self.bus.charge(FAST, self.observer);
     }
