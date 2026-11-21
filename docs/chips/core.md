@@ -15,7 +15,7 @@ This page explains the SNES machine and how the crate models it (QA-08). It grow
 | Part | What | Cloned? |
 | --- | --- | --- |
 | `State::cpu` | The 65C816's registers and run state | yes |
-| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the multiply and divide unit, the controller ports (the held buttons, the pads, `$4016`, the auto-read and `$4218–$421F`, and the polled flags), the clock, and the scheduler (line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table) | yes |
+| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the multiply and divide unit, the controller ports (the held buttons, the pads, `$4016`, the auto-read and `$4218–$421F`, and the polled flags), the DMA channels and a requested transfer, the clock, and the scheduler (line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table) | yes |
 | `State::meta` | The seed and the video standard | yes |
 | `observer` | The observer | yes |
 | `outputs` | The frame buffer | no: a clone starts empty (technical design section 5) |
@@ -48,7 +48,7 @@ The CPU core calls no observer (`docs/chips/cpu.md`, "Notes for M2"). The machin
 | An NMI or IRQ entry | `on_interrupt(Interrupt::Nmi)` if an NMI is latched, else `Interrupt::Irq`, at the time the step began |
 | A waiting or stopped step | nothing |
 
-Every `read` and `write` cycle calls `on_read` or `on_write` on `BusId::Cpu`, with the time the access began. Internal cycles call nothing.
+Every `read` and `write` cycle calls `on_read` or `on_write` on `BusId::Cpu`, with the time the access began. Internal cycles call nothing. Each byte a DMA transfer moves calls `on_dma` instead (see [General DMA](#general-dma)).
 
 The bus reports line and frame boundaries from the cycle in which they pass, after that cycle's `on_read` or `on_write` (ADR 0020, point 8):
 - `on_scanline(line, at)` at the start of every line, line 0 included, with the time it started. Power-on and reset start line 0 without it.
@@ -165,7 +165,7 @@ A stop overshoots its target by at most one step.
 
 ### The deadline table
 
-The bus keeps the next time each scheduled event is due: the refresh pause, the next line start, the NMI flag, the next H/V timer trigger point, a `$4201` counter latch and the auto-joypad read's next event (ADR 0024, point 9), with HDMA to follow. After every CPU cycle one comparison with the earliest of them decides whether any is due. Due events are serviced in time order, and events due together in the table's order (technical design section 4, ADR 0001, ADR 0020, point 9, ADR 0021, point 9).
+The bus keeps the next time each scheduled event is due: the refresh pause, the next line start, the NMI flag, the next H/V timer trigger point, a `$4201` counter latch and the auto-joypad read's next event (ADR 0024, point 9), with HDMA to follow. A DMA transfer services them between its bytes, too (ADR 0025, point 9). After every CPU cycle one comparison with the earliest of them decides whether any is due. Due events are serviced in time order, and events due together in the table's order (technical design section 4, ADR 0001, ADR 0020, point 9, ADR 0021, point 9).
 
 ## Interrupts and the H/V timer
 
@@ -333,6 +333,79 @@ A CPU read of `$4016`, `$4017` or `$4218–$421F` sets the frame's polled flag. 
 
 It then enables the auto-read, waits for `$4212` bit 0 to set and clear, and copies `$4218–$421F`. A test in `src/carts.rs` sets the buttons on both ports and checks every byte, including the open-bus `$40` in the unused bits. It also checks the polled flag over three frames.
 
+## General DMA
+
+[`bus/dma.rs`](../../crates/sfes-snes-core/src/bus/dma.rs) holds the eight channels and runs general-purpose transfers inside the bus (technical design section 4, catch-up rule 4; ADR 0025).
+
+### The registers
+
+| Register | What |
+| --- | --- |
+| `$420B MDMAEN` | write-only; each set bit starts its channel (`anomie-regs#420b`) |
+| `$43x0 DMAPx` | bit 7 direction (0: A bus to B bus); bit 3 fixed address; bit 4 decrement; bits 2–0 mode (`anomie-regs#43x0`) |
+| `$43x1 BBADx` | the B-bus register `$21pp` (`anomie-regs#43x1`) |
+| `$43x2–$43x4 A1Tx, A1Bx` | the A-bus address; the bank is never stepped (`anomie-regs#43x2`) |
+| `$43x5–$43x6 DASx` | the byte count; 0 means `$10000` (`anomie-regs#43x5`) |
+| `$43x7–$43xB`, `$43xF` | HDMA's registers and the unused byte, readable and writable; `$43xF` is `$43xB` (`fullsnes#snesdmaandhdmachannel07registers`) |
+
+Every channel register is `$FF` at power-on and kept on reset. `$43xC–$43xE` and `$4380–$43FF` are open bus (ADR 0025, point 1).
+
+The modes, as B-bus offsets from `$21pp` (`anomie-regs#43x0`, `fullsnes#snesdmaandhdmachannel07registers`):
+
+| Mode | Bytes |
+| --- | --- |
+| 0 | `p` |
+| 1 | `p, p+1` |
+| 2, 6 | `p, p` |
+| 3, 7 | `p, p, p+1, p+1` |
+| 4 | `p, p+1, p+2, p+3` |
+| 5 | `p, p+1, p, p+1` |
+
+The count is in bytes, not units: a count of 5 in mode 4 writes all four registers and then the first again (`anomie-regs#43x5`). Offsets wrap within `$21xx`.
+
+### The pause
+
+After a `$420B` write the CPU gets one more cycle, then pauses. The length of the cycle that runs after the pause is the transfer's CPU Clock (`anomie-timing#s-cpu/dma`). The machine runs the transfer at the start of that cycle (ADR 0025, points 3 and 4):
+1. It waits to the next multiple of 8 master cycles since power-on or reset, 2 to 8 cycles.
+2. It spends 8 cycles on the whole transfer.
+3. For each set channel, 0 first, it spends 8 cycles, then 8 per byte.
+4. It waits to the next whole number of CPU Clocks since the pause began, 1 cycle to a whole clock.
+
+So "STA $420B : NOP" with one 3-byte channel pauses for 48 or 54 cycles, as in anomie-timing's four examples.
+
+Each byte moves at the start of its 8-cycle slot (ADR 0025, point 5):
+- the A-bus address is read or written through the A bus, and `$21pp` plus the mode's offset through the B bus;
+- the value is placed on the data bus;
+- then `$43x2/3` steps, by bits 4–3 of `$43x0`, and the count is decremented, until it reaches 0.
+
+### What a transfer reaches
+
+- **Through the A bus** (`anomie-regs#dma-and-hdma/dma`, `fullsnes#snesunpredictablethings`; ADR 0025, point 6):
+  - WRAM, ROM and cartridge RAM, and the `$42xx` registers, as for the CPU.
+  - Not the B-bus registers, `$420B`, `$420C` or `$4300–$437F`: they read open bus, and writes to them are lost.
+  - `$4000–$41FF` reads open bus, with `$4017` bits 4–2 set, and clocks no pad.
+- **Through the B bus**, the PPU, the APU and the WRAM port answer as for the CPU (ADR 0025, point 7).
+- **WRAM through both buses fails**, with the B-bus side not answered and the WRAM port not moving (`anomie-regs#2180`, `#2181`, `fullsnes#snesmemoryworkramaccess`; ADR 0025, point 7).
+- **Open bus** during a transfer is the data bus's last value (ADR 0025, point 8).
+
+### Time during a transfer
+
+- Deadlines that fall due during a transfer are serviced between bytes, so lines, the NMI and IRQ flags, latches and the auto-joypad read go on (ADR 0025, point 9).
+- A refresh pauses the transfer for 40 cycles after the slot it falls in.
+- The CPU sees a flag raised during the transfer from the cycle after it.
+- The multiply and divide unit does not count during the pause (ADR 0025, point 10).
+- HDMA, which will pre-empt a transfer between bytes, arrives with #86.
+
+### Test cartridge
+
+[`tests/carts/dma`](../../tests/carts/dma/dma.s) runs four transfers into the WRAM port:
+- ROM to WRAM in mode 0;
+- a fixed-address fill and a decrementing copy, on two channels at once;
+- `$2180` to WRAM, which fails;
+- `$4017` through the A bus.
+
+It then copies channel registers to WRAM. A test in `src/carts.rs` checks every byte, including the open-bus `$EA` the next opcode leaves on the data bus.
+
 ## Decisions
 
 - [ADR 0018](../adr/0018-snes-reset-and-power-on.md): RESB timing, the page-1 reads, power-on and reset, the default region, observer events and the provisional timing.
@@ -342,3 +415,4 @@ It then enables the auto-read, waits for `$4212` bit 0 to set and clear, and cop
 - [ADR 0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md) (CPU core): the IRQ check uses the I flag from before the last cycle, and WAI ends two internal cycles after a request.
 - [ADR 0023](../adr/0023-snes-multiply-divide-unit-and-io-port.md): the multiply and divide results, their latency in CPU cycles, reads before the result, and RDIO.
 - [ADR 0024](../adr/0024-controller-ports-and-the-auto-joypad-read.md): the pad, `$4016/$4017`, when the auto-read starts and takes its bits, reset, and the polled flag.
+- [ADR 0025](../adr/0025-general-dma.md): the channel registers, when the pause begins and how long it lasts, where each byte falls, what the A and B buses reach, open bus, deadlines and the math unit during a transfer, and `on_dma`.

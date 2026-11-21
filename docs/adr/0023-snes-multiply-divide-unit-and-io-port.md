@@ -56,6 +56,6 @@ ADR 0021 already models `$4201` bit 7 as the PPU latch line and sets `$4201` to 
   - RDIO;
   - peek and reset.
 - The `math` test cartridge reads each result one cycle early and exactly on time, and `src/carts.rs` checks the values against the documents.
-- DMA (#85) pauses the CPU. Whether the unit keeps counting during a transfer is decided there.
+- DMA (#85) pauses the CPU. Whether the unit keeps counting during a transfer is decided there: it does not (ADR 0025, point 10).
 - We revisit points 2–4 if a test ROM measures results mid-operation, the effect of a refresh, or the upper-bits shortcut.
 - The technical design's M2 checklist and `docs/chips/core.md` cite this ADR.

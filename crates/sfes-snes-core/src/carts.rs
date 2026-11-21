@@ -3,6 +3,7 @@
 // @source: adr-0021
 // @source: adr-0023
 // @source: adr-0024
+// @source: adr-0025
 //! Runs the project's own test cartridges (ADR 0013) and checks what they leave against
 //! values computed from the documents.
 
@@ -253,4 +254,48 @@ fn joypad_cart_reads_the_pads_by_hand_and_by_the_auto_read() {
     assert_eq!(wram[0x13..0x16], [0x41; 3]);
     // byetUDLR axlr0000: port 1 is $A140 and port 2 $4820; Data2 is not connected.
     assert_eq!(wram[0x16..0x1E], [0x40, 0xA1, 0x20, 0x48, 0, 0, 0, 0]);
+}
+
+// @source: anomie-regs#420b
+// @source: anomie-regs#43x0
+// @source: anomie-regs#43x2
+// @source: anomie-regs#43x5
+// @source: anomie-regs#43xb
+// @source: anomie-regs#dma-and-hdma/dma
+// @source: anomie-regs#2180
+// @source: anomie-timing#s-cpu/dma
+// @source: fullsnes#snesunpredictablethings
+// @source: adr-0013
+// @source: adr-0025
+#[test]
+fn dma_cart_moves_bytes_through_the_wram_port_and_leaves_the_registers_stepped() {
+    let rom = include_bytes!("../../../tests/assets/carts/dma.sfc");
+    let mut snes = Snes::<Fast>::builder(Arc::from(rom.as_slice()))
+        .build()
+        .expect("builds");
+    snes.run(Stop::Frames(1));
+    assert_eq!(snes.cpu().run, RunState::Stopped);
+
+    let wram = snes.region(RegionId::Wram);
+    let source = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+    // Mode 0, incrementing: the source in order (anomie-regs#43x0).
+    assert_eq!(wram[0x100..0x108], source);
+    // Fixed: the one fill byte five times; decrementing: the last four backwards.
+    assert_eq!(wram[0x108..0x10D], [0xA5; 5]);
+    assert_eq!(wram[0x10D..0x111], [0x88, 0x77, 0x66, 0x55]);
+    // $4017 through the A bus: the NOP's $EA with bits 4-2 set (ADR 0025, points 6 and 8).
+    assert_eq!(wram[0x111], 0xFE);
+    // $2180 to WRAM fails on the B-bus side: WRAM takes the open-bus $EA (ADR 0025,
+    // point 7), and the port did not move, so $0111 above was the next byte it wrote.
+    assert_eq!(wram[0x120..0x122], [0xEA, 0xEA]);
+    // Channel 0 ends 8 bytes on, bank unchanged, count 0; channel 3 four bytes back from
+    // source + 7; $430B keeps its power-on $FF (anomie-regs#43x2, #43x5, #43xb).
+    let address = u16::from_le_bytes([wram[0x140], wram[0x141]]);
+    let [after_low, after_high] = (address + 8).to_le_bytes();
+    assert_eq!(
+        wram[0x130..0x135],
+        [after_low, after_high, 0x00, 0x00, 0x00]
+    );
+    let [back_low, back_high] = (address + 3).to_le_bytes();
+    assert_eq!(wram[0x135..0x138], [back_low, back_high, 0xFF]);
 }

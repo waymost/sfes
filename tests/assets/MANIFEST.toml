@@ -78,6 +78,12 @@ sha256 = "825872693709554195f3735ebe2cefcc9e57e6dc415110e0398bb2c283bff145"
 notes = "Own test cartridge: latches the pads through $4016, reads both ports by hand and with the latch held high, then waits out one auto-joypad read and copies $4218-$421F. Built from tests/carts/joypad/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/dma.sfc"
+license = "own"
+sha256 = "c89abd8c74e4de044c13a2bb4e942314ef603cb4b74c0ba1985ec5819c6e6eca"
+notes = "Own test cartridge: Runs general DMA through the WRAM port: ROM to WRAM in mode 0, a fixed fill and a decrementing copy on two channels at once, $2180 to WRAM, and $4017 through the A bus, then copies the channel registers to WRAM. Built from tests/carts/dma/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
