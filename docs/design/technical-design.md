@@ -178,8 +178,8 @@ pub enum Stop { Frames(u32), Scanlines(u32), Instructions(u32), Cycles(u64), Wat
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct State {
     cpu: Cpu65816,   // registers and run state only
-    bus: Bus,        // WRAM, PPU, APU, cart, DMA, 5A22 I/O, ports, deadlines, line and frame counters
-    meta: Meta,      // seed, region, polled flag
+    bus: Bus,        // WRAM, PPU, APU, cart, DMA, 5A22 I/O, ports and polled flag, deadlines, line and frame counters
+    meta: Meta,      // seed, region
 }
 
 pub struct Snes<A: Accuracy = Fast, O: Observer = NoopObserver> {
@@ -409,7 +409,7 @@ pub enum Device {
 }
 ```
 
-Input set before a frame is latched for that frame. The frame's `polled` flag is set when the game reads `$4016`/`$4017` or the auto-read results at `$4218`–`$421F`, which is how lag frames are detected (TAS-04).
+Input set before a frame is latched for that frame. The frame's `polled` flag is set when the game reads `$4016`/`$4017` or the auto-read results at `$4218`–`$421F`, which is how lag frames are detected (TAS-04). The flag lives with the ports in the bus, which sets it; at each frame end it is kept as that frame's result and `polled()` reports it (ADR 0024). Until `Device` lands, each port always has a standard pad (ADR 0024).
 
 ### Movies (`sfes-movie`, FND-04)
 
@@ -681,7 +681,7 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 
 ### M2 — Bus, DMA and video
 
-- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82), and the multiply and divide unit, WRIO and RDIO (ADR 0023, #83).
+- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82), the multiply and divide unit, WRIO and RDIO (ADR 0023, #83); the controller ports and the auto-joypad read (ADR 0024, #84).
 - [ ] Deadline table and catch-up in `BusView`, and NTSC and PAL frame timing (ADR 0020, #81); DMA and HDMA.
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System` (ADR 0018, #79); `impl System for Snes` waits for the state envelope in M4.

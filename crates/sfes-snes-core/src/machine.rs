@@ -219,9 +219,9 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
     pub fn power_cycle(&mut self, seed: u64) {
         let region = self.state.meta.region;
         let cartridge = self.state.bus.cartridge.clone();
-        let input = self.state.bus.input;
+        let input = self.state.bus.ports.input;
         self.state.bus = Bus::power_on(cartridge, Timing::new(region, Cycles(0)), seed);
-        self.state.bus.input = input;
+        self.state.bus.ports.input = input;
         self.state.cpu = Cpu65816::new();
         self.state.meta = Meta { seed, region };
         self.reset_cpu();
@@ -236,12 +236,24 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         cpu.reset(&mut view);
     }
 
-    /// Sets the buttons held on `port`, 0 or 1. Other ports are ignored.
+    /// Sets the buttons held on `port`, 0 or 1, by the pad on it. Other ports are ignored.
+    /// The pad takes them at its next latch, so input set before a frame is what that frame
+    /// reads (ADR 0024, points 1 and 2).
     // @source: adr-0018
+    // @source: adr-0024
     pub fn set_input(&mut self, port: usize, input: Buttons) {
-        if let Some(held) = self.state.bus.input.get_mut(port) {
+        if let Some(held) = self.state.bus.ports.input.get_mut(port) {
             *held = input;
         }
+    }
+
+    /// Whether the game read the controllers, at `$4016`, `$4017` or `$4218–$421F`, in the
+    /// last frame that ended. A frame in which it did not is a lag frame (ADR 0024,
+    /// point 8; technical design section 7).
+    // @source: adr-0024
+    #[must_use]
+    pub const fn polled(&self) -> bool {
+        self.state.bus.ports.last_frame_polled()
     }
 
     /// Runs until `until` is reached, at the first step boundary at or after it (FND-08):
@@ -950,6 +962,9 @@ mod tests {
         assert_eq!(copy.video().pixels.len(), 0);
         snes.set_input(1, Buttons::START);
         snes.set_input(9, Buttons::A);
-        assert_eq!(snes.state.bus.input, [Buttons::empty(), Buttons::START]);
+        assert_eq!(
+            snes.state.bus.ports.input,
+            [Buttons::empty(), Buttons::START]
+        );
     }
 }

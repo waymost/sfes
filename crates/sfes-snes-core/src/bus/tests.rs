@@ -3,7 +3,7 @@
 
 use alloc::vec;
 
-use sfes_api::{Addr24, Cycles, NoopObserver};
+use sfes_api::{Addr24, Buttons, Cycles, NoopObserver};
 use sfes_snes_cart::{Cartridge, Options, Region};
 use sfes_snes_cpu::{Bus65816, Pins};
 
@@ -105,6 +105,7 @@ fn peeking_wmdata_reads_without_advancing() {
 // @source: anomie-regs#420d
 // @source: fullsnes#snesiomap
 // @source: adr-0019
+// @source: adr-0024
 #[test]
 fn write_only_and_unanswered_addresses_read_open_bus() {
     let mut bus = bus();
@@ -117,7 +118,7 @@ fn write_only_and_unanswered_addresses_read_open_bus() {
         0x00_4202, 0x00_4203, 0x00_4204, 0x00_4205, 0x00_4206, // the math operands
         0x00_2000, 0x00_2184, 0x00_21FF, 0x00_2200, 0x00_4400, 0x00_5FFF, // unused
         0x00_2100, 0x00_2140, // PPU and APU, until those chips exist
-        0x00_4016, 0x00_4218, // internal registers not yet modelled
+        0x00_4000, 0x00_4015, 0x00_4018, 0x00_41FF, 0x00_4220, // unused CPU registers
     ] {
         assert_eq!(read(&mut bus, address), 0x5C, "{address:06X}");
     }
@@ -446,4 +447,122 @@ fn the_math_unit_is_peeked_without_side_effects_and_kept_on_reset() {
         idle(&mut bus);
     }
     assert_eq!(bus.peek(0x00_4216), (10, false));
+}
+
+// @source: anomie-regs
+// @source: anomie-regs#4016
+// @source: anomie-regs#4017
+// @source: fullsnes#snescontrollersioportsmanualreading
+// @source: adr-0024
+#[test]
+fn joyser0_and_joyser1_read_data1_over_open_bus_and_clock_their_pad() {
+    let mut bus = bus();
+    bus.ports.input = [Buttons::B, Buttons::Y];
+    write(&mut bus, 0x00_4016, 0x01);
+    write(&mut bus, 0x00_4016, 0x00);
+    // $4016: bits 7-2 open bus ($00 from the write), Data2 0, Data1 the B button.
+    assert_eq!(read(&mut bus, 0x00_4016), 0x01);
+    assert_eq!(read(&mut bus, 0x00_4016), 0x00);
+    // $4017: bits 4-2 set, bits 7-5 open bus. Port 2's pad has not moved: B, then Y.
+    write(&mut bus, 0x00_0000, 0xFF);
+    assert_eq!(read(&mut bus, 0x00_4017), 0xFC);
+    write(&mut bus, 0x00_0000, 0x00);
+    assert_eq!(read(&mut bus, 0x00_4017), 0x1D);
+    // A peek reports a side effect and does not clock the pad. The data bus holds $1D.
+    assert_eq!(bus.peek(0x00_4016), (0x1C, true));
+    assert_eq!(bus.peek(0x00_4016), (0x1C, true));
+    assert_eq!(bus.peek(0x00_4017), (0x1C, true));
+}
+
+// @source: anomie-timing#s-cpu/auto-joypad-read
+// @source: anomie-regs#4200
+// @source: anomie-regs#4212
+// @source: anomie-regs#4218
+// @source: adr-0024
+#[test]
+fn the_auto_read_sets_hvbjoy_bit_0_and_fills_joy1_at_dot_74_5_of_line_225() {
+    let mut bus = bus();
+    bus.ports.input[0] = Buttons::A | Buttons::START;
+    write(&mut bus, 0x00_4200, 0x01);
+    let start = 225 * 1364 + 298;
+    // Each idle is 6 master cycles: stop in the cycle before the start.
+    while bus.now.0 + 6 <= start {
+        idle(&mut bus);
+    }
+    assert_eq!(bus.peek(0x00_4212).0 & 0x01, 0);
+    idle(&mut bus);
+    assert_eq!(bus.peek(0x00_4212).0 & 0x01, 0x01);
+    while bus.now.0 < start + 4224 {
+        assert_eq!(bus.peek(0x00_4212).0 & 0x01, 0x01, "{}", bus.now.0);
+        idle(&mut bus);
+    }
+    assert_eq!(bus.peek(0x00_4212).0 & 0x01, 0);
+    // byetUDLR axlr0000: Start and A are $1080.
+    assert_eq!(read(&mut bus, 0x00_4218), 0x80);
+    assert_eq!(read(&mut bus, 0x00_4219), 0x10);
+    assert_eq!(bus.peek(0x00_421A), (0, false));
+    assert_eq!(bus.peek(0x00_421F), (0, false));
+}
+
+// @source: anomie-regs#4200
+// @source: anomie-regs#4218
+// @source: adr-0024
+#[test]
+fn with_4200_bit_0_clear_no_auto_read_runs() {
+    let mut bus = bus();
+    bus.ports.input[0] = Buttons::A;
+    write(&mut bus, 0x00_4200, 0x80);
+    while bus.now.0 < 226 * 1364 {
+        assert_eq!(bus.peek(0x00_4212).0 & 0x01, 0);
+        idle(&mut bus);
+    }
+    assert_eq!(read(&mut bus, 0x00_4218), 0);
+}
+
+// @source: adr-0020
+// @source: adr-0024
+#[test]
+fn the_polled_flag_is_kept_at_each_frame_end() {
+    let mut bus = bus();
+    assert_eq!(bus.peek(0x00_4218), (0, false));
+    assert!(bus.peek(0x00_4016).1);
+    // Neither peek polled: the first frame ends unpolled.
+    while bus.timing.frames() < 1 {
+        idle(&mut bus);
+    }
+    assert!(!bus.ports.last_frame_polled());
+    read(&mut bus, 0x00_421B);
+    while bus.timing.frames() < 2 {
+        idle(&mut bus);
+    }
+    assert!(bus.ports.last_frame_polled());
+    read(&mut bus, 0x00_4017);
+    while bus.timing.frames() < 3 {
+        idle(&mut bus);
+    }
+    assert!(bus.ports.last_frame_polled());
+    while bus.timing.frames() < 4 {
+        idle(&mut bus);
+    }
+    assert!(!bus.ports.last_frame_polled());
+}
+
+// @source: fullsnes#snesiomap
+// @source: anomie-regs#4200
+// @source: adr-0024
+#[test]
+fn reset_clears_the_latch_and_the_enable_and_keeps_joy1() {
+    let mut bus = bus();
+    bus.ports.input[0] = Buttons::B;
+    write(&mut bus, 0x00_4200, 0x01);
+    // Past the end of the first auto-read, at dot 74.5 of line 225.
+    while bus.now.0 < 225 * 1364 + 298 + 4224 {
+        idle(&mut bus);
+    }
+    write(&mut bus, 0x00_4016, 0x01);
+    bus.reset();
+    // The latch is low: the pad moves on, B then Y.
+    assert_eq!(read(&mut bus, 0x00_4016) & 0x03, 1);
+    assert_eq!(read(&mut bus, 0x00_4016) & 0x03, 0);
+    assert_eq!(read(&mut bus, 0x00_4219), 0x80);
 }

@@ -11,9 +11,12 @@
 // @source: anomie-timing#s-cpu/interrupts
 // @source: anomie-timing#s-cpu/registers
 // @source: adr-0021
+// @source: anomie-timing#s-cpu/auto-joypad-read
+// @source: adr-0024
 //! The scheduler: line and frame position, the interlace field, vertical blank, the refresh
-//! schedule, the NMI and H/V timer trigger points, the counter latch of `$4201` and the
-//! deadline table (technical design section 4; ADR 0019, point 6; ADR 0020; ADR 0021).
+//! schedule, the NMI and H/V timer trigger points, the counter latch of `$4201`, the
+//! auto-joypad read and the deadline table (technical design section 4; ADR 0019, point 6;
+//! ADR 0020; ADR 0021; ADR 0024).
 
 mod deadlines;
 mod irq;
@@ -54,6 +57,13 @@ const HBLANK_START: u16 = 274;
 const HBLANK_END: u16 = 1;
 /// How long after the start of a `$4201` write its counter latch falls: one dot.
 pub(crate) const WRIO_LATCH_DELAY: u64 = 4;
+/// The earliest an auto-joypad read starts in its line: dot 32.5.
+const AUTO_READ_EARLIEST: u64 = 130;
+/// When the first frame's auto-joypad read starts after power-on or reset: dot 74.5 of
+/// line 225, after 225 lines of 1364 master cycles.
+const AUTO_READ_FIRST: u64 = 225 * 1364 + 298;
+/// Auto-joypad reads start a multiple of this many master cycles apart.
+const AUTO_READ_GRID: u64 = 256;
 
 /// What servicing a deadline did.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +89,11 @@ pub(crate) enum Event {
         line: u16,
         /// The dot, the latched H.
         dot: u16,
+    },
+    /// The auto-joypad read's next event is due (ADR 0024, point 9).
+    Joypad {
+        /// When it was due.
+        at: Cycles,
     },
 }
 
@@ -112,7 +127,11 @@ pub(crate) struct Timing {
     previous: Option<TimedLine>,
     /// Trigger points before this time have passed.
     irq_after: Cycles,
-    /// When the next refresh, line, NMI flag, trigger point and `$4201` latch are due.
+    /// When the frame started at power-on or the last reset: the auto-read's grid starts
+    /// [`AUTO_READ_FIRST`] cycles later (ADR 0024, point 5).
+    origin: Cycles,
+    /// When the next refresh, line, NMI flag, trigger point, `$4201` latch and auto-read
+    /// event are due.
     deadlines: Deadlines,
 }
 
@@ -138,6 +157,7 @@ impl Timing {
             timer: Timer::power_on(),
             previous: None,
             irq_after: start,
+            origin: start,
             deadlines: Deadlines::new(),
         };
         timing.restart(start);
@@ -147,8 +167,9 @@ impl Timing {
     /// Restarts the frame at `start`, as reset does: the SNES "returns to a known timing
     /// position on reset" (ADR 0018), H=0, V=0 with field 0 (ADR 0020, point 4), `$2133` is
     /// 0 and the refresh schedule starts over (ADR 0019). `$4200` is 0, HTIME and VTIME are
-    /// kept, and no NMI flag or latch is pending (ADR 0021, point 8). The counts of lines and
-    /// frames are kept.
+    /// kept, and no NMI flag or latch is pending (ADR 0021, point 8). No auto-read is pending
+    /// and its grid starts over (ADR 0024, points 5 and 7). The counts of lines and frames
+    /// are kept.
     // @source: anomie-timing
     // @source: fullsnes#snestiminghvevents
     // @source: fullsnes#snesiomap
@@ -156,6 +177,8 @@ impl Timing {
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
+    // @source: anomie-timing#s-cpu/auto-joypad-read
+    // @source: adr-0024
     pub(crate) fn restart(&mut self, start: Cycles) {
         self.screen_mode = 0;
         // Field 0 at H=0; the toggle at H=1 of this line makes the frame field 1.
@@ -171,6 +194,8 @@ impl Timing {
             .set(Deadline::Line, Cycles(start.0 + LineKind::Normal.length()));
         self.deadlines.set(Deadline::Nmi, NEVER);
         self.deadlines.set(Deadline::Latch, NEVER);
+        self.deadlines.set(Deadline::Joypad, NEVER);
+        self.origin = start;
         self.timer.reset();
         self.previous = None;
         self.irq_after = start;
@@ -235,6 +260,28 @@ impl Timing {
     // @source: adr-0021
     pub(crate) const fn schedule_latch(&mut self, at: Cycles) {
         self.deadlines.set(Deadline::Latch, at);
+    }
+
+    /// Schedules the auto-read's next event at `at`, or none at `None` (ADR 0024, point 9).
+    // @source: adr-0024
+    pub(crate) const fn schedule_joypad(&mut self, at: Option<Cycles>) {
+        let at = match at {
+            Some(at) => at,
+            None => NEVER,
+        };
+        self.deadlines.set(Deadline::Joypad, at);
+    }
+
+    /// When the auto-read starts in the line that starts vertical blank at `line_start`:
+    /// the earliest time at or after dot 32.5 on the 256-cycle grid that starts at dot 74.5
+    /// of the first frame's line 225 (ADR 0024, point 5).
+    // @source: anomie-timing#s-cpu/auto-joypad-read
+    // @source: adr-0024
+    const fn auto_read_start(&self, line_start: Cycles) -> Cycles {
+        let earliest = line_start.0 + AUTO_READ_EARLIEST;
+        let grid = (self.origin.0 + AUTO_READ_FIRST) % AUTO_READ_GRID;
+        let wait = (grid + AUTO_READ_GRID - earliest % AUTO_READ_GRID) % AUTO_READ_GRID;
+        Cycles(earliest + wait)
     }
 
     /// Whether vertical blank has begun and not yet ended: `$4212` bit 7 (ADR 0021,
@@ -323,11 +370,13 @@ impl Timing {
     }
 
     /// Services the first deadline due at or before `now`, if any, and schedules its next
-    /// occurrence (ADR 0020, point 9; ADR 0021, point 9).
+    /// occurrence (ADR 0020, point 9; ADR 0021, point 9). The auto-read's next event is
+    /// scheduled by the bus (ADR 0024, point 9).
     // @source: adr-0001
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
+    // @source: adr-0024
     pub(crate) fn service(&mut self, now: Cycles) -> Option<Event> {
         let deadline = self.deadlines.first_due(now)?;
         let at = self.deadlines.due(deadline);
@@ -350,6 +399,10 @@ impl Timing {
                 self.deadlines.set(Deadline::Latch, NEVER);
                 let (line, dot) = self.position(at);
                 Some(Event::Latch { line, dot })
+            }
+            Deadline::Joypad => {
+                self.deadlines.set(Deadline::Joypad, NEVER);
+                Some(Event::Joypad { at })
             }
         }
     }
@@ -408,8 +461,8 @@ impl Timing {
 
     /// Starts the line that is due: the next line, or line 0 after the frame's last line,
     /// with its length, the field toggle and the start of vertical blank (ADR 0020,
-    /// points 1, 2, 4 and 5), the NMI flag it brings and its trigger point (ADR 0021,
-    /// points 4 and 9).
+    /// points 1, 2, 4 and 5), the NMI flag and auto-read it brings and its trigger point
+    /// (ADR 0021, points 4 and 9; ADR 0024, point 5).
     // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: anomie-timing#s-ppu/blanking-periods
     // @source: anomie-regs#2133
@@ -418,6 +471,8 @@ impl Timing {
     // @source: anomie-timing#s-cpu/interrupts
     // @source: adr-0020
     // @source: adr-0021
+    // @source: anomie-timing#s-cpu/auto-joypad-read
+    // @source: adr-0024
     fn start_line(&mut self) -> Event {
         let at = self.deadlines.due(Deadline::Line);
         self.previous = Some(self.timed_line());
@@ -439,6 +494,8 @@ impl Timing {
             self.vblank = true;
             self.frames += 1;
             self.deadlines.set(Deadline::Nmi, Cycles(at.0 + NMI_FLAG));
+            self.deadlines
+                .set(Deadline::Joypad, self.auto_read_start(at));
         }
         self.lines += 1;
         self.deadlines

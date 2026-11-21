@@ -40,7 +40,7 @@ ADR 0021 already models `$4201` bit 7 as the PPU latch line and sets `$4201` to 
 3. **Before the result.** Until the results appear, `$4214–$4217` keep their previous values. No source describes the registers mid-operation, and this choice needs no model of the unit's internals. The extra `$4214–$4215` values of a multiplication appear with its product.
 4. **A new operation while one runs.** The new one starts its own count and the old one's results are dropped. They never appear.
 5. **Power-on and reset.** At power-on `$4202` is `$FF` and `$4204–$4205` are `$FFFF` (anomie-regs). `$4214–$4217` are 0, following fullsnes's `(0)` for `$4214–$4215`; no source gives `$4216–$4217`. Reset changes nothing in the unit, and an operation running at reset still finishes.
-6. **`$4213` RDIO** returns `$4201` with every bit a device pulls low cleared. Until the controller ports (#85) and the lightgun, no device pulls any line low, so it reads back `$4201`. It is a full 8-bit read and drives the data bus.
+6. **`$4213` RDIO** returns `$4201` with every bit a device pulls low cleared. Until the controller ports (#84) and the lightgun, no device pulls any line low, so it reads back `$4201`. It is a full 8-bit read and drives the data bus.
 7. **Reads and writes of the other registers.** `$4202–$4206` are write-only and read open bus. Reading `$4213–$4217` has no side effects. Writes to them are lost.
 
 ## Consequences
@@ -56,6 +56,6 @@ ADR 0021 already models `$4201` bit 7 as the PPU latch line and sets `$4201` to 
   - RDIO;
   - peek and reset.
 - The `math` test cartridge reads each result one cycle early and exactly on time, and `src/carts.rs` checks the values against the documents.
-- DMA (#84) pauses the CPU. Whether the unit keeps counting during a transfer is decided there.
+- DMA (#85) pauses the CPU. Whether the unit keeps counting during a transfer is decided there.
 - We revisit points 2–4 if a test ROM measures results mid-operation, the effect of a refresh, or the upper-bits shortcut.
 - The technical design's M2 checklist and `docs/chips/core.md` cite this ADR.
