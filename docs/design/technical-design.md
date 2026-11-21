@@ -269,7 +269,7 @@ Lines are 1364 master cycles, except a 1360-cycle NTSC line 240 in non-interlace
 
 ### Catch-up rules
 
-1. **Owner sync.** Before an access to a component's registers or shared memory, that component runs to `now`: PPU `$2100–$213F`, APU ports `$2140–$217F`, coprocessor registers and their shared RAM.
+1. **Owner sync.** Before an access to a component's registers or shared memory, that component runs to `now`: PPU `$2100–$213F`, APU ports `$2140–$217F`, coprocessor registers and their shared RAM. Until M3 the APU is a placeholder whose ports read `$00` and keep writes, behind the same hook (ADR 0027).
 2. **Scanline rendering (`Fast`).** PPU catch-up renders every line whose start time is ≤ `now` and has not yet been drawn, using registers as they stand at that moment. A register write in the middle of line *L* therefore takes effect on line *L+1*, matching EMU-01. HDMA for a line runs as a deadline before that line renders: the transfer at H=278 of line *L* changes the registers line *L+1* renders (ADR 0026).
 3. **APU laziness.** The SPC700 and S-DSP run only on port access, at frame end, and when the audio buffer needs samples. This is the largest performance win of the model.
 4. **General DMA.** A write to `$420B` executes the transfer inside the bus, advancing the clock per byte and checking the HDMA deadline between bytes, so HDMA pre-empts DMA (EMU-05). The transfer starts at the start of the second CPU cycle after the write, and the other deadlines are serviced between its bytes too (ADR 0025). An HDMA step that falls due during the transfer runs between bytes, and ends the transfer if it works on the same channel; one that falls due while the CPU runs pauses it at the start of its next cycle, timed as DMA is (ADR 0026, points 3 and 9).
@@ -681,7 +681,7 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 
 ### M2 — Bus, DMA and video
 
-- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82), the multiply and divide unit, WRIO and RDIO (ADR 0023, #83); the controller ports and the auto-joypad read (ADR 0024, #84); general DMA (ADR 0025, #85).
+- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82), the multiply and divide unit, WRIO and RDIO (ADR 0023, #83); the controller ports and the auto-joypad read (ADR 0024, #84); general DMA (ADR 0025, #85); the APU ports' placeholder until M3 (ADR 0027, #87).
 - [ ] Deadline table and catch-up in `BusView`, and NTSC and PAL frame timing (ADR 0020, #81); HDMA (ADR 0026, #86).
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System` (ADR 0018, #79); `impl System for Snes` waits for the state envelope in M4.
@@ -694,7 +694,7 @@ ExHiROM, PAL timing, hi-res, pseudo-hi-res and interlace are P1 in the feature s
 
 ### M3 — Audio and base system
 
-- [ ] SPC700 passing its vectors; timers, ports and the cross-clock ratio; clean-room IPL boot program.
+- [ ] SPC700 passing its vectors; timers, ports and the cross-clock ratio, replacing the M2 port placeholder (ADR 0027); clean-room IPL boot program.
 - [ ] S-DSP voices, envelopes, echo; audio golden hashes.
 - [ ] 20 commercial games without coprocessors play to checkpoints locally; first performance measurement against QA-05, with targets reset if needed.
 - [ ] **PAL APU ratio:** derive and record in an ADR.
