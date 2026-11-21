@@ -15,7 +15,7 @@ This page explains the SNES machine and how the crate models it (QA-08). It grow
 | Part | What | Cloned? |
 | --- | --- | --- |
 | `State::cpu` | The 65C816's registers and run state | yes |
-| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the clock, the scheduler (line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table), and the held buttons | yes |
+| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the multiply and divide unit, the clock, the scheduler (line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table), and the held buttons | yes |
 | `State::meta` | The seed and the video standard | yes |
 | `observer` | The observer | yes |
 | `outputs` | The frame buffer | no: a clone starts empty (technical design section 5) |
@@ -254,7 +254,27 @@ Until the PPU exists:
 [`tests/carts/interrupts`](../../tests/carts/interrupts/interrupts.s) sets an HV-IRQ at H=100, V=5 and waits for it. Its handler acknowledges the IRQ and latches and reads the counters. The cartridge then enables the NMI alone and waits again; the NMI handler reads `$4210` twice and `$4212`. A test in `src/carts.rs` checks:
 - the IRQ entry at master cycle 7242, worked out by hand through five refreshes;
 - the NMI entry within the 6-cycle step after the flag;
-- the latched dot 150 on line 5, and every value the handlers read.
+- the latched dot 153 on line 5, and every value the handlers read.
+
+## Multiply and divide, WRIO and RDIO
+
+The 5A22's unsigned multiply and divide unit lives in [`bus/math.rs`](../../crates/sfes-snes-core/src/bus/math.rs) (`anomie-regs#4202`–`#4206`, `#4214`–`#4217`, `fullsnes#snesmathsmultiplydivide`, ADR 0023):
+- a `$4203` write multiplies `$4202` by it: the product goes to `$4216–$4217`, the multiplier to `$4214` and 0 to `$4215`;
+- a `$4206` write divides `$4204–$4205` by it: the quotient goes to `$4214–$4215` and the remainder to `$4216–$4217`. Dividing by 0 gives `$FFFF` and the dividend;
+- the operands are kept, so a new `$4203` or `$4206` alone starts another operation.
+
+The unit counts CPU cycles, not master cycles (fullsnes). The results appear together at the end of the 8th (multiply) or 16th (divide) CPU cycle after the starting write. Until then the result registers keep their old values. `LDA $4216` straight after `STA $4203` reads in the 4th cycle; five more cycles of waiting reach the 9th. Points the documents leave open (ADR 0023, points 2–4):
+- refresh pauses count for nothing;
+- the multiply shortcut for a small `$4202` is not modelled;
+- a new operation abandons a running one.
+
+`$4202` is `$FF` and `$4204–$4205` `$FFFF` at power-on. The results are 0. Reset changes nothing in the unit.
+
+`$4213` RDIO reads the I/O port's lines: a bit `$4201` drives low reads 0, and a high bit reads 1 unless a device pulls it low (`anomie-regs#4213`). Nothing pulls a line low until the controller ports, so it reads back `$4201` (ADR 0023, point 6). `$4201` bit 7 is also the PPU latch line (see [The counter latch](#the-counter-latch)).
+
+### Test cartridge
+
+[`tests/carts/math`](../../tests/carts/math/math.s) multiplies and divides, and reads each result one CPU cycle before it appears and in the cycle it does. It also divides by zero and reads `$4213` before and after a `$4201` write. A test in `src/carts.rs` checks every value it stores.
 
 ## Decisions
 
@@ -263,3 +283,4 @@ Until the PPU exists:
 - [ADR 0020](../adr/0020-snes-scanlines-frames-and-deadlines.md): line lengths and dots, frames, the field, vertical blank and overscan, the frame boundary, line and frame events, and the deadline table.
 - [ADR 0021](../adr/0021-snes-interrupts-timers-and-counter-latch.md): when a changed NMI or IRQ line is seen, the NMI and H/V timer trigger points, `$4210–$4212`, the counter latch, and their reset values.
 - [ADR 0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md) (CPU core): the IRQ check uses the I flag from before the last cycle, and WAI ends two internal cycles after a request.
+- [ADR 0023](../adr/0023-snes-multiply-divide-unit-and-io-port.md): the multiply and divide results, their latency in CPU cycles, reads before the result, and RDIO.

@@ -681,7 +681,7 @@ The path to the v0.1 alpha builds the foundations first and the chips in the ord
 
 ### M2 — Bus, DMA and video
 
-- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82).
+- [ ] Header detection (ADR 0016, #77), `MemoryMap`, LoROM, HiROM and ExHiROM boards (ADR 0017, #78); WRAM and the WRAM port, access speed, refresh and open bus (ADR 0019, #80); 5A22 I/O: NMI, the H/V timer IRQ and the counter latch (ADR 0021, #82), and the multiply and divide unit, WRIO and RDIO (ADR 0023, #83).
 - [ ] Deadline table and catch-up in `BusView`, and NTSC and PAL frame timing (ADR 0020, #81); DMA and HDMA.
 - [ ] PPU registers and the scanline renderer for BG modes 0–7, sprites, windows, colour math; hi-res modes 5 and 6, pseudo-hi-res and interlace.
 - [ ] `Snes` with an inherent API shaped like `System` (ADR 0018, #79); `impl System for Snes` waits for the state envelope in M4.

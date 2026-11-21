@@ -1,6 +1,7 @@
 // @source: adr-0013
 // @source: adr-0019
 // @source: adr-0021
+// @source: adr-0023
 //! Runs the project's own test cartridges (ADR 0013) and checks what they leave against
 //! values computed from the documents.
 
@@ -165,4 +166,41 @@ fn interrupts_cart_takes_the_hv_irq_and_the_nmi_on_time() {
     // vertical blank and outside horizontal blank, and $4210 again with the flag cleared.
     let wram = snes.region(RegionId::Wram);
     assert_eq!(wram[..8], [0xC2, 153, 152, 5, 4, 0xC2, 0x82, 0x42]);
+}
+
+// @source: anomie-regs#4202
+// @source: anomie-regs#4203
+// @source: anomie-regs#4204
+// @source: anomie-regs#4206
+// @source: anomie-regs#4214
+// @source: anomie-regs#4216
+// @source: anomie-regs#4201
+// @source: anomie-regs#4213
+// @source: fullsnes#snesmathsmultiplydivide
+// @source: fullsnes#snescontrollersioportsmanualreading
+// @source: wdc-w65c816s#table-5-7-1a
+// @source: wdc-w65c816s#table-5-7-19a
+// @source: wdc-w65c816s#table-5-7-19b
+// @source: adr-0023
+#[test]
+fn math_cart_reads_results_when_they_appear() {
+    let rom = include_bytes!("../../../tests/assets/carts/math.sfc");
+    let mut snes = Snes::<Fast>::builder(Arc::from(rom.as_slice()))
+        .build()
+        .expect("builds");
+    snes.run(Stop::Frames(1));
+    assert_eq!(snes.cpu().run, RunState::Stopped);
+
+    let wram = snes.region(RegionId::Wram);
+    let expected = [
+        // 200 × 250 = $C350: 0 in the 8th cycle, then the product, the multiplier and 0.
+        0x00, 0x50, 0xC3, 250, 0x00, // 200 × 3 = $0258 in the 9th cycle.
+        0x58, // 12345 / 100: the multiplier 3 in the 16th cycle, then 123 remainder 45.
+        3, 123, 0, 45, 0, // 12345 / 7 = $06E3 remainder 4, in the 17th cycle.
+        0xE3, 4, // 12345 / 0: $FFFF remainder $3039.
+        0xFF, 0xFF, 0x39, 0x30,
+        // RDIO: $FF from power-on, then $40 after the $4201 write.
+        0xFF, 0x40,
+    ];
+    assert_eq!(wram[..expected.len()], expected);
 }
