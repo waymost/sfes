@@ -2,9 +2,10 @@
 // @source: adr-0020
 // @source: adr-0021
 // @source: adr-0024
+// @source: adr-0026
 //! The deadline table: the next time each scheduled event is due, and the earliest of them
 //! (technical design section 4; ADR 0001, point 3; ADR 0020, point 9; ADR 0021, point 9;
-//! ADR 0024, point 9).
+//! ADR 0024, point 9; ADR 0026, point 2).
 
 use sfes_api::Cycles;
 
@@ -26,23 +27,28 @@ pub(crate) enum Deadline {
     Latch,
     /// The auto-joypad read's next event (ADR 0024, points 5, 6 and 9).
     Joypad,
+    /// HDMA's next step: setup at H=6 of line 0, or a line's transfer at H=278 (ADR 0026,
+    /// point 2).
+    Hdma,
 }
 
 impl Deadline {
     /// Every event, in service order.
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Refresh,
         Self::Line,
         Self::Nmi,
         Self::Irq,
         Self::Latch,
         Self::Joypad,
+        Self::Hdma,
     ];
 
     /// The event's slot in the table.
     // @source: adr-0020
     // @source: adr-0021
     // @source: adr-0024
+    // @source: adr-0026
     const fn index(self) -> usize {
         match self {
             Self::Refresh => 0,
@@ -51,6 +57,7 @@ impl Deadline {
             Self::Irq => 3,
             Self::Latch => 4,
             Self::Joypad => 5,
+            Self::Hdma => 6,
         }
     }
 }
@@ -140,10 +147,12 @@ mod tests {
     // @source: adr-0020
     // @source: adr-0021
     // @source: adr-0024
+    // @source: adr-0026
     #[test]
     fn events_due_together_are_serviced_in_table_order() {
         let mut deadlines = Deadlines::new();
         for deadline in [
+            Deadline::Hdma,
             Deadline::Joypad,
             Deadline::Latch,
             Deadline::Irq,

@@ -299,3 +299,39 @@ fn dma_cart_moves_bytes_through_the_wram_port_and_leaves_the_registers_stepped()
     let [back_low, back_high] = (address + 3).to_le_bytes();
     assert_eq!(wram[0x135..0x138], [back_low, back_high, 0xFF]);
 }
+
+// @source: anomie-regs#420c
+// @source: anomie-regs#43x5
+// @source: anomie-regs#43x8
+// @source: anomie-regs#43xa
+// @source: anomie-regs#dma-and-hdma/hdma
+// @source: anomie-regs#2180
+// @source: anomie-timing#s-cpu/hdma
+// @source: fullsnes#snesdmaandhdmachannel07registers
+// @source: adr-0013
+// @source: adr-0026
+#[test]
+fn hdma_cart_runs_a_direct_and_an_indirect_table_into_the_wram_port() {
+    let rom = include_bytes!("../../../tests/assets/carts/hdma.sfc");
+    let mut snes = Snes::<Fast>::builder(Arc::from(rom.as_slice()))
+        .build()
+        .expect("builds");
+    snes.run(Stop::Frames(3));
+    assert_eq!(snes.cpu().run, RunState::Stopped);
+
+    let wram = snes.region(RegionId::Wram);
+    // Line 0: channel 0's $D1, then channel 1's $E1 from data_a; line 1 nothing; line 2
+    // channel 0's $D2; line 3 channel 0's $D3, then channel 1's $E2 from data_b
+    // (anomie-regs#dma-and-hdma/hdma; ADR 0026, points 5 and 6).
+    assert_eq!(wram[0x200..0x205], [0xD1, 0xE1, 0xD2, 0xD3, 0xE2]);
+    // Channel 0's table address is past its $00, which $430A keeps (anomie-regs#43x8,
+    // #43xa).
+    let direct = u16::from_le_bytes([wram[0x140], wram[0x141]]);
+    let [low, high] = (direct + 6).to_le_bytes();
+    assert_eq!(wram[0x130..0x133], [low, high, 0x00]);
+    // Channel 1 was the last active channel when it read its $00, so it read only the
+    // $77 after it into $4316 and set $4315 to $00 (ADR 0026, point 6).
+    let indirect = u16::from_le_bytes([wram[0x142], wram[0x143]]);
+    let [low, high] = (indirect + 8).to_le_bytes();
+    assert_eq!(wram[0x133..0x138], [0x00, 0x77, low, high, 0x00]);
+}

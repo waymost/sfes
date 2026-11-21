@@ -269,6 +269,7 @@ fn a_short_line_keeps_the_refresh_offset() {
 // @source: adr-0018
 // @source: adr-0019
 // @source: adr-0020
+// @source: adr-0026
 #[test]
 fn restart_returns_to_line_0_field_0_and_a_cleared_screen_mode() {
     let mut timing = Timing::new(Region::Ntsc, Cycles(0));
@@ -281,7 +282,8 @@ fn restart_returns_to_line_0_field_0_and_a_cleared_screen_mode() {
     assert!(timing.field(Cycles(500_004)));
     assert_eq!(timing.screen_mode, 0);
     assert_eq!(timing.next_refresh(), Cycles(500_538));
-    assert_eq!(timing.next_deadline(), Cycles(500_538));
+    // HDMA's setup at H=6 comes first (ADR 0026, point 2).
+    assert_eq!(timing.next_deadline(), Cycles(500_024));
     let lines = timing.lines();
     let started = run_until(&mut timing, 500_000 + 1364);
     assert_eq!(started, [(1, 500_000 + 1364, false)]);
@@ -301,7 +303,8 @@ fn interrupt_events(timing: &mut Timing, end: u64) -> Vec<(u64, Event)> {
             Some(event @ (Event::Nmi | Event::Irq | Event::Latch { .. })) => {
                 events.push((now.0, event));
             }
-            Some(Event::Refresh | Event::Line { .. } | Event::Joypad { .. }) | None => {}
+            Some(Event::Refresh | Event::Line { .. } | Event::Joypad { .. } | Event::Hdma(_))
+            | None => {}
         }
     }
     events
@@ -523,4 +526,54 @@ fn a_restart_starts_the_auto_read_grid_over_and_drops_a_pending_event() {
     timing.restart(Cycles(1001));
     let starts = auto_read_starts(&mut timing, 1);
     assert_eq!(starts[0].0, 1001 + 225 * 1364 + 298);
+}
+
+/// The HDMA steps that fall due up to `end`, each with its line and the time it fell due.
+// @source: adr-0026
+fn hdma_steps(timing: &mut Timing, end: u64) -> Vec<(HdmaStep, u16, u64)> {
+    let mut steps = Vec::new();
+    while timing.next_deadline().0 <= end {
+        let now = timing.next_deadline();
+        if let Some(Event::Hdma(step)) = timing.service(now) {
+            steps.push((step, timing.position(now).0, now.0));
+        }
+    }
+    steps
+}
+
+// @source: anomie-timing#s-cpu/hdma
+// @source: anomie-regs#dma-and-hdma/hdma
+// @source: fullsnes#snestiminghvevents
+// @source: adr-0020
+// @source: adr-0026
+#[test]
+fn hdma_sets_up_at_h_6_of_line_0_and_transfers_at_h_278_of_lines_0_to_224() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    // The first frame is field 1, with the short line 240 (ADR 0020, point 1).
+    let frame = 262 * 1364 - 4;
+    let steps = hdma_steps(&mut timing, frame + 2000);
+    assert_eq!(steps.len(), 1 + 225 + 1 + 1);
+    assert_eq!(steps[0], (HdmaStep::Setup, 0, 24));
+    for (line, step) in (0..225).zip(&steps[1..226]) {
+        assert_eq!(*step, (HdmaStep::Line, line, u64::from(line) * 1364 + 1112));
+    }
+    // None in vertical blank; the next frame sets up again.
+    assert_eq!(steps[226], (HdmaStep::Setup, 0, frame + 24));
+    assert_eq!(steps[227], (HdmaStep::Line, 0, frame + 1112));
+}
+
+// @source: anomie-timing#s-cpu/hdma
+// @source: anomie-regs#2133
+// @source: adr-0020
+// @source: adr-0026
+#[test]
+fn with_overscan_hdma_transfers_on_lines_0_to_239() {
+    let mut timing = Timing::new(Region::Ntsc, Cycles(0));
+    timing.write_screen_mode(OVERSCAN, Cycles(0));
+    let lines = hdma_steps(&mut timing, 262 * 1364)
+        .into_iter()
+        .filter(|(step, ..)| *step == HdmaStep::Line)
+        .map(|(_, line, _)| line)
+        .collect::<Vec<_>>();
+    assert_eq!(lines, (0..240).collect::<Vec<_>>());
 }

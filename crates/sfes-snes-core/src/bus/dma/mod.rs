@@ -10,14 +10,23 @@
 // @source: fullsnes#snesdmaandhdmachannel07registers
 // @source: fullsnes#snesunpredictablethings
 // @source: adr-0025
-//! General DMA: the eight channels' registers `$43x0–$43xB`, the `$420B` request and the
-//! transfer the bus runs at the start of the CPU cycle its pause falls before (ADR 0025).
+// @source: anomie-regs#420c
+// @source: anomie-timing#s-cpu/hdma
+// @source: adr-0026
+//! General DMA and HDMA: the eight channels' registers `$43x0–$43xB`, the `$420B` request,
+//! `$420C`, and the pause the bus runs at the start of a CPU cycle for a transfer, an HDMA
+//! step or both (ADR 0025, ADR 0026). The HDMA steps are in [`hdma`].
+
+mod hdma;
 
 use sfes_api::{DmaEvent, Observer};
 
-use crate::bus::{
-    Bus, PORT_2_GROUNDED,
-    decode::{BBus, Target, decode, decode_b_bus},
+use crate::{
+    bus::{
+        Bus, PORT_2_GROUNDED,
+        decode::{BBus, Target, decode, decode_b_bus},
+    },
+    timing::HdmaStep,
 };
 
 /// The number of DMA channels.
@@ -147,7 +156,7 @@ impl Channel {
     }
 }
 
-/// The DMA channels and the `$420B` request not yet started.
+/// The DMA channels, the `$420B` request not yet started and HDMA's state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Dma {
     channels: [Channel; CHANNELS],
@@ -155,11 +164,21 @@ pub(crate) struct Dma {
     requested: u8,
     /// CPU cycle ends left before the requested transfer's pause begins.
     start_in: u8,
+    /// $420C HDMAEN: the channels HDMA works on (ADR 0026, point 1).
+    hdma_enabled: u8,
+    /// Each channel's `DoTransfer` flag, by bit (ADR 0026, point 1).
+    do_transfer: u8,
+    /// The channels terminated for this frame, by bit (ADR 0026, point 1).
+    terminated: u8,
+    /// The HDMA step that fell due and has not yet run (ADR 0026, point 3).
+    hdma_due: Option<HdmaStep>,
 }
 
 impl Dma {
     /// The channels at power-on: every register `$FF`, nothing requested (ADR 0025,
-    /// points 1 and 2).
+    /// points 1 and 2), and no HDMA channel enabled, flagged or due (ADR 0026, point 1).
+    // @source: anomie-regs#420c
+    // @source: adr-0026
     // @source: anomie-regs#420b
     // @source: anomie-regs#43x0
     // @source: anomie-regs#43x1
@@ -175,17 +194,28 @@ impl Dma {
             }; CHANNELS],
             requested: 0,
             start_in: 0,
+            hdma_enabled: 0,
+            do_transfer: 0,
+            terminated: 0,
+            hdma_due: None,
         }
     }
 
     /// Reset: `$420B` is 0 and a transfer not yet started is dropped; the channel
-    /// registers are kept (ADR 0025, points 1 and 2).
+    /// registers are kept (ADR 0025, points 1 and 2). `$420C` is 0, HDMA's flags clear and
+    /// a step not yet run is dropped (ADR 0026, point 1).
     // @source: anomie-regs#420b
     // @source: anomie-regs#43x0
     // @source: adr-0025
+    // @source: anomie-regs#420c
+    // @source: adr-0026
     pub(crate) const fn reset(&mut self) {
         self.requested = 0;
         self.start_in = 0;
+        self.hdma_enabled = 0;
+        self.do_transfer = 0;
+        self.terminated = 0;
+        self.hdma_due = None;
     }
 
     /// The channel and register of `$43xN` at `offset`, or `None` for `$43xC–$43xE` and
@@ -246,6 +276,43 @@ impl Dma {
         self.start_in = START_DELAY;
     }
 
+    /// $420C HDMAEN: the channels HDMA works on from its next step (ADR 0026, points 1
+    /// and 7).
+    // @source: anomie-regs#420c
+    // @source: fullsnes#snesdmaandhdmastartenableregisters
+    // @source: adr-0026
+    pub(crate) const fn write_hdma_enable(&mut self, value: u8) {
+        self.hdma_enabled = value;
+    }
+
+    /// $420C HDMAEN as last written.
+    // @source: anomie-regs#420c
+    #[cfg(test)]
+    pub(crate) const fn hdma_enabled(&self) -> u8 {
+        self.hdma_enabled
+    }
+
+    /// Marks the HDMA step `step` due, to run at the next point the bus can pause
+    /// (ADR 0026, point 3).
+    // @source: anomie-timing#s-cpu/hdma
+    // @source: adr-0026
+    pub(crate) const fn hdma_fell_due(&mut self, step: HdmaStep) {
+        self.hdma_due = Some(step);
+    }
+
+    /// Whether an HDMA step is due with a channel to work on: an enabled channel for setup,
+    /// one enabled and not terminated for a line (ADR 0026, points 3, 5 and 6).
+    // @source: anomie-regs#dma-and-hdma/hdma
+    // @source: anomie-timing#s-cpu/hdma
+    // @source: adr-0026
+    const fn hdma_has_work(&self) -> bool {
+        match self.hdma_due {
+            Some(HdmaStep::Setup) => self.hdma_enabled != 0,
+            Some(HdmaStep::Line) => self.hdma_enabled & !self.terminated != 0,
+            None => false,
+        }
+    }
+
     /// Counts the end of a CPU cycle towards the requested transfer's pause.
     // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
@@ -268,48 +335,79 @@ impl Dma {
     }
 }
 
-/// One byte's addresses: the A-bus address and the B-bus register.
+/// One byte's addresses: the A-bus address and the B-bus register, its direction and
+/// whether HDMA moves it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Byte {
     a_address: u32,
     b_address: u8,
     from_b_bus: bool,
+    hdma: bool,
 }
 
 impl Bus {
-    /// Runs the requested transfer if its pause begins at the start of this CPU cycle,
-    /// which takes `clock` master cycles: aligns to 8 cycles since reset, runs the
-    /// overheads and each set channel in order, then waits to a whole number of `clock`s
-    /// since the pause began (ADR 0025, points 3 and 4).
+    /// Runs the pause that begins at the start of this CPU cycle, which takes `clock`
+    /// master cycles, if a requested transfer or an HDMA step is due: aligns to 8 cycles
+    /// since reset, runs the HDMA step, then the transfer's overhead and each set channel in
+    /// order, then waits to a whole number of `clock`s since the pause began (ADR 0025,
+    /// points 3 and 4; ADR 0026, point 3).
     // @source: anomie-timing#s-cpu/dma
+    // @source: anomie-timing#s-cpu/hdma
     // @source: anomie-regs#420b
     // @source: anomie-regs#dma-and-hdma/dma
+    // @source: anomie-regs#dma-and-hdma
     // @source: fullsnes#snesdmaandhdmastartenableregisters
     // @source: adr-0025
-    pub(crate) fn start_due_dma<O: Observer>(&mut self, clock: u64, observer: &mut O) {
-        let Some(channels) = self.dma.take_due() else {
+    // @source: adr-0026
+    pub(crate) fn start_due_pause<O: Observer>(&mut self, clock: u64, observer: &mut O) {
+        let channels = self.dma.take_due();
+        if channels.is_none() && !self.dma.hdma_has_work() {
+            // A step with no channel to work on takes no time (ADR 0026, point 3).
+            self.run_due_hdma(observer);
             return;
-        };
+        }
         let pause = self.now;
         let since_origin = pause.0 - self.timing.origin().0;
-        self.advance(GRID - since_origin % GRID, observer);
-        self.advance(TRANSFER_OVERHEAD, observer);
-        for channel in 0..CHANNELS {
-            if channels & (1 << channel) != 0 {
-                self.advance(CHANNEL_OVERHEAD, observer);
-                self.run_channel(channel, observer);
+        self.advance_paused(GRID - since_origin % GRID, observer);
+        if let Some(channels) = channels {
+            self.advance_paused(TRANSFER_OVERHEAD, observer);
+            for channel in 0..CHANNELS {
+                let bit = 1 << channel;
+                if channels & bit != 0 {
+                    let worked = self.advance_paused(CHANNEL_OVERHEAD, observer);
+                    if worked & bit == 0 {
+                        self.run_channel(channel, observer);
+                    }
+                }
             }
         }
+        // An HDMA step that falls due in the closing wait pauses the CPU on its own.
         let elapsed = self.now.0 - pause.0;
         self.advance(clock - elapsed % clock, observer);
     }
 
+    /// Advances the clock by `cycles` within a pause, then runs an HDMA step that fell due,
+    /// with no wait of its own. Returns the channels the step worked on (ADR 0026, points 3
+    /// and 9).
+    // @source: anomie-regs#420b
+    // @source: anomie-regs#dma-and-hdma
+    // @source: adr-0025
+    // @source: adr-0026
+    fn advance_paused<O: Observer>(&mut self, cycles: u64, observer: &mut O) -> u8 {
+        self.advance(cycles, observer);
+        self.run_due_hdma(observer)
+    }
+
     /// Moves `channel`'s bytes until its count reaches 0, one 8-cycle slot each
-    /// (ADR 0025, point 5).
+    /// (ADR 0025, point 5), or until an HDMA step works on the same channel (ADR 0026,
+    /// point 9).
     // @source: anomie-regs#dma-and-hdma/dma
     // @source: anomie-regs#43x5
     // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
+    // @source: anomie-regs#420b
+    // @source: anomie-regs#dma-and-hdma
+    // @source: adr-0026
     fn run_channel<O: Observer>(&mut self, channel: usize, observer: &mut O) {
         let mut index = 0;
         loop {
@@ -323,6 +421,7 @@ impl Bus {
                     .b_address()
                     .wrapping_add(unit_offset(control, index)),
                 from_b_bus: control & DIRECTION != 0,
+                hdma: false,
             };
             self.move_byte(channel, byte, observer);
             index = index.wrapping_add(1);
@@ -330,15 +429,16 @@ impl Bus {
                 Some(registers) => registers.step(),
                 None => 0,
             };
-            self.advance(BYTE_CYCLES, observer);
-            if left == 0 {
+            let worked = self.advance_paused(BYTE_CYCLES, observer);
+            if left == 0 || worked & (1 << channel) != 0 {
                 return;
             }
         }
     }
 
     /// Moves one byte between the A bus and the B bus at the start of its slot, places it
-    /// on the data bus and reports it (ADR 0025, points 5 to 8 and 11).
+    /// on the data bus and reports it (ADR 0025, points 5 to 8 and 11; ADR 0026, points 8
+    /// and 10).
     // @source: anomie-regs#dma-and-hdma/dma
     // @source: anomie-regs#2180
     // @source: anomie-regs#2181
@@ -346,6 +446,7 @@ impl Bus {
     // @source: fullsnes#snesunpredictablethings
     // @source: anomie-memmap#hardware/data-bus
     // @source: adr-0025
+    // @source: adr-0026
     fn move_byte<O: Observer>(&mut self, channel: usize, byte: Byte, observer: &mut O) {
         let at = self.now;
         let a_target = dma_a_target(decode(self.cartridge.map(), byte.a_address));
@@ -386,7 +487,7 @@ impl Bus {
             };
             observer.on_dma(&DmaEvent {
                 channel: u8::try_from(channel).unwrap_or_default(),
-                hdma: false,
+                hdma: byte.hdma,
                 source,
                 destination,
                 value,

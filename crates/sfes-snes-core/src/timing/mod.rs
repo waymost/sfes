@@ -13,10 +13,13 @@
 // @source: adr-0021
 // @source: anomie-timing#s-cpu/auto-joypad-read
 // @source: adr-0024
+// @source: anomie-regs#dma-and-hdma/hdma
+// @source: anomie-timing#s-cpu/hdma
+// @source: adr-0026
 //! The scheduler: line and frame position, the interlace field, vertical blank, the refresh
 //! schedule, the NMI and H/V timer trigger points, the counter latch of `$4201`, the
-//! auto-joypad read and the deadline table (technical design section 4; ADR 0019, point 6;
-//! ADR 0020; ADR 0021; ADR 0024).
+//! auto-joypad read, HDMA's steps and the deadline table (technical design section 4;
+//! ADR 0019, point 6; ADR 0020; ADR 0021; ADR 0024; ADR 0026, point 2).
 
 mod deadlines;
 mod irq;
@@ -64,6 +67,19 @@ const AUTO_READ_EARLIEST: u64 = 130;
 const AUTO_READ_FIRST: u64 = 225 * 1364 + 298;
 /// Auto-joypad reads start a multiple of this many master cycles apart.
 const AUTO_READ_GRID: u64 = 256;
+/// Where H=6, HDMA's setup, falls in line 0.
+const HDMA_SETUP: u64 = 6 * 4;
+/// Where H=278, a line's HDMA transfer, falls in its line: before the long dots.
+const HDMA_LINE: u64 = 278 * 4;
+
+/// The two kinds of HDMA step (ADR 0026, point 2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HdmaStep {
+    /// The frame's setup, at H=6 of line 0.
+    Setup,
+    /// A line's transfer, at H=278.
+    Line,
+}
 
 /// What servicing a deadline did.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +111,8 @@ pub(crate) enum Event {
         /// When it was due.
         at: Cycles,
     },
+    /// An HDMA step is due (ADR 0026, point 2).
+    Hdma(HdmaStep),
 }
 
 /// The machine's place in its lines and frames, and the next time each scheduled event is
@@ -130,8 +148,10 @@ pub(crate) struct Timing {
     /// When the frame started at power-on or the last reset: the auto-read's grid starts
     /// [`AUTO_READ_FIRST`] cycles later (ADR 0024, point 5).
     origin: Cycles,
-    /// When the next refresh, line, NMI flag, trigger point, `$4201` latch and auto-read
-    /// event are due.
+    /// The HDMA step the HDMA deadline is for.
+    hdma_step: HdmaStep,
+    /// When the next refresh, line, NMI flag, trigger point, `$4201` latch, auto-read
+    /// event and HDMA step are due.
     deadlines: Deadlines,
 }
 
@@ -158,6 +178,7 @@ impl Timing {
             previous: None,
             irq_after: start,
             origin: start,
+            hdma_step: HdmaStep::Setup,
             deadlines: Deadlines::new(),
         };
         timing.restart(start);
@@ -168,8 +189,10 @@ impl Timing {
     /// position on reset" (ADR 0018), H=0, V=0 with field 0 (ADR 0020, point 4), `$2133` is
     /// 0 and the refresh schedule starts over (ADR 0019). `$4200` is 0, HTIME and VTIME are
     /// kept, and no NMI flag or latch is pending (ADR 0021, point 8). No auto-read is pending
-    /// and its grid starts over (ADR 0024, points 5 and 7). The counts of lines and frames
-    /// are kept.
+    /// and its grid starts over (ADR 0024, points 5 and 7). HDMA's setup is next, at H=6
+    /// (ADR 0026, point 2). The counts of lines and frames are kept.
+    // @source: anomie-timing#s-cpu/hdma
+    // @source: adr-0026
     // @source: anomie-timing
     // @source: fullsnes#snestiminghvevents
     // @source: fullsnes#snesiomap
@@ -195,6 +218,7 @@ impl Timing {
         self.deadlines.set(Deadline::Nmi, NEVER);
         self.deadlines.set(Deadline::Latch, NEVER);
         self.deadlines.set(Deadline::Joypad, NEVER);
+        self.schedule_hdma(HdmaStep::Setup, Cycles(start.0 + HDMA_SETUP));
         self.origin = start;
         self.timer.reset();
         self.previous = None;
@@ -270,6 +294,13 @@ impl Timing {
             None => NEVER,
         };
         self.deadlines.set(Deadline::Joypad, at);
+    }
+
+    /// Schedules the HDMA step `step` at `at`, or none at [`NEVER`] (ADR 0026, point 2).
+    // @source: adr-0026
+    const fn schedule_hdma(&mut self, step: HdmaStep, at: Cycles) {
+        self.hdma_step = step;
+        self.deadlines.set(Deadline::Hdma, at);
     }
 
     /// When the auto-read starts in the line that starts vertical blank at `line_start`:
@@ -379,12 +410,15 @@ impl Timing {
 
     /// Services the first deadline due at or before `now`, if any, and schedules its next
     /// occurrence (ADR 0020, point 9; ADR 0021, point 9). The auto-read's next event is
-    /// scheduled by the bus (ADR 0024, point 9).
+    /// scheduled by the bus (ADR 0024, point 9). HDMA's setup is followed by the same
+    /// line's transfer (ADR 0026, point 2).
     // @source: adr-0001
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
     // @source: adr-0024
+    // @source: fullsnes#snestiminghvevents
+    // @source: adr-0026
     pub(crate) fn service(&mut self, now: Cycles) -> Option<Event> {
         let deadline = self.deadlines.first_due(now)?;
         let at = self.deadlines.due(deadline);
@@ -411,6 +445,16 @@ impl Timing {
             Deadline::Joypad => {
                 self.deadlines.set(Deadline::Joypad, NEVER);
                 Some(Event::Joypad { at })
+            }
+            Deadline::Hdma => {
+                let step = self.hdma_step;
+                match step {
+                    HdmaStep::Setup => {
+                        self.schedule_hdma(HdmaStep::Line, Cycles(self.line_start.0 + HDMA_LINE));
+                    }
+                    HdmaStep::Line => self.schedule_hdma(HdmaStep::Line, NEVER),
+                }
+                Some(Event::Hdma(step))
             }
         }
     }
@@ -470,7 +514,11 @@ impl Timing {
     /// Starts the line that is due: the next line, or line 0 after the frame's last line,
     /// with its length, the field toggle and the start of vertical blank (ADR 0020,
     /// points 1, 2, 4 and 5), the NMI flag and auto-read it brings and its trigger point
-    /// (ADR 0021, points 4 and 9; ADR 0024, point 5).
+    /// (ADR 0021, points 4 and 9; ADR 0024, point 5). Line 0 schedules HDMA's setup, and
+    /// every other line that starts before vertical blank its transfer (ADR 0026, point 2).
+    // @source: anomie-timing#s-cpu/hdma
+    // @source: anomie-regs#dma-and-hdma/hdma
+    // @source: adr-0026
     // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: anomie-timing#s-ppu/blanking-periods
     // @source: anomie-regs#2133
@@ -504,6 +552,13 @@ impl Timing {
             self.deadlines.set(Deadline::Nmi, Cycles(at.0 + NMI_FLAG));
             self.deadlines
                 .set(Deadline::Joypad, self.auto_read_start(at));
+        }
+        if self.line == 0 {
+            self.schedule_hdma(HdmaStep::Setup, Cycles(at.0 + HDMA_SETUP));
+        } else if self.vblank {
+            self.schedule_hdma(HdmaStep::Line, NEVER);
+        } else {
+            self.schedule_hdma(HdmaStep::Line, Cycles(at.0 + HDMA_LINE));
         }
         self.lines += 1;
         self.deadlines

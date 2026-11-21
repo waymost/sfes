@@ -84,6 +84,12 @@ sha256 = "c89abd8c74e4de044c13a2bb4e942314ef603cb4b74c0ba1985ec5819c6e6eca"
 notes = "Own test cartridge: Runs general DMA through the WRAM port: ROM to WRAM in mode 0, a fixed fill and a decrementing copy on two channels at once, $2180 to WRAM, and $4017 through the A bus, then copies the channel registers to WRAM. Built from tests/carts/dma/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/hdma.sfc"
+license = "own"
+sha256 = "4aaabaa3a43dfc89ccc7b31090d447126f64706fc5c0fc4ed19a66b6bf0656b3"
+notes = "Own test cartridge: Runs a direct and an indirect HDMA table into the WRAM port at $2180 over one frame, then copies the channels' table addresses, line counters and indirect address to WRAM (ADR 0026). Built from tests/carts/hdma/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"

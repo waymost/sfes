@@ -335,7 +335,7 @@ It then enables the auto-read, waits for `$4212` bit 0 to set and clear, and cop
 
 ## General DMA
 
-[`bus/dma.rs`](../../crates/sfes-snes-core/src/bus/dma.rs) holds the eight channels and runs general-purpose transfers inside the bus (technical design section 4, catch-up rule 4; ADR 0025).
+[`bus/dma/mod.rs`](../../crates/sfes-snes-core/src/bus/dma/mod.rs) holds the eight channels and runs general-purpose transfers inside the bus (technical design section 4, catch-up rule 4; ADR 0025).
 
 ### The registers
 
@@ -394,7 +394,7 @@ Each byte moves at the start of its 8-cycle slot (ADR 0025, point 5):
 - A refresh pauses the transfer for 40 cycles after the slot it falls in.
 - The CPU sees a flag raised during the transfer from the cycle after it.
 - The multiply and divide unit does not count during the pause (ADR 0025, point 10).
-- HDMA, which will pre-empt a transfer between bytes, arrives with #86.
+- HDMA runs between bytes and can end the transfer (below; ADR 0026, point 9).
 
 ### Test cartridge
 
@@ -406,6 +406,65 @@ Each byte moves at the start of its 8-cycle slot (ADR 0025, point 5):
 
 It then copies channel registers to WRAM. A test in `src/carts.rs` checks every byte, including the open-bus `$EA` the next opcode leaves on the data bus.
 
+## HDMA
+
+[`bus/dma/hdma.rs`](../../crates/sfes-snes-core/src/bus/dma/hdma.rs) runs HDMA on the same eight channels: one unit of up to four bytes per channel per line, from a table to B-bus registers (ADR 0026).
+
+### The registers
+
+| Register | What |
+| --- | --- |
+| `$420C HDMAEN` | write-only; each set bit enables its channel, a clear bit pauses it; 0 at power-on and reset (`anomie-regs#420c`) |
+| `$43x0 DMAPx` | bit 7 direction; bit 6 indirect; bits 2–0 the mode, as for DMA; bits 4–3 unused (`anomie-regs#43x0`) |
+| `$43x2–$43x4 A1Tx, A1Bx` | the table's start and bank, never changed by HDMA (`anomie-regs#43x2`) |
+| `$43x5–$43x7 DASx, DASBx` | the indirect address and its bank (`anomie-regs#43x5`) |
+| `$43x8–$43x9 A2Ax` | the current table address, in the bank of `$43x4` (`anomie-regs#43x8`) |
+| `$43xA NLTRx` | bit 7 repeat, bits 6–0 the line count (`anomie-regs#43xa`) |
+
+Each channel also has a DoTransfer flag and a terminated-for-this-frame flag, clear at power-on and reset (ADR 0026, point 1).
+
+A table is a run of entries, each a line-count byte followed by one unit of data (direct) or a 16-bit pointer to it (indirect) (`fullsnes#snesdmaandhdmachannel07registers`):
+- `$00` ends the channel for the frame.
+- `$01–$80` is one unit, then X−1 lines without one.
+- `$81–$FF` is X−`$80` lines with a unit on each.
+
+### The two steps
+
+Both are deadlines (ADR 0026, point 2):
+- **Setup** at H=6 of line 0. Every channel's terminated flag clears. Each enabled channel copies `$43x2/3` into `$43x8/9`, reads its line count and, if indirect, its pointer, and sets DoTransfer (point 5).
+- **A line's transfer** at H=278 of every line before vertical blank, lines 0–224 or 0–239 with overscan. For each channel that is enabled and not terminated, from 0 to 7 (point 6):
+  1. If DoTransfer is set, it moves one unit, incrementing the address it reads.
+  2. It decrements all of `$43xA` and sets DoTransfer to its bit 7.
+  3. When the line count reaches 0, it reads the next entry. A `$00` ends the channel. If this is the last channel worked on in the line, an indirect channel reads only one pointer byte, into `$43x6`, with `$43x5` set to 0 (`anomie-regs#dma-and-hdma/hdma`).
+
+A channel enabled mid-frame runs from its registers as they stand and moves nothing on its first line. One that has ended stays ended until the next setup (point 7).
+
+### The pause
+
+A step that falls due while the CPU runs waits for the CPU cycle to end, then pauses the CPU as a DMA does (point 3):
+1. It waits to a multiple of 8 cycles since reset.
+2. It does the work.
+3. It waits to a whole number of the next cycle's clocks.
+
+The work costs (`anomie-timing#s-cpu/hdma`; point 4):
+- 18 cycles of overhead;
+- 8 per channel worked on;
+- 16 per indirect pointer read (8 in the last-channel case);
+- 8 per byte.
+
+A step with no channel to work on costs nothing.
+
+A step that falls due during a DMA runs inside its pause, between bytes. If it works on the channel the DMA is running, that channel's transfer ends there, and the later channels still run (`anomie-regs#420b`; point 9).
+
+Each data byte reports `on_dma` with `hdma: true` (point 10).
+
+### Test cartridge
+
+[`tests/carts/hdma`](../../tests/carts/hdma/hdma.s) enables a direct and an indirect channel in vertical blank, both into the WRAM port. A test in `src/carts.rs` checks:
+- the bytes, in line and channel order;
+- the table addresses and line counts the channels end with;
+- the one-byte pointer read of the last-channel case.
+
 ## Decisions
 
 - [ADR 0018](../adr/0018-snes-reset-and-power-on.md): RESB timing, the page-1 reads, power-on and reset, the default region, observer events and the provisional timing.
@@ -416,3 +475,4 @@ It then copies channel registers to WRAM. A test in `src/carts.rs` checks every 
 - [ADR 0023](../adr/0023-snes-multiply-divide-unit-and-io-port.md): the multiply and divide results, their latency in CPU cycles, reads before the result, and RDIO.
 - [ADR 0024](../adr/0024-controller-ports-and-the-auto-joypad-read.md): the pad, `$4016/$4017`, when the auto-read starts and takes its bits, reset, and the polled flag.
 - [ADR 0025](../adr/0025-general-dma.md): the channel registers, when the pause begins and how long it lasts, where each byte falls, what the A and B buses reach, open bus, deadlines and the math unit during a transfer, and `on_dma`.
+- [ADR 0026](../adr/0026-hdma.md): `$420C` and the HDMA flags, when setup and each line's transfer fall due, the pause and its costs, the table steps and the last-channel case, mid-frame enabling, and pre-empting a DMA.
