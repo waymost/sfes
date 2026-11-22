@@ -1,5 +1,5 @@
-// @source: adr-0017
 // @source: adr-0016
+// @source: adr-0017
 //! A loaded cartridge: its header, board, ROM, RAM and memory map (EMU-04).
 
 use alloc::{sync::Arc, vec, vec::Vec};
@@ -147,25 +147,17 @@ impl Cartridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{header::Mapping, map::Page};
+    use crate::{header::Mapping, map::Page, test_support::TestHeader};
 
-    /// A blank image of `length` bytes with a minimal `mapping` header asking for RAM size
+    /// A blank image of `length` bytes with a plausible `mapping` header asking for RAM size
     /// `ram_size`.
     // @source: fullsnes#snescartridgeromheader
     fn image(mapping: Mapping, length: usize, ram_size: u8) -> Vec<u8> {
-        let mut image = vec![0; length];
-        let header = mapping.header_offset();
-        let map_mode = match mapping {
-            Mapping::LoRom => 0x20,
-            Mapping::HiRom => 0x21,
-            Mapping::ExHiRom => 0x25,
+        let header = TestHeader {
+            ram_size,
+            ..TestHeader::default()
         };
-        image[header..header + 0x15].fill(b' ');
-        image[header + 0x15] = map_mode;
-        image[header + 0x17] = 0x0C;
-        image[header + 0x18] = ram_size;
-        image[header + 0x3D] = 0x80;
-        image
+        crate::test_support::image(mapping, length, header)
     }
 
     // @source: fullsnes#snescartridgeromheader
@@ -216,8 +208,8 @@ mod tests {
         );
     }
 
-    // @source: adr-0013
     // @source: anomie-memmap#memory-map
+    // @source: adr-0013
     #[test]
     fn the_own_halt_cartridge_starts_in_its_rom() {
         let rom = include_bytes!("../../../tests/assets/carts/halt.sfc");

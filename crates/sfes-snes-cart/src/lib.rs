@@ -23,6 +23,8 @@ mod board;
 mod cartridge;
 mod header;
 mod map;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use crate::{
     board::{Board, mirror},
@@ -31,5 +33,5 @@ pub use crate::{
         Candidate, Header, HeaderError, Mapping, Options, Region, TITLE_LENGTH, checksum,
         has_copier_header, strip_copier_header,
     },
-    map::{MemoryMap, PAGE_SIZE, PAGES, Page, console_page},
+    map::{MemoryMap, PAGE_SIZE, PAGES, Page, WRAM_SIZE, console_page},
 };

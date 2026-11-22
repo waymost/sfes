@@ -14,10 +14,35 @@
 //! which appear a fixed number of CPU cycles after the write that starts the operation
 //! (ADR 0023).
 
+use crate::bus::Registers;
+
 /// The CPU cycles after the `$4203` write before the product can be read.
 const MULTIPLY_CYCLES: u8 = 8;
 /// The CPU cycles after the `$4206` write before the quotient and remainder can be read.
 const DIVIDE_CYCLES: u8 = 16;
+
+/// The unit's registers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MathRegister {
+    /// $4202 WRMPYA: the multiplicand.
+    Multiplicand,
+    /// $4203 WRMPYB: the multiplier; a write starts a multiplication.
+    Multiplier,
+    /// $4204 WRDIVL: the dividend's low byte.
+    DividendLow,
+    /// $4205 WRDIVH: the dividend's high byte.
+    DividendHigh,
+    /// $4206 WRDIVB: the divisor; a write starts a division.
+    Divisor,
+    /// $4214 RDDIVL: the quotient's low byte.
+    QuotientLow,
+    /// $4215 RDDIVH: the quotient's high byte.
+    QuotientHigh,
+    /// $4216 RDMPYL: the product's or remainder's low byte.
+    ProductLow,
+    /// $4217 RDMPYH: the product's or remainder's high byte.
+    ProductHigh,
+}
 
 /// The multiply and divide unit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,7 +55,7 @@ pub(crate) struct Math {
     quotient: u16,
     /// $4216–$4217 RDMPYL, RDMPYH: the product or the remainder.
     product: u16,
-    /// The quotient and the product the running operation leaves.
+    /// The quotient, or the multiplier, the running operation leaves.
     next_quotient: u16,
     /// The product or remainder the running operation leaves.
     next_product: u16,
@@ -60,7 +85,7 @@ impl Math {
     /// $4202 WRMPYA: sets the multiplicand.
     // @source: anomie-regs#4202
     // @source: fullsnes#snesmathsmultiplydivide
-    pub(crate) const fn write_multiplicand(&mut self, value: u8) {
+    const fn write_multiplicand(&mut self, value: u8) {
         self.multiplicand = value;
     }
 
@@ -71,21 +96,21 @@ impl Math {
     // @source: anomie-regs#4216
     // @source: fullsnes#snesmathsmultiplydivide
     // @source: adr-0023
-    pub(crate) const fn write_multiplier(&mut self, value: u8) {
+    const fn write_multiplier(&mut self, value: u8) {
         let product = (self.multiplicand as u16) * (value as u16);
         self.start(value as u16, product, MULTIPLY_CYCLES);
     }
 
     /// $4204 WRDIVL: sets the dividend's low byte.
     // @source: anomie-regs#4204
-    pub(crate) const fn write_dividend_low(&mut self, value: u8) {
+    const fn write_dividend_low(&mut self, value: u8) {
         let [_, high] = self.dividend.to_le_bytes();
         self.dividend = u16::from_le_bytes([value, high]);
     }
 
     /// $4205 WRDIVH: sets the dividend's high byte.
     // @source: anomie-regs#4205
-    pub(crate) const fn write_dividend_high(&mut self, value: u8) {
+    const fn write_dividend_high(&mut self, value: u8) {
         let [low, _] = self.dividend.to_le_bytes();
         self.dividend = u16::from_le_bytes([low, value]);
     }
@@ -98,7 +123,7 @@ impl Math {
     // @source: anomie-regs#4216
     // @source: fullsnes#snesmathsmultiplydivide
     // @source: adr-0023
-    pub(crate) const fn write_divisor(&mut self, value: u8) {
+    const fn write_divisor(&mut self, value: u8) {
         let (quotient, remainder) = match value {
             0 => (0xFFFF, self.dividend),
             divisor => (
@@ -136,29 +161,54 @@ impl Math {
             self.product = self.next_product;
         }
     }
+}
 
-    /// $4214 RDDIVL
+impl Registers for Math {
+    type Register = MathRegister;
+
+    /// $4214–$4217 RDDIVL–RDMPYH: the results, none of which a read changes. The operand
+    /// registers are write-only.
     // @source: anomie-regs#4214
-    pub(crate) const fn quotient_low(self) -> u8 {
-        self.quotient.to_le_bytes()[0]
-    }
-
-    /// $4215 RDDIVH
     // @source: anomie-regs#4215
-    pub(crate) const fn quotient_high(self) -> u8 {
-        self.quotient.to_le_bytes()[1]
-    }
-
-    /// $4216 RDMPYL
     // @source: anomie-regs#4216
-    pub(crate) const fn product_low(self) -> u8 {
-        self.product.to_le_bytes()[0]
+    // @source: anomie-regs#4217
+    // @source: adr-0023
+    fn peek(&self, register: MathRegister) -> Option<u8> {
+        let [quotient_low, quotient_high] = self.quotient.to_le_bytes();
+        let [product_low, product_high] = self.product.to_le_bytes();
+        match register {
+            MathRegister::QuotientLow => Some(quotient_low),
+            MathRegister::QuotientHigh => Some(quotient_high),
+            MathRegister::ProductLow => Some(product_low),
+            MathRegister::ProductHigh => Some(product_high),
+            MathRegister::Multiplicand
+            | MathRegister::Multiplier
+            | MathRegister::DividendLow
+            | MathRegister::DividendHigh
+            | MathRegister::Divisor => None,
+        }
     }
 
-    /// $4217 RDMPYH
-    // @source: anomie-regs#4217
-    pub(crate) const fn product_high(self) -> u8 {
-        self.product.to_le_bytes()[1]
+    /// $4202–$4206 WRMPYA–WRDIVB: the operands, two of which start an operation. The results
+    /// are read-only.
+    // @source: anomie-regs#4202
+    // @source: anomie-regs#4203
+    // @source: anomie-regs#4204
+    // @source: anomie-regs#4205
+    // @source: anomie-regs#4206
+    // @source: adr-0023
+    fn write(&mut self, register: MathRegister, value: u8) {
+        match register {
+            MathRegister::Multiplicand => self.write_multiplicand(value),
+            MathRegister::Multiplier => self.write_multiplier(value),
+            MathRegister::DividendLow => self.write_dividend_low(value),
+            MathRegister::DividendHigh => self.write_dividend_high(value),
+            MathRegister::Divisor => self.write_divisor(value),
+            MathRegister::QuotientLow
+            | MathRegister::QuotientHigh
+            | MathRegister::ProductLow
+            | MathRegister::ProductHigh => {}
+        }
     }
 }
 
@@ -179,11 +229,12 @@ mod tests {
     // @source: anomie-regs#4216
     fn results(math: Math) -> [u8; 4] {
         [
-            math.quotient_low(),
-            math.quotient_high(),
-            math.product_low(),
-            math.product_high(),
+            MathRegister::QuotientLow,
+            MathRegister::QuotientHigh,
+            MathRegister::ProductLow,
+            MathRegister::ProductHigh,
         ]
+        .map(|register| math.peek(register).unwrap_or_default())
     }
 
     // @source: anomie-regs#4202

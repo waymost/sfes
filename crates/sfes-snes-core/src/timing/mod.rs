@@ -1,20 +1,20 @@
+// @source: anomie-regs#2133
+// @source: anomie-regs#dma-and-hdma/hdma
+// @source: anomie-timing#s-cpu/auto-joypad-read
 // @source: anomie-timing#s-cpu/clocks-and-refresh
+// @source: anomie-timing#s-cpu/hdma
+// @source: anomie-timing#s-cpu/interrupts
+// @source: anomie-timing#s-cpu/registers
 // @source: anomie-timing#s-ppu/blanking-periods
 // @source: anomie-timing#s-ppu/registers
-// @source: anomie-regs#2133
 // @source: fullsnes#snestiminghvcounters
 // @source: fullsnes#snestiminghvevents
 // @source: adr-0001
 // @source: adr-0018
 // @source: adr-0019
 // @source: adr-0020
-// @source: anomie-timing#s-cpu/interrupts
-// @source: anomie-timing#s-cpu/registers
 // @source: adr-0021
-// @source: anomie-timing#s-cpu/auto-joypad-read
 // @source: adr-0024
-// @source: anomie-regs#dma-and-hdma/hdma
-// @source: anomie-timing#s-cpu/hdma
 // @source: adr-0026
 //! The scheduler: line and frame position, the interlace field, vertical blank, the refresh
 //! schedule, the NMI and H/V timer trigger points, the counter latch of `$4201`, the
@@ -27,6 +27,7 @@ mod position;
 
 use sfes_api::Cycles;
 
+pub(crate) use crate::timing::irq::TimerRegister;
 use crate::{
     Region,
     timing::{
@@ -48,9 +49,9 @@ const FIELD_TOGGLE: u64 = 4;
 const FIRST_VBLANK_LINE: u16 = 225;
 /// The line that starts vertical blank with overscan: 240 ($F0).
 const OVERSCAN_VBLANK_LINE: u16 = 240;
-/// `$2133` SETINI bit 0: screen interlace.
+/// $2133 SETINI bit 0: screen interlace.
 const SCREEN_INTERLACE: u8 = 0x01;
-/// `$2133` SETINI bit 2: overscan.
+/// $2133 SETINI bit 2: overscan.
 const OVERSCAN: u8 = 0x04;
 /// Where H=0.5, when the NMI flag is set, falls in the line that starts vertical blank.
 const NMI_FLAG: u64 = 2;
@@ -63,8 +64,8 @@ pub(crate) const WRIO_LATCH_DELAY: u64 = 4;
 /// The earliest an auto-joypad read starts in its line: dot 32.5.
 const AUTO_READ_EARLIEST: u64 = 130;
 /// When the first frame's auto-joypad read starts after power-on or reset: dot 74.5 of
-/// line 225, after 225 lines of 1364 master cycles.
-const AUTO_READ_FIRST: u64 = 225 * 1364 + 298;
+/// line 225, after 225 normal lines.
+const AUTO_READ_FIRST: u64 = FIRST_VBLANK_LINE as u64 * LineKind::Normal.length() + 298;
 /// Auto-joypad reads start a multiple of this many master cycles apart.
 const AUTO_READ_GRID: u64 = 256;
 /// Where H=6, HDMA's setup, falls in line 0.
@@ -121,7 +122,7 @@ pub(crate) enum Event {
 pub(crate) struct Timing {
     /// The video standard, which sets the lines per frame.
     region: Region,
-    /// `$2133` SETINI's interlace and overscan bits as last written (ADR 0020, point 6).
+    /// $2133 SETINI's interlace and overscan bits as last written (ADR 0020, point 6).
     screen_mode: u8,
     /// `$213F` bit 7 from H=1 of the current frame's line 0.
     field: bool,
@@ -157,8 +158,8 @@ pub(crate) struct Timing {
 
 impl Timing {
     /// Line 0 of a frame starting at `start`, as at power-on.
-    // @source: fullsnes#snestiminghvevents
     // @source: fullsnes#snesiomap
+    // @source: fullsnes#snestiminghvevents
     // @source: adr-0018
     // @source: adr-0020
     // @source: adr-0021
@@ -191,17 +192,17 @@ impl Timing {
     /// kept, and no NMI flag or latch is pending (ADR 0021, point 8). No auto-read is pending
     /// and its grid starts over (ADR 0024, points 5 and 7). HDMA's setup is next, at H=6
     /// (ADR 0026, point 2). The counts of lines and frames are kept.
-    // @source: anomie-timing#s-cpu/hdma
-    // @source: adr-0026
     // @source: anomie-timing
-    // @source: fullsnes#snestiminghvevents
+    // @source: anomie-timing#s-cpu/auto-joypad-read
+    // @source: anomie-timing#s-cpu/hdma
     // @source: fullsnes#snesiomap
+    // @source: fullsnes#snestiminghvevents
     // @source: adr-0018
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
-    // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: adr-0024
+    // @source: adr-0026
     pub(crate) fn restart(&mut self, start: Cycles) {
         self.screen_mode = 0;
         // Field 0 at H=0; the toggle at H=1 of this line makes the frame field 1.
@@ -212,13 +213,13 @@ impl Timing {
         self.vblank = false;
         self.refresh_offset = FIRST_REFRESH;
         self.deadlines
-            .set(Deadline::Refresh, Cycles(start.0 + FIRST_REFRESH));
+            .set(Deadline::Refresh, start.after(FIRST_REFRESH));
         self.deadlines
-            .set(Deadline::Line, Cycles(start.0 + LineKind::Normal.length()));
+            .set(Deadline::Line, start.after(LineKind::Normal.length()));
         self.deadlines.set(Deadline::Nmi, NEVER);
         self.deadlines.set(Deadline::Latch, NEVER);
         self.deadlines.set(Deadline::Joypad, NEVER);
-        self.schedule_hdma(HdmaStep::Setup, Cycles(start.0 + HDMA_SETUP));
+        self.schedule_hdma(HdmaStep::Setup, start.after(HDMA_SETUP));
         self.origin = start;
         self.timer.reset();
         self.previous = None;
@@ -246,41 +247,20 @@ impl Timing {
         self.schedule_irq(now);
     }
 
-    /// $4207 HTIMEL, written at `now` (ADR 0021, points 3 and 5).
+    /// $4207–$420A HTIMEL–VTIMEH, written at `now` (ADR 0021, points 3 and 5).
     // @source: anomie-regs#4207
-    // @source: adr-0021
-    pub(crate) fn write_horizontal_timer_low(&mut self, value: u8, now: Cycles) {
-        self.timer.write_horizontal_low(value);
-        self.schedule_irq(now);
-    }
-
-    /// $4208 HTIMEH, written at `now` (ADR 0021, points 3 and 5).
     // @source: anomie-regs#4208
-    // @source: adr-0021
-    pub(crate) fn write_horizontal_timer_high(&mut self, value: u8, now: Cycles) {
-        self.timer.write_horizontal_high(value);
-        self.schedule_irq(now);
-    }
-
-    /// $4209 VTIMEL, written at `now` (ADR 0021, points 3 and 5).
     // @source: anomie-regs#4209
-    // @source: adr-0021
-    pub(crate) fn write_vertical_timer_low(&mut self, value: u8, now: Cycles) {
-        self.timer.write_vertical_low(value);
-        self.schedule_irq(now);
-    }
-
-    /// $420A VTIMEH, written at `now` (ADR 0021, points 3 and 5).
     // @source: anomie-regs#420a
     // @source: adr-0021
-    pub(crate) fn write_vertical_timer_high(&mut self, value: u8, now: Cycles) {
-        self.timer.write_vertical_high(value);
+    pub(crate) fn write_timer(&mut self, register: TimerRegister, value: u8, now: Cycles) {
+        self.timer.write(register, value);
         self.schedule_irq(now);
     }
 
     /// Latches the counters at `at`, for a `$4201` write (ADR 0021, points 3 and 7).
-    // @source: anomie-timing
     // @source: anomie-regs#4201
+    // @source: anomie-timing
     // @source: adr-0021
     pub(crate) const fn schedule_latch(&mut self, at: Cycles) {
         self.deadlines.set(Deadline::Latch, at);
@@ -309,10 +289,17 @@ impl Timing {
     // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: adr-0024
     const fn auto_read_start(&self, line_start: Cycles) -> Cycles {
-        let earliest = line_start.0 + AUTO_READ_EARLIEST;
-        let grid = (self.origin.0 + AUTO_READ_FIRST) % AUTO_READ_GRID;
-        let wait = (grid + AUTO_READ_GRID - earliest % AUTO_READ_GRID) % AUTO_READ_GRID;
-        Cycles(earliest + wait)
+        let earliest = line_start.after(AUTO_READ_EARLIEST);
+        let grid = self.origin.after(AUTO_READ_FIRST).0 % AUTO_READ_GRID;
+        let wait = (grid + AUTO_READ_GRID - earliest.0 % AUTO_READ_GRID) % AUTO_READ_GRID;
+        earliest.after(wait)
+    }
+
+    /// The video standard the machine runs.
+    // @source: adr-0018
+    // @source: adr-0020
+    pub(crate) const fn region(&self) -> Region {
+        self.region
     }
 
     /// When the frame started at power-on or the last reset: DMA's 8-cycle grid counts from
@@ -401,7 +388,7 @@ impl Timing {
     // @source: adr-0020
     #[cfg_attr(not(test), expect(dead_code, reason = "read by $213F with the PPU"))]
     pub(crate) const fn field(&self, now: Cycles) -> bool {
-        if self.line == 0 && now.0 < self.line_start.0 + FIELD_TOGGLE {
+        if self.line == 0 && now.0 < self.line_start.after(FIELD_TOGGLE).0 {
             !self.field
         } else {
             self.field
@@ -412,12 +399,12 @@ impl Timing {
     /// occurrence (ADR 0020, point 9; ADR 0021, point 9). The auto-read's next event is
     /// scheduled by the bus (ADR 0024, point 9). HDMA's setup is followed by the same
     /// line's transfer (ADR 0026, point 2).
+    // @source: fullsnes#snestiminghvevents
     // @source: adr-0001
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
     // @source: adr-0024
-    // @source: fullsnes#snestiminghvevents
     // @source: adr-0026
     pub(crate) fn service(&mut self, now: Cycles) -> Option<Event> {
         let deadline = self.deadlines.first_due(now)?;
@@ -433,7 +420,7 @@ impl Timing {
                 Some(Event::Nmi)
             }
             Deadline::Irq => {
-                self.irq_after = Cycles(at.0 + 1);
+                self.irq_after = at + 1;
                 self.schedule_irq(at);
                 Some(Event::Irq)
             }
@@ -450,7 +437,7 @@ impl Timing {
                 let step = self.hdma_step;
                 match step {
                     HdmaStep::Setup => {
-                        self.schedule_hdma(HdmaStep::Line, Cycles(self.line_start.0 + HDMA_LINE));
+                        self.schedule_hdma(HdmaStep::Line, self.line_start + HDMA_LINE);
                     }
                     HdmaStep::Line => self.schedule_hdma(HdmaStep::Line, NEVER),
                 }
@@ -481,11 +468,7 @@ impl Timing {
     // @source: anomie-timing#s-cpu/interrupts
     // @source: adr-0021
     fn schedule_irq(&mut self, now: Cycles) {
-        let from = if now.0 > self.irq_after.0 {
-            now
-        } else {
-            self.irq_after
-        };
+        let from = now.max(self.irq_after);
         let previous = self
             .previous
             .and_then(|previous| self.timer.trigger(&previous));
@@ -507,7 +490,7 @@ impl Timing {
     const fn schedule_refresh(&mut self) {
         let length = self.line_kind.length();
         self.refresh_offset = following_refresh(self.refresh_offset, length);
-        let at = Cycles(self.line_start.0 + length + self.refresh_offset);
+        let at = self.line_start.after(length + self.refresh_offset);
         self.deadlines.set(Deadline::Refresh, at);
     }
 
@@ -516,19 +499,19 @@ impl Timing {
     /// points 1, 2, 4 and 5), the NMI flag and auto-read it brings and its trigger point
     /// (ADR 0021, points 4 and 9; ADR 0024, point 5). Line 0 schedules HDMA's setup, and
     /// every other line that starts before vertical blank its transfer (ADR 0026, point 2).
-    // @source: anomie-timing#s-cpu/hdma
-    // @source: anomie-regs#dma-and-hdma/hdma
-    // @source: adr-0026
-    // @source: anomie-timing#s-cpu/clocks-and-refresh
-    // @source: anomie-timing#s-ppu/blanking-periods
     // @source: anomie-regs#2133
+    // @source: anomie-regs#dma-and-hdma/hdma
+    // @source: anomie-timing#s-cpu/auto-joypad-read
+    // @source: anomie-timing#s-cpu/clocks-and-refresh
+    // @source: anomie-timing#s-cpu/hdma
+    // @source: anomie-timing#s-cpu/interrupts
+    // @source: anomie-timing#s-ppu/blanking-periods
     // @source: fullsnes#snestiminghvcounters
     // @source: fullsnes#snestiminghvevents
-    // @source: anomie-timing#s-cpu/interrupts
     // @source: adr-0020
     // @source: adr-0021
-    // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: adr-0024
+    // @source: adr-0026
     fn start_line(&mut self) -> Event {
         let at = self.deadlines.due(Deadline::Line);
         self.previous = Some(self.timed_line());
@@ -549,20 +532,20 @@ impl Timing {
         if frame_ended {
             self.vblank = true;
             self.frames += 1;
-            self.deadlines.set(Deadline::Nmi, Cycles(at.0 + NMI_FLAG));
+            self.deadlines.set(Deadline::Nmi, at + NMI_FLAG);
             self.deadlines
                 .set(Deadline::Joypad, self.auto_read_start(at));
         }
         if self.line == 0 {
-            self.schedule_hdma(HdmaStep::Setup, Cycles(at.0 + HDMA_SETUP));
+            self.schedule_hdma(HdmaStep::Setup, at + HDMA_SETUP);
         } else if self.vblank {
             self.schedule_hdma(HdmaStep::Line, NEVER);
         } else {
-            self.schedule_hdma(HdmaStep::Line, Cycles(at.0 + HDMA_LINE));
+            self.schedule_hdma(HdmaStep::Line, at + HDMA_LINE);
         }
         self.lines += 1;
         self.deadlines
-            .set(Deadline::Line, Cycles(at.0 + self.line_kind.length()));
+            .set(Deadline::Line, at + self.line_kind.length());
         self.schedule_irq(at);
         Event::Line {
             line: self.line,
@@ -573,8 +556,8 @@ impl Timing {
 
     /// The frame's last line: 261 on NTSC and 311 on PAL, one more with interlace on in
     /// field 0 (ADR 0020, point 2).
-    // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: anomie-regs#213c
+    // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: fullsnes#snestiminghvevents
     // @source: adr-0020
     const fn last_line(&self) -> u16 {

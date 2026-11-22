@@ -1,6 +1,6 @@
-// @source: adr-0018
 // @source: adr-0004
 // @source: adr-0011
+// @source: adr-0018
 //! The `Snes` machine: its state, its builder and the inherent API shaped like `System`
 //! (FND-01, FND-06, FND-08; technical design section 3).
 
@@ -28,13 +28,11 @@ pub enum BuildError {
     Cartridge(#[from] CartError),
 }
 
-/// Machine state that belongs to no chip.
+/// Machine state that belongs to no chip. The video standard is the scheduler's.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Meta {
     /// The seed the machine was last powered on with.
     seed: u64,
-    /// The video standard the machine runs.
-    region: Region,
 }
 
 /// Everything that is machine state: what `Clone` copies and, from M4, what save states hold.
@@ -177,10 +175,7 @@ impl<A: Accuracy, O: Observer> SnesBuilder<A, O> {
     pub fn build(self) -> Result<Snes<A, O>, BuildError> {
         let cartridge = Cartridge::load(&self.rom, self.options)?;
         let region = cartridge.header().region.unwrap_or(Region::Ntsc);
-        let meta = Meta {
-            seed: self.seed,
-            region,
-        };
+        let meta = Meta { seed: self.seed };
         let bus = Bus::power_on(cartridge, Timing::new(region, Cycles(0)), self.seed);
         let mut snes = Snes {
             state: State {
@@ -198,17 +193,13 @@ impl<A: Accuracy, O: Observer> SnesBuilder<A, O> {
 }
 
 impl<A: Accuracy, O: Observer> Snes<A, O> {
-    /// Presses the reset button: the timing position returns to the start of a frame, the
-    /// bus registers take their reset values and the CPU runs its reset sequence at once.
-    /// WRAM and cartridge RAM are kept (ADR 0018, ADR 0019).
+    /// Presses the reset button: the timing position returns to the start of a frame and
+    /// the bus registers take their reset values (`Bus::reset`), then the CPU runs its reset
+    /// sequence at once. WRAM and cartridge RAM are kept (ADR 0018, ADR 0019).
     // @source: fullsnes#snescontrollersotherinputs
-    // @source: fullsnes#snesiomap
-    // @source: anomie-timing
     // @source: adr-0018
     // @source: adr-0019
     pub fn reset(&mut self) {
-        let now = self.state.bus.now;
-        self.state.bus.timing.restart(now);
         self.state.bus.reset();
         self.reset_cpu();
     }
@@ -217,13 +208,13 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
     /// then the reset sequence. Cartridge RAM is kept, as a battery would (ADR 0018).
     // @source: adr-0018
     pub fn power_cycle(&mut self, seed: u64) {
-        let region = self.state.meta.region;
+        let region = self.state.bus.timing.region();
         let cartridge = self.state.bus.cartridge.clone();
         let input = self.state.bus.ports.input;
         self.state.bus = Bus::power_on(cartridge, Timing::new(region, Cycles(0)), seed);
         self.state.bus.ports.input = input;
         self.state.cpu = Cpu65816::new();
-        self.state.meta = Meta { seed, region };
+        self.state.meta = Meta { seed };
         self.reset_cpu();
     }
 
@@ -362,8 +353,8 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
     /// Reads the CPU bus without side effects or time (FND-06). An address whose read has
     /// side effects, such as `$2180 WMDATA`, is reported as latched, with the value a read
     /// would return now.
-    // @source: anomie-memmap#memory-map
     // @source: anomie-memmap#hardware/data-bus
+    // @source: anomie-memmap#memory-map
     // @source: adr-0019
     #[must_use]
     pub fn peek_bus(&self, address: u32) -> Peek {
@@ -386,7 +377,7 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
     // @source: adr-0018
     #[must_use]
     pub const fn video_standard(&self) -> Region {
-        self.state.meta.region
+        self.state.bus.timing.region()
     }
 
     /// The seed of the last power-on.
@@ -466,6 +457,7 @@ mod tests {
     use alloc::{vec, vec::Vec};
 
     use sfes_api::SplitMix64;
+    use sfes_snes_cart::test_support::{TestHeader, image_with_code};
     use sfes_snes_cpu::Flags;
 
     use super::*;
@@ -475,14 +467,11 @@ mod tests {
     // @source: fullsnes#snescartridgeromheader
     // @source: adr-0017
     fn rom(code: &[u8], country: u8) -> Arc<[u8]> {
-        let mut image = vec![0; 0x8000];
-        image[..code.len()].copy_from_slice(code);
-        image[0x7FC0..0x7FD5].fill(b' ');
-        image[0x7FD5] = 0x20;
-        image[0x7FD7] = 0x08;
-        image[0x7FD9] = country;
-        image[0x7FFC..0x7FFE].copy_from_slice(&[0x00, 0x80]);
-        Arc::from(image)
+        let header = TestHeader {
+            country,
+            ..TestHeader::default()
+        };
+        Arc::from(image_with_code(Mapping::LoRom, 0x8000, code, header))
     }
 
     /// LDA #$42; STA $0010; STP.
@@ -560,9 +549,9 @@ mod tests {
         assert!(matches!(result, Err(BuildError::Cartridge(_))));
     }
 
+    // @source: anomie-memmap#memory-map
     // @source: adr-0011
     // @source: adr-0018
-    // @source: anomie-memmap#memory-map
     #[test]
     fn power_on_runs_the_reset_sequence_from_time_0() {
         let snes = machine(&PROGRAM);
@@ -758,9 +747,9 @@ mod tests {
     }
 
     // @source: anomie-regs#2133
+    // @source: fullsnes#snesiomap
     // @source: fullsnes#snestiminghvcounters
     // @source: fullsnes#snestiminghvevents
-    // @source: fullsnes#snesiomap
     // @source: adr-0020
     #[test]
     fn writes_to_setini_reach_the_scheduler() {
@@ -776,11 +765,11 @@ mod tests {
         assert!(snes.cycles() >= Cycles(first) && snes.cycles() < Cycles(first + 12));
         // Reset clears $2133 (fullsnes#snesiomap): the next vertical blank is at line 225.
         snes.reset();
-        let reset_at = snes.cycles().0 - 54;
+        // The reset sequence ran 54 cycles from line 0.
+        let next = snes.cycles() + (225 * 1364 - 54);
         snes.state.cpu.run = RunState::Stopped;
         snes.run(Stop::Frames(1));
-        let next = reset_at + 225 * 1364;
-        assert!(snes.cycles() >= Cycles(next) && snes.cycles() < Cycles(next + 12));
+        assert!(snes.cycles() >= next && snes.cycles() < next + 12);
     }
 
     // @source: fullsnes#snescartridgeromheader
@@ -809,8 +798,8 @@ mod tests {
         assert!(pal.cycles() >= Cycles(second) && pal.cycles() < Cycles(second + 12));
     }
 
-    // @source: fullsnes#snescontrollersotherinputs
     // @source: anomie-timing
+    // @source: fullsnes#snescontrollersotherinputs
     // @source: adr-0018
     // @source: adr-0020
     #[test]
@@ -823,7 +812,7 @@ mod tests {
         assert_eq!(snes.cpu().pc, 0x8000);
         // The reset sequence's 54 cycles run from line 0, H=0.
         assert_eq!(snes.state.bus.timing.position(snes.cycles()), (0, 13));
-        assert_eq!(snes.cycles(), Cycles(reset_at.0 + 54));
+        assert_eq!(snes.cycles(), reset_at + 54);
         snes.power_cycle(0);
         let mut expected = vec![0; 0x2_0000];
         SplitMix64::new(0).fill(&mut expected);
@@ -831,8 +820,8 @@ mod tests {
         assert_eq!(snes.cycles(), Cycles(54));
     }
 
-    // @source: anomie-memmap#memory-map
     // @source: anomie-memmap#hardware/data-bus
+    // @source: anomie-memmap#memory-map
     // @source: adr-0017
     #[test]
     fn regions_and_peek_see_the_same_memory() {

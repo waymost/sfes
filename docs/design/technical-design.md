@@ -179,7 +179,7 @@ pub enum Stop { Frames(u32), Scanlines(u32), Instructions(u32), Cycles(u64), Wat
 pub(crate) struct State {
     cpu: Cpu65816,   // registers and run state only
     bus: Bus,        // WRAM, PPU, APU, cart, DMA, 5A22 I/O, ports and polled flag, deadlines, line and frame counters
-    meta: Meta,      // seed, region
+    meta: Meta,      // seed; the region is the scheduler's
 }
 
 pub struct Snes<A: Accuracy = Fast, O: Observer = NoopObserver> {

@@ -1,9 +1,9 @@
-// @source: anomie-timing#s-cpu/interrupts
 // @source: anomie-regs#4200
 // @source: anomie-regs#4207
 // @source: anomie-regs#4208
 // @source: anomie-regs#4209
 // @source: anomie-regs#420a
+// @source: anomie-timing#s-cpu/interrupts
 // @source: fullsnes#snesppuinterrupts
 // @source: adr-0021
 //! The H/V timer: `$4200` bits 4 and 5, HTIME and VTIME, and the master cycle at which a
@@ -56,6 +56,19 @@ impl IrqMode {
             (true, true) => Self::Both,
         }
     }
+}
+
+/// $4207–$420A HTIMEL–VTIMEH: the timer's registers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TimerRegister {
+    /// $4207 HTIMEL: bits 0–7 of HTIME.
+    HorizontalLow,
+    /// $4208 HTIMEH: bit 8 of HTIME.
+    HorizontalHigh,
+    /// $4209 VTIMEL: bits 0–7 of VTIME.
+    VerticalLow,
+    /// $420A VTIMEH: bit 8 of VTIME.
+    VerticalHigh,
 }
 
 /// A line as the timer sees it.
@@ -115,30 +128,19 @@ impl Timer {
         self.mode = IrqMode::from_enable(value);
     }
 
-    /// $4207 HTIMEL: bits 0–7 of HTIME.
+    /// $4207–$420A HTIMEL–VTIMEH: the low register sets bits 0–7 of its value, the high
+    /// register bit 8.
     // @source: anomie-regs#4207
     // @source: anomie-regs#4208
-    pub(crate) const fn write_horizontal_low(&mut self, value: u8) {
-        self.horizontal = with_low(self.horizontal, value);
-    }
-
-    /// $4208 HTIMEH: bit 8 of HTIME.
-    // @source: anomie-regs#4208
-    pub(crate) const fn write_horizontal_high(&mut self, value: u8) {
-        self.horizontal = with_high(self.horizontal, value);
-    }
-
-    /// $4209 VTIMEL: bits 0–7 of VTIME.
     // @source: anomie-regs#4209
     // @source: anomie-regs#420a
-    pub(crate) const fn write_vertical_low(&mut self, value: u8) {
-        self.vertical = with_low(self.vertical, value);
-    }
-
-    /// $420A VTIMEH: bit 8 of VTIME.
-    // @source: anomie-regs#420a
-    pub(crate) const fn write_vertical_high(&mut self, value: u8) {
-        self.vertical = with_high(self.vertical, value);
+    pub(crate) const fn write(&mut self, register: TimerRegister, value: u8) {
+        match register {
+            TimerRegister::HorizontalLow => self.horizontal = with_low(self.horizontal, value),
+            TimerRegister::HorizontalHigh => self.horizontal = with_high(self.horizontal, value),
+            TimerRegister::VerticalLow => self.vertical = with_low(self.vertical, value),
+            TimerRegister::VerticalHigh => self.vertical = with_high(self.vertical, value),
+        }
     }
 
     /// When `line`'s trigger point falls, or `None` if it has none (ADR 0021, point 5):
@@ -149,9 +151,9 @@ impl Timer {
     ///   next line;
     /// - an H past the line's last dot, and H=153 on a short line or a frame's last line,
     ///   never trigger.
-    // @source: anomie-timing#s-cpu/interrupts
     // @source: anomie-regs#4208
     // @source: anomie-regs#420a
+    // @source: anomie-timing#s-cpu/interrupts
     // @source: fullsnes#snesppuinterrupts
     // @source: fullsnes#snestiminghvevents
     // @source: adr-0021
@@ -166,14 +168,12 @@ impl Timer {
             return None;
         }
         if dot == 0 {
-            return Some(Cycles(line.start.0 + H_ZERO_TRIGGER - line.previous_length));
+            return Some(line.start.after(H_ZERO_TRIGGER - line.previous_length));
         }
         if dot == LOST_DOT && (matches!(line.kind, LineKind::Short) || line.last) {
             return None;
         }
-        Some(Cycles(
-            line.start.0 + TRIGGER_BASE + TRIGGER_DOT * dot as u64,
-        ))
+        Some(line.start.after(TRIGGER_BASE + TRIGGER_DOT * dot as u64))
     }
 }
 
@@ -213,11 +213,11 @@ mod tests {
         let mut timer = Timer::power_on();
         timer.write_enable(enable);
         let [low, high] = horizontal.to_le_bytes();
-        timer.write_horizontal_low(low);
-        timer.write_horizontal_high(high);
+        timer.write(TimerRegister::HorizontalLow, low);
+        timer.write(TimerRegister::HorizontalHigh, high);
         let [low, high] = vertical.to_le_bytes();
-        timer.write_vertical_low(low);
-        timer.write_vertical_high(high);
+        timer.write(TimerRegister::VerticalLow, low);
+        timer.write(TimerRegister::VerticalHigh, high);
         timer
     }
 
@@ -238,10 +238,10 @@ mod tests {
     fn the_timers_are_nine_bits_and_start_at_1ff() {
         let mut timer = Timer::power_on();
         assert_eq!((timer.horizontal, timer.vertical), (0x1FF, 0x1FF));
-        timer.write_horizontal_low(0x34);
-        timer.write_horizontal_high(0xFE);
-        timer.write_vertical_high(0x00);
-        timer.write_vertical_low(0x12);
+        timer.write(TimerRegister::HorizontalLow, 0x34);
+        timer.write(TimerRegister::HorizontalHigh, 0xFE);
+        timer.write(TimerRegister::VerticalHigh, 0x00);
+        timer.write(TimerRegister::VerticalLow, 0x12);
         assert_eq!((timer.horizontal, timer.vertical), (0x034, 0x012));
         timer.write_enable(0x30);
         timer.reset();

@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-11-20
+- **Amended:** 2026-11-21: the checksum splits a remainder that is not a power of two again, as ADR 0017 mirrors it (score table, first row).
 - **Confidence:** medium
 
 ## Context
@@ -36,7 +37,7 @@ A ROM image does not say which board it was made for. The internal header that d
 
   | Evidence | Points |
   | --- | --- |
-  | The stored checksum equals the image's checksum, summed as fullsnes describes | 4 |
+  | The stored checksum equals the image's checksum, summed as fullsnes describes, with a remainder that is not a power of two split again as ADR 0017 mirrors it | 4 |
   | Checksum XOR complement is `$FFFF` | 4 |
   | `$FFD5` bits 7–5 are `001` and its map mode belongs to the candidate's board | 2 |
   | Every title byte is in `$20–$7E` or JIS X 0201 `$A1–$DF` | 1 |

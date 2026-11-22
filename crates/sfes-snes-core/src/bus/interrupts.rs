@@ -1,8 +1,8 @@
-// @source: anomie-timing#s-cpu/interrupts
-// @source: anomie-timing#s-cpu/registers
 // @source: anomie-regs#4200
 // @source: anomie-regs#4210
 // @source: anomie-regs#4211
+// @source: anomie-timing#s-cpu/interrupts
+// @source: anomie-timing#s-cpu/registers
 // @source: fullsnes#snesppuinterrupts
 // @source: wdc-w65c816s#2.18
 // @source: wdc-w65c816s#2.21
@@ -14,27 +14,38 @@
 
 use sfes_snes_cpu::Pending;
 
-/// `$4200` NMITIMEN bit 7: NMI enable.
+/// $4200 NMITIMEN bit 7: NMI enable.
 const NMI_ENABLE: u8 = 0x80;
 /// `$4200` bits 4 and 5: the IRQ mode; both clear disables and acknowledges the IRQ.
 const IRQ_MODE: u8 = 0x30;
 
-/// $4200 NMITIMEN bit 7: the NMI flag reaches /NMI.
-const STATE_NMI_ENABLE: u8 = 0x01;
-/// $4210 RDNMI bit 7: the timer's NMI output is low.
-const STATE_NMI_FLAG: u8 = 0x02;
-/// $4211 TIMEUP bit 7: the timer's IRQ output is low, and with it /IRQ.
-const STATE_IRQ_FLAG: u8 = 0x04;
-/// The CPU's /NMI input is low: the flag and the enable are both set.
-const STATE_NMI_LINE: u8 = 0x08;
-/// A high-to-low change of /NMI not yet taken (ADR 0004).
-const STATE_NMI_LATCHED: u8 = 0x10;
+bitflags::bitflags! {
+    /// The interrupt outputs and the CPU's /NMI input.
+    // @source: anomie-regs#4200
+    // @source: anomie-regs#4210
+    // @source: anomie-regs#4211
+    // @source: adr-0004
+    // @source: adr-0021
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct State: u8 {
+        /// $4200 NMITIMEN bit 7: the NMI flag reaches /NMI.
+        const NMI_ENABLE = 1 << 0;
+        /// $4210 RDNMI bit 7: the timer's NMI output is low.
+        const NMI_FLAG = 1 << 1;
+        /// $4211 TIMEUP bit 7: the timer's IRQ output is low, and with it /IRQ.
+        const IRQ_FLAG = 1 << 2;
+        /// The CPU's /NMI input is low: the flag and the enable are both set.
+        const NMI_LINE = 1 << 3;
+        /// A high-to-low change of /NMI not yet taken (ADR 0004).
+        const NMI_LATCHED = 1 << 4;
+    }
+}
 
 /// The interrupt state of the main CPU's bus.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Interrupts {
-    /// The `STATE_*` bits.
-    state: u8,
+    /// The outputs, the /NMI input and the edge latch.
+    state: State,
     /// The latch and the IRQ line at the start of the last CPU cycle (ADR 0021, point 1).
     recorded: Pending,
 }
@@ -56,25 +67,9 @@ impl Interrupts {
     // @source: adr-0021
     pub(crate) const fn record(&mut self) {
         self.recorded = Pending {
-            nmi: self.has(STATE_NMI_LATCHED),
-            irq: self.has(STATE_IRQ_FLAG),
+            nmi: self.state.contains(State::NMI_LATCHED),
+            irq: self.state.contains(State::IRQ_FLAG),
         };
-    }
-
-    /// Whether `bit` of the state is set.
-    // @source: adr-0021
-    const fn has(self, bit: u8) -> bool {
-        self.state & bit != 0
-    }
-
-    /// Sets or clears `bit` of the state.
-    // @source: adr-0021
-    const fn put(&mut self, bit: u8, value: bool) {
-        if value {
-            self.state |= bit;
-        } else {
-            self.state &= !bit;
-        }
     }
 
     /// The requests the CPU sees at an instruction boundary: those recorded at the start of
@@ -89,15 +84,15 @@ impl Interrupts {
     /// The vector read of an NMI entry clears the edge latch (ADR 0004).
     // @source: wdc-w65c816s#2.21
     // @source: adr-0004
-    pub(crate) const fn acknowledge_nmi(&mut self) {
-        self.put(STATE_NMI_LATCHED, false);
+    pub(crate) fn acknowledge_nmi(&mut self) {
+        self.state.remove(State::NMI_LATCHED);
     }
 
     /// Latches an NMI and records it, as if a cycle had just started.
     // @source: adr-0004
     #[cfg(test)]
-    pub(crate) const fn latch_nmi(&mut self) {
-        self.put(STATE_NMI_LATCHED, true);
+    pub(crate) fn latch_nmi(&mut self) {
+        self.state.insert(State::NMI_LATCHED);
         self.record();
     }
 
@@ -105,7 +100,7 @@ impl Interrupts {
     // @source: adr-0004
     #[cfg(test)]
     pub(crate) const fn nmi_latched(self) -> bool {
-        self.has(STATE_NMI_LATCHED)
+        self.state.contains(State::NMI_LATCHED)
     }
 
     /// A `$4200` write: bit 7 gates the NMI flag onto /NMI, and clearing bits 4 and 5
@@ -114,10 +109,10 @@ impl Interrupts {
     // @source: anomie-timing#s-cpu/interrupts
     // @source: fullsnes#snesppuinterrupts
     // @source: adr-0021
-    pub(crate) const fn write_enable(&mut self, value: u8) {
-        self.put(STATE_NMI_ENABLE, value & NMI_ENABLE != 0);
+    pub(crate) fn write_enable(&mut self, value: u8) {
+        self.state.set(State::NMI_ENABLE, value & NMI_ENABLE != 0);
         if value & IRQ_MODE == 0 {
-            self.put(STATE_IRQ_FLAG, false);
+            self.state.remove(State::IRQ_FLAG);
         }
         self.update_nmi_line();
     }
@@ -126,8 +121,8 @@ impl Interrupts {
     // @source: anomie-timing#s-cpu/interrupts
     // @source: fullsnes#snestiminghvevents
     // @source: adr-0021
-    pub(crate) const fn set_nmi_flag(&mut self) {
-        self.put(STATE_NMI_FLAG, true);
+    pub(crate) fn set_nmi_flag(&mut self) {
+        self.state.insert(State::NMI_FLAG);
         self.update_nmi_line();
     }
 
@@ -135,63 +130,62 @@ impl Interrupts {
     // @source: anomie-timing#s-cpu/interrupts
     // @source: fullsnes#snestiminghvevents
     // @source: adr-0021
-    pub(crate) const fn end_vertical_blank(&mut self) {
-        self.put(STATE_NMI_FLAG, false);
+    pub(crate) fn end_vertical_blank(&mut self) {
+        self.state.remove(State::NMI_FLAG);
         self.update_nmi_line();
     }
 
     /// The IRQ flag is set at a trigger point.
     // @source: anomie-timing#s-cpu/interrupts
     // @source: adr-0021
-    pub(crate) const fn set_irq_flag(&mut self) {
-        self.put(STATE_IRQ_FLAG, true);
+    pub(crate) fn set_irq_flag(&mut self) {
+        self.state.insert(State::IRQ_FLAG);
     }
 
     /// The NMI flag, `$4210` bit 7, without the read's side effect.
     // @source: anomie-regs#4210
     pub(crate) const fn nmi_flag(self) -> bool {
-        self.has(STATE_NMI_FLAG)
+        self.state.contains(State::NMI_FLAG)
     }
 
     /// The IRQ flag, `$4211` bit 7, without the read's side effect.
     // @source: anomie-regs#4211
     pub(crate) const fn irq_flag(self) -> bool {
-        self.has(STATE_IRQ_FLAG)
+        self.state.contains(State::IRQ_FLAG)
     }
 
-    /// A `$4210` read: returns the NMI flag and clears it (ADR 0021, point 4).
-    // @source: anomie-timing#s-cpu/registers
+    /// A `$4210` read, after its value is taken: it clears the NMI flag (ADR 0021,
+    /// point 4).
     // @source: anomie-regs#4210
+    // @source: anomie-timing#s-cpu/registers
     // @source: adr-0021
-    pub(crate) const fn read_nmi_flag(&mut self) -> bool {
-        let flag = self.has(STATE_NMI_FLAG);
-        self.put(STATE_NMI_FLAG, false);
+    pub(crate) fn clear_nmi_flag(&mut self) {
+        self.state.remove(State::NMI_FLAG);
         self.update_nmi_line();
-        flag
     }
 
-    /// A `$4211` read: returns the IRQ flag and clears it (ADR 0021, point 5).
-    // @source: anomie-timing#s-cpu/registers
+    /// A `$4211` read, after its value is taken: it clears the IRQ flag (ADR 0021, point 5).
     // @source: anomie-regs#4211
+    // @source: anomie-timing#s-cpu/registers
     // @source: adr-0021
-    pub(crate) const fn read_irq_flag(&mut self) -> bool {
-        let flag = self.has(STATE_IRQ_FLAG);
-        self.put(STATE_IRQ_FLAG, false);
-        flag
+    pub(crate) fn clear_irq_flag(&mut self) {
+        self.state.remove(State::IRQ_FLAG);
     }
 
     /// Works out /NMI from the flag and the enable, and latches a high-to-low change
     /// (`wdc-w65c816s#2.21`; fullsnes: the internal flag is set when "[4200h].7 AND
     /// [4210h].7" changes from 0 to 1).
-    // @source: wdc-w65c816s#2.21
     // @source: fullsnes#snesppuinterrupts
+    // @source: wdc-w65c816s#2.21
     // @source: adr-0021
-    const fn update_nmi_line(&mut self) {
-        let line = self.has(STATE_NMI_FLAG) && self.has(STATE_NMI_ENABLE);
-        if line && !self.has(STATE_NMI_LINE) {
-            self.put(STATE_NMI_LATCHED, true);
+    fn update_nmi_line(&mut self) {
+        let line = self
+            .state
+            .contains(State::NMI_FLAG.union(State::NMI_ENABLE));
+        if line && !self.state.contains(State::NMI_LINE) {
+            self.state.insert(State::NMI_LATCHED);
         }
-        self.put(STATE_NMI_LINE, line);
+        self.state.set(State::NMI_LINE, line);
     }
 }
 
@@ -199,8 +193,8 @@ impl Interrupts {
 mod tests {
     use super::*;
 
-    // @source: wdc-w65c816s#2.21
     // @source: fullsnes#snesppuinterrupts
+    // @source: wdc-w65c816s#2.21
     // @source: adr-0021
     #[test]
     fn an_nmi_is_latched_when_flag_and_enable_are_both_set() {
@@ -229,16 +223,17 @@ mod tests {
         assert!(interrupts.recorded().nmi);
     }
 
-    // @source: anomie-timing#s-cpu/interrupts
     // @source: anomie-regs#4210
+    // @source: anomie-timing#s-cpu/interrupts
     // @source: adr-0021
     #[test]
     fn reading_4210_clears_the_flag_but_not_the_latch() {
         let mut interrupts = Interrupts::power_on();
         interrupts.write_enable(0x80);
         interrupts.set_nmi_flag();
-        assert!(interrupts.read_nmi_flag());
-        assert!(!interrupts.read_nmi_flag());
+        assert!(interrupts.nmi_flag());
+        interrupts.clear_nmi_flag();
+        assert!(!interrupts.nmi_flag());
         interrupts.record();
         assert!(interrupts.recorded().nmi);
         // Writing $4200 does not clear the flag.
@@ -259,7 +254,8 @@ mod tests {
         interrupts.set_irq_flag();
         interrupts.record();
         assert!(interrupts.recorded().irq);
-        assert!(interrupts.read_irq_flag());
+        assert!(interrupts.irq_flag());
+        interrupts.clear_irq_flag();
         assert!(!interrupts.irq_flag());
         // The record keeps the line as it was when the cycle started.
         assert!(interrupts.recorded().irq);

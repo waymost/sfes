@@ -441,6 +441,7 @@ dependencies = [
 name = "sfes-snes-core"
 version = "0.0.0"
 dependencies = [
+ "bitflags",
  "sfes-api",
  "sfes-snes-cart",
  "sfes-snes-cpu",

@@ -77,9 +77,9 @@ fn line_lengths(timing: &mut Timing, count: usize) -> Vec<Vec<u64>> {
 
 // @source: anomie-timing#s-cpu/clocks-and-refresh
 // @source: anomie-timing#s-ppu/blanking-periods
-// @source: fullsnes#snestimingoscillators
 // @source: fullsnes#snestiminghvcounters
 // @source: fullsnes#snestiminghvevents
+// @source: fullsnes#snestimingoscillators
 // @source: adr-0020
 #[test]
 fn ntsc_frames_alternate_with_a_short_line_240() {
@@ -104,12 +104,12 @@ fn ntsc_frames_alternate_with_a_short_line_240() {
     assert!(field_0.iter().all(|length| *length == 1364));
 }
 
-// @source: anomie-timing#s-cpu/clocks-and-refresh
 // @source: anomie-regs#2133
 // @source: anomie-regs#213c
-// @source: fullsnes#snestimingoscillators
+// @source: anomie-timing#s-cpu/clocks-and-refresh
 // @source: fullsnes#snestiminghvcounters
 // @source: fullsnes#snestiminghvevents
+// @source: fullsnes#snestimingoscillators
 // @source: adr-0020
 #[test]
 fn ntsc_interlace_adds_line_262_to_field_0() {
@@ -128,8 +128,8 @@ fn ntsc_interlace_adds_line_262_to_field_0() {
 }
 
 // @source: anomie-regs#213c
-// @source: fullsnes#snestimingoscillators
 // @source: fullsnes#snestiminghvevents
+// @source: fullsnes#snestimingoscillators
 // @source: adr-0020
 #[test]
 fn pal_frames_are_312_lines() {
@@ -145,9 +145,9 @@ fn pal_frames_are_312_lines() {
     }
 }
 
-// @source: fullsnes#snestimingoscillators
 // @source: fullsnes#snestiminghvcounters
 // @source: fullsnes#snestiminghvevents
+// @source: fullsnes#snestimingoscillators
 // @source: adr-0020
 #[test]
 fn pal_interlace_has_a_long_line_311_in_field_1_and_line_312_in_field_0() {
@@ -166,8 +166,8 @@ fn pal_interlace_has_a_long_line_311_in_field_1_and_line_312_in_field_0() {
     assert_eq!(ends[2] - ends[0], 625 * 1364 + 4);
 }
 
-// @source: anomie-timing#s-ppu/blanking-periods
 // @source: anomie-regs#2133
+// @source: anomie-timing#s-ppu/blanking-periods
 // @source: fullsnes#snestiminghvevents
 // @source: adr-0020
 #[test]
@@ -189,8 +189,8 @@ fn overscan_moves_vertical_blank_to_line_240_unless_cleared_before() {
 }
 
 // @source: anomie-timing#s-ppu/registers
-// @source: fullsnes#snestiminghvevents
 // @source: fullsnes#snesiomap
+// @source: fullsnes#snestiminghvevents
 // @source: adr-0020
 #[test]
 fn the_field_toggles_at_h_1_of_line_0() {
@@ -258,7 +258,7 @@ fn a_short_line_keeps_the_refresh_offset() {
     while offsets.len() < 243 {
         let now = timing.next_deadline();
         if timing.service(now) == Some(Event::Refresh) {
-            offsets.push(now.0 - timing.line_start.0);
+            offsets.push(now - timing.line_start);
         }
     }
     assert_eq!(offsets[239..], [534, 538, 538, 534]);
@@ -324,11 +324,11 @@ fn irq_times(timing: &mut Timing, end: u64) -> Vec<u64> {
 // @source: adr-0021
 fn set_timer(timing: &mut Timing, enable: u8, horizontal: u16, vertical: u16, now: Cycles) {
     let [low, high] = horizontal.to_le_bytes();
-    timing.write_horizontal_timer_low(low, now);
-    timing.write_horizontal_timer_high(high, now);
+    timing.write_timer(TimerRegister::HorizontalLow, low, now);
+    timing.write_timer(TimerRegister::HorizontalHigh, high, now);
     let [low, high] = vertical.to_le_bytes();
-    timing.write_vertical_timer_low(low, now);
-    timing.write_vertical_timer_high(high, now);
+    timing.write_timer(TimerRegister::VerticalLow, low, now);
+    timing.write_timer(TimerRegister::VerticalHigh, high, now);
     timing.write_interrupt_enable(enable, now);
 }
 
@@ -359,8 +359,8 @@ fn the_nmi_flag_falls_half_a_dot_into_vertical_blank() {
     );
 }
 
-// @source: anomie-timing#s-cpu/interrupts
 // @source: anomie-regs#4200
+// @source: anomie-timing#s-cpu/interrupts
 // @source: fullsnes#snesppuinterrupts
 // @source: adr-0021
 #[test]
@@ -428,8 +428,8 @@ fn a_timer_write_takes_effect_from_its_access() {
     assert_eq!(irq_times(&mut timing, 3 * 1364), []);
 }
 
-// @source: anomie-timing
 // @source: anomie-regs#4201
+// @source: anomie-timing
 // @source: adr-0021
 #[test]
 fn a_latch_takes_the_line_and_dot_when_it_falls_due() {
@@ -541,8 +541,8 @@ fn hdma_steps(timing: &mut Timing, end: u64) -> Vec<(HdmaStep, u16, u64)> {
     steps
 }
 
-// @source: anomie-timing#s-cpu/hdma
 // @source: anomie-regs#dma-and-hdma/hdma
+// @source: anomie-timing#s-cpu/hdma
 // @source: fullsnes#snestiminghvevents
 // @source: adr-0020
 // @source: adr-0026
@@ -562,8 +562,8 @@ fn hdma_sets_up_at_h_6_of_line_0_and_transfers_at_h_278_of_lines_0_to_224() {
     assert_eq!(steps[227], (HdmaStep::Line, 0, frame + 1112));
 }
 
-// @source: anomie-timing#s-cpu/hdma
 // @source: anomie-regs#2133
+// @source: anomie-timing#s-cpu/hdma
 // @source: adr-0020
 // @source: adr-0026
 #[test]
