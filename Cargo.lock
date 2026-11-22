@@ -463,6 +463,7 @@ name = "sfes-snes-ppu"
 version = "0.0.0"
 dependencies = [
  "sfes-api",
+ "thiserror",
 ]
 
 [[package]]

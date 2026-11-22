@@ -453,7 +453,7 @@ fn step_kind(cpu: &Cpu65816, pending: Pending) -> StepKind {
 mod tests {
     use alloc::{vec, vec::Vec};
 
-    use sfes_api::SplitMix64;
+    use sfes_api::{Rgb555, SplitMix64};
     use sfes_snes_cart::{
         WRAM_SIZE,
         test_support::{TestHeader, image_with_code},
@@ -966,10 +966,11 @@ mod tests {
         assert_eq!(copy.region(RegionId::Wram), snes.region(RegionId::Wram));
         // Taken before line 1, the clone draws the whole first frame: 256 × 224 of the
         // backdrop, CGRAM entry 0 (ADR 0028, points 7 and 8).
-        let backdrop = u16::from_le_bytes([
+        let backdrop = Rgb555::new(u16::from_le_bytes([
             snes.region(RegionId::Cgram)[0],
             snes.region(RegionId::Cgram)[1] & 0x7F,
-        ]);
+        ]))
+        .unwrap();
         let frame = snes.video();
         assert_eq!((frame.width, frame.height), (256, 224));
         assert!(frame.pixels.iter().all(|&pixel| pixel == backdrop));

@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-11-21
+- **Amended:** 2026-11-22: a pixel is an `Rgb555`, which cannot hold bit 15 set (point 7); the bus's clone, rather than the outputs' own, starts the outputs empty (point 10); `Register::ALL` lists the registers in address order (point 2).
 - **Confidence:**
   - high: the read behaviour of each register in `$2100–$213F`, and PPU1 and PPU2 open bus (points 3 and 4);
   - medium: which lines are output and when a line is wide or interlaced (points 6 and 7);
@@ -37,7 +38,7 @@ The PPU's features come in later issues: the memory ports and status registers i
 ## Decision
 
 1. **Memories.** `Ppu` holds VRAM (64 KiB), CGRAM (512 bytes) and OAM (544 bytes), each allocated on the heap without building it on the stack first (technical design section 5). Like WRAM, each is a `Box<[u8]>` of fixed length rather than a `Box<[u8; N]>`: converting the allocated slice to an array box returns a `Result`, and library code may not panic on an error that cannot happen. No source says what they hold at power-on, so they are undefined power-on state (FND-02). Power-on fills them from the same `SplitMix64(seed)` stream that fills WRAM (ADR 0018), continuing after WRAM: VRAM, then CGRAM, then OAM, each from its first byte up. WRAM's contents do not change. The reset button keeps all three. The machine exposes them as `RegionId::Vram`, `Cgram` and `Oam`.
-2. **Registers.** Every B-bus address `$00–$3F` decodes to one of the PPU's 64 registers, `sfes_snes_ppu::Register`, an enum whose discriminants are the B-bus addresses. The PPU has a `peek`, an `after_read` and a `write` for them, and the bus reaches them through the `Registers` trait as it does every other unit's. `$2137` stays decoded and handled as ADR 0021, point 7 says: its read is a strobe that latches the counters while `$4201` bit 7 is set.
+2. **Registers.** Every B-bus address `$00–$3F` decodes to one of the PPU's 64 registers, `sfes_snes_ppu::Register`, an enum whose discriminants are the B-bus addresses. `Register::ALL` lists them in address order, and an address converts to its register with `Register::try_from`, which fails above `$3F`. The PPU has a `peek`, an `after_read` and a `write` for them, and the bus reaches them through the `Registers` trait as it does every other unit's. `$2137` stays decoded and handled as ADR 0021, point 7 says: its read is a strobe that latches the counters while `$4201` bit 7 is set.
 3. **Reads.** By the two documents' lists, a read of:
    - `$21x4–$21x6` or `$21x8–$21xA` (x = 0, 1, 2) returns PPU1 open bus;
    - `$21x0–$21x3`, `$21x7` (x = 0 to 3) or `$21xB–$21xF` (x = 0, 1, 2) returns CPU open bus, the data bus's value (ADR 0019, point 4);
@@ -53,7 +54,7 @@ The PPU's features come in later issues: the memory ports and status registers i
 7. **A line's pixels.**
    - A line is **wide**, 512 pixels, when at its render `$2105` gives mode 5 or 6, or `$2133` bit 3 is set; otherwise it is 256 pixels.
    - A line is **interlaced** when `$2133` bit 0 is set at its render.
-   - A pixel is a CGRAM colour: bits 4–0 red, 9–5 green, 14–10 blue, bit 15 0. This is what `VideoFrame`'s "RGB555" means.
+   - A pixel is a CGRAM colour: bits 4–0 red, 9–5 green, 14–10 blue, bit 15 0. It is an `sfes_api::Rgb555`, which `VideoFrame` holds and which refuses a value with bit 15 set.
    - Until the layers arrive (#91 on), every pixel of a line is the backdrop, CGRAM entry 0, as on a line where every BG and OBJ pixel is transparent. In a wide line this holds for the sub-screen's pixels too. Brightness and forced blank are applied when #96 adds them.
 8. **Frame geometry.** At the start of vertical blank the frame's lines are presented as one `VideoFrame`:
    - **Width.** 512 if any of its lines was wide, otherwise 256. In a 512-wide frame, each pixel of a 256-pixel line is written twice.
@@ -63,13 +64,13 @@ The PPU's features come in later issues: the memory ports and status registers i
 
    So a plain frame is 256 × 224 or 256 × 239, true or pseudo hi-res makes it 512 wide, and interlace makes it 448 or 478 high. A frame whose overscan bit was cleared during lines 225–239 (ADR 0020, point 5) has between 225 and 238 lines.
 9. **Hashing.** Goldens hash the presented frame exactly as ADR 0015 says: its width, its height and its pixels. The rules above make that hash a function of the machine's state and its inputs alone. The golden format does not change.
-10. **Where the outputs live.** The lines of the frame being drawn and the last presented frame are outputs, not state (technical design section 5). They live in the bus, so that every place that renders can reach them, in a wrapper whose clone is empty and which serialization will skip. `Snes::video` returns the last presented frame, 0 × 0 until the first one.
+10. **Where the outputs live.** The lines of the frame being drawn and the last presented frame are outputs, not state (technical design section 5). They live in the bus, so that every place that renders can reach them, and serialization will skip them. They are not `Clone`: the bus's clone copies its state and starts them empty, so a snapshot never copies frame buffers. `Snes::video` returns the last presented frame, 0 × 0 until the first one.
     - A frame is presented only if every one of its lines was rendered into this machine's outputs. A clone taken partway through a frame, and a machine reset partway through one, therefore present nothing for that frame, and `video()` keeps the frame before.
     - From the next frame on, a clone presents the same frames as its original.
 
 ## Consequences
 
-- `VideoFrame` gains `field` and keeps the rest of its shape, so every consumer sees one rectangular image per frame. Its doc comment gains the pixel format. API-03's normalized mode takes every other row of an interlaced frame, which is its field.
+- `VideoFrame` gains `field` and keeps the rest of its shape, so every consumer sees one rectangular image per frame. Its pixels become `Rgb555`, whose `repr(transparent)` keeps the layout of `u16` for bindings. API-03's normalized mode takes every other row of an interlaced frame, which is its field.
 - Doubling pixels and rows loses nothing: a 256-pixel line in a 512-wide frame, and a field in a 448-row frame, can be recovered exactly. The cost is a 512 × 478 frame (about 490 KB) only for frames that use hi-res and interlace.
 - Two alternatives were rejected:
   - A fixed 512 × 478 canvas would cost four times the pixels for every ordinary frame, in hashing, in RL observations and in datasets.

@@ -18,7 +18,7 @@ This page explains the SNES machine and how the crate models it (QA-08). It was 
 | `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the PPU (its memories, registers and the H/V counter latch; [`ppu.md`](ppu.md)), the multiply and divide unit, the controller ports (the held buttons, the pads, `$4016`, the auto-read and `$4218–$421F`, and the polled flags), the DMA channels, a requested transfer and HDMA's flags, the APU ports' placeholder, the clock, and the scheduler (the video standard, line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table) | yes |
 | `State::meta` | The seed of the last power-on | yes |
 | `observer` | The observer | yes |
-| `State::bus.video` | The frame being drawn and the last presented frame | no: a clone starts empty (technical design section 5; ADR 0028, point 10) |
+| `State::bus.video` | The frame being drawn and the last presented frame | no: the bus's clone starts it with `Video::default()` (technical design section 5; ADR 0028, point 10) |
 
 The cartridge's ROM and memory map are `Arc`-shared, so a clone copies WRAM, the PPU's memories and the registers, and bumps two counts.
 
@@ -58,7 +58,7 @@ The bus reports line and frame boundaries from the cycle in which they pass, aft
 
 [`BusView`](../../crates/sfes-snes-core/src/bus/mod.rs) implements `Bus65816` for the main CPU (ADR 0019). For each cycle it decodes the address, syncs the register's owner, performs the access, charges the access time and any refresh that fell due, and tells the observer.
 
-Decode names the register as well as the device: `Target::Cpu(CpuRegister)` and `BBus::Ppu(PpuRegister)` are enums, and a register that belongs to a unit carries that unit's own register type (`MathRegister`, `PortRegister`, `DmaRegister`, `CounterRegister`, `ApuPort`). Each unit implements the bus's `Registers` trait (`peek`, `after_read`, `write`), and the bus forwards to it. A read is written once: the bus syncs the owner, takes the value `peek` gives, then carries out the read's side effects, so `peek_bus` and a real read cannot disagree.
+Decode names the register as well as the device: `Target::Cpu(CpuRegister)` and `BBus::Ppu(Register)` are enums, and a register that belongs to a unit carries that unit's own register type (`sfes_snes_ppu::Register`, `MathRegister`, `PortRegister`, `DmaRegister`, `ApuPort`). Each unit implements the bus's `Registers` trait (`peek`, `after_read`, `write`), and the bus forwards to it. A read is written once: the bus syncs the owner, takes the value `peek` gives, then carries out the read's side effects, so `peek_bus` and a real read cannot disagree.
 
 ### Decode
 
@@ -506,7 +506,7 @@ The bus draws the PPU's lines and presents its frames ([`video.rs`](../../crates
   - it is 512 wide if any line was, and a 256-pixel line then has each pixel twice;
   - it is as many rows high as it has lines, or twice that if any line was interlaced, each line then filling two rows;
   - an interlaced frame shows only its own field and names it in `field`.
-- **Outputs.** The lines and the presented frame are outputs, not state. They live in the bus in a wrapper whose clone is empty. A frame is presented only if every line was drawn into this machine's outputs, so a clone taken after some lines were drawn, or a reset, presents nothing for that frame, and `video()` keeps the frame before (point 10).
+- **Outputs.** The lines and the presented frame are outputs, not state. They live in the bus; `Video` is not `Clone`, and the bus's own clone starts it empty. A frame is presented only if every line was drawn into this machine's outputs, so a clone taken after some lines were drawn, or a reset, presents nothing for that frame, and `video()` keeps the frame before (point 10).
 
 Goldens hash the frame exactly as presented (ADR 0015).
 

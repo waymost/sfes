@@ -4,38 +4,59 @@
 // @source: adr-0028
 //! One rendered line, as `render_line` hands it to the machine (ADR 0028, point 7).
 
-/// The pixels of a wide line: 512.
-pub const WIDE_LINE: usize = 512;
-/// The pixels of a normal line: 256.
-pub const NORMAL_LINE: usize = 256;
+use sfes_api::Rgb555;
 
-/// One output line: its pixels, CGRAM colours with red in bits 4–0, green in bits 9–5 and
-/// blue in bits 14–10, and how it was rendered.
+/// How many pixels a line has; each variant's value is its width.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(usize)]
+pub enum LineWidth {
+    /// 256 pixels.
+    #[default]
+    Normal = 256,
+    /// 512 pixels: BG mode 5 or 6, or pseudo-hires.
+    Wide = 512,
+}
+
+impl LineWidth {
+    /// Its width in pixels.
+    // @source: anomie-regs#2105
+    // @source: anomie-regs#2133
+    // @source: adr-0028
+    #[must_use]
+    pub const fn pixels(self) -> usize {
+        self as usize
+    }
+}
+
+/// The pixels a line can hold: as many as a wide line has.
+const MAX_PIXELS: usize = LineWidth::Wide.pixels();
+
+/// One output line: its pixels, CGRAM colours, and how it was rendered. The default is an
+/// empty line for `render_line` to fill.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LineOut {
     /// The line it holds, 1 to 239.
     line: u16,
-    /// 512 pixels (BG mode 5 or 6, or pseudo-hires) rather than 256.
-    wide: bool,
+    /// Its width.
+    width: LineWidth,
     /// `$2133` bit 0 was set at its render.
     interlaced: bool,
-    /// The pixels; only the first 256 count unless the line is wide.
-    pixels: [u16; WIDE_LINE],
+    /// The pixels; only the first `width` count.
+    pixels: [Rgb555; MAX_PIXELS],
+}
+
+impl Default for LineOut {
+    fn default() -> Self {
+        Self {
+            line: 0,
+            width: LineWidth::Normal,
+            interlaced: false,
+            pixels: [Rgb555::BLACK; MAX_PIXELS],
+        }
+    }
 }
 
 impl LineOut {
-    /// An empty line, for `render_line` to fill.
-    // @source: adr-0028
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            line: 0,
-            wide: false,
-            interlaced: false,
-            pixels: [0; WIDE_LINE],
-        }
-    }
-
     /// The line it holds.
     // @source: adr-0028
     #[must_use]
@@ -43,13 +64,13 @@ impl LineOut {
         self.line
     }
 
-    /// Whether it is 512 pixels wide.
+    /// Its width.
     // @source: anomie-regs#2105
     // @source: anomie-regs#2133
     // @source: adr-0028
     #[must_use]
-    pub const fn wide(&self) -> bool {
-        self.wide
+    pub const fn width(&self) -> LineWidth {
+        self.width
     }
 
     /// Whether interlace was on at its render.
@@ -60,26 +81,19 @@ impl LineOut {
         self.interlaced
     }
 
-    /// Its pixels: 256, or 512 for a wide line.
+    /// Its pixels: as many as its width.
     // @source: adr-0028
     #[must_use]
-    pub fn pixels(&self) -> &[u16] {
-        let width = if self.wide { WIDE_LINE } else { NORMAL_LINE };
-        &self.pixels[..width]
+    pub fn pixels(&self) -> &[Rgb555] {
+        &self.pixels[..self.width.pixels()]
     }
 
     /// Starts `line` with the given shape and every pixel `color`.
     // @source: adr-0028
-    pub(crate) fn fill(&mut self, line: u16, wide: bool, interlaced: bool, color: u16) {
+    pub(crate) fn fill(&mut self, line: u16, width: LineWidth, interlaced: bool, color: Rgb555) {
         self.line = line;
-        self.wide = wide;
+        self.width = width;
         self.interlaced = interlaced;
         self.pixels.fill(color);
-    }
-}
-
-impl Default for LineOut {
-    fn default() -> Self {
-        Self::new()
     }
 }

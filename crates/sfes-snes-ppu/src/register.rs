@@ -139,80 +139,73 @@ pub enum Register {
 }
 
 impl Register {
-    /// The register at B-bus address `address`, `$00–$3F`; `None` above `$3F`.
-    // @source: anomie-regs#registers
-    // @source: fullsnes#snesiomap
-    // @source: adr-0028
-    #[must_use]
-    pub const fn from_b_bus(address: u8) -> Option<Self> {
-        Some(match address {
-            0x00 => Self::DisplayControl,
-            0x01 => Self::ObjectSelect,
-            0x02 => Self::OamAddressLow,
-            0x03 => Self::OamAddressHigh,
-            0x04 => Self::OamData,
-            0x05 => Self::BackgroundMode,
-            0x06 => Self::Mosaic,
-            0x07 => Self::Background1Tilemap,
-            0x08 => Self::Background2Tilemap,
-            0x09 => Self::Background3Tilemap,
-            0x0A => Self::Background4Tilemap,
-            0x0B => Self::Background12Characters,
-            0x0C => Self::Background34Characters,
-            0x0D => Self::Background1HorizontalScroll,
-            0x0E => Self::Background1VerticalScroll,
-            0x0F => Self::Background2HorizontalScroll,
-            0x10 => Self::Background2VerticalScroll,
-            0x11 => Self::Background3HorizontalScroll,
-            0x12 => Self::Background3VerticalScroll,
-            0x13 => Self::Background4HorizontalScroll,
-            0x14 => Self::Background4VerticalScroll,
-            0x15 => Self::VramControl,
-            0x16 => Self::VramAddressLow,
-            0x17 => Self::VramAddressHigh,
-            0x18 => Self::VramDataLow,
-            0x19 => Self::VramDataHigh,
-            0x1A => Self::Mode7Settings,
-            0x1B => Self::Mode7MatrixA,
-            0x1C => Self::Mode7MatrixB,
-            0x1D => Self::Mode7MatrixC,
-            0x1E => Self::Mode7MatrixD,
-            0x1F => Self::Mode7CenterX,
-            0x20 => Self::Mode7CenterY,
-            0x21 => Self::CgramAddress,
-            0x22 => Self::CgramData,
-            0x23 => Self::WindowMaskBackground12,
-            0x24 => Self::WindowMaskBackground34,
-            0x25 => Self::WindowMaskObjectColor,
-            0x26 => Self::Window1Left,
-            0x27 => Self::Window1Right,
-            0x28 => Self::Window2Left,
-            0x29 => Self::Window2Right,
-            0x2A => Self::WindowLogicBackgrounds,
-            0x2B => Self::WindowLogicObjectColor,
-            0x2C => Self::MainScreen,
-            0x2D => Self::SubScreen,
-            0x2E => Self::MainScreenWindow,
-            0x2F => Self::SubScreenWindow,
-            0x30 => Self::ColorMathSelect,
-            0x31 => Self::ColorMathDesignation,
-            0x32 => Self::FixedColor,
-            0x33 => Self::ScreenMode,
-            0x34 => Self::MultiplyLow,
-            0x35 => Self::MultiplyMiddle,
-            0x36 => Self::MultiplyHigh,
-            0x37 => Self::SoftwareLatch,
-            0x38 => Self::OamDataRead,
-            0x39 => Self::VramDataReadLow,
-            0x3A => Self::VramDataReadHigh,
-            0x3B => Self::CgramDataRead,
-            0x3C => Self::HorizontalCounter,
-            0x3D => Self::VerticalCounter,
-            0x3E => Self::Ppu1Status,
-            0x3F => Self::Ppu2Status,
-            _ => return None,
-        })
-    }
+    /// Every register, in B-bus address order: entry *n* is the register at `$21nn`.
+    pub const ALL: [Self; 0x40] = [
+        Self::DisplayControl,
+        Self::ObjectSelect,
+        Self::OamAddressLow,
+        Self::OamAddressHigh,
+        Self::OamData,
+        Self::BackgroundMode,
+        Self::Mosaic,
+        Self::Background1Tilemap,
+        Self::Background2Tilemap,
+        Self::Background3Tilemap,
+        Self::Background4Tilemap,
+        Self::Background12Characters,
+        Self::Background34Characters,
+        Self::Background1HorizontalScroll,
+        Self::Background1VerticalScroll,
+        Self::Background2HorizontalScroll,
+        Self::Background2VerticalScroll,
+        Self::Background3HorizontalScroll,
+        Self::Background3VerticalScroll,
+        Self::Background4HorizontalScroll,
+        Self::Background4VerticalScroll,
+        Self::VramControl,
+        Self::VramAddressLow,
+        Self::VramAddressHigh,
+        Self::VramDataLow,
+        Self::VramDataHigh,
+        Self::Mode7Settings,
+        Self::Mode7MatrixA,
+        Self::Mode7MatrixB,
+        Self::Mode7MatrixC,
+        Self::Mode7MatrixD,
+        Self::Mode7CenterX,
+        Self::Mode7CenterY,
+        Self::CgramAddress,
+        Self::CgramData,
+        Self::WindowMaskBackground12,
+        Self::WindowMaskBackground34,
+        Self::WindowMaskObjectColor,
+        Self::Window1Left,
+        Self::Window1Right,
+        Self::Window2Left,
+        Self::Window2Right,
+        Self::WindowLogicBackgrounds,
+        Self::WindowLogicObjectColor,
+        Self::MainScreen,
+        Self::SubScreen,
+        Self::MainScreenWindow,
+        Self::SubScreenWindow,
+        Self::ColorMathSelect,
+        Self::ColorMathDesignation,
+        Self::FixedColor,
+        Self::ScreenMode,
+        Self::MultiplyLow,
+        Self::MultiplyMiddle,
+        Self::MultiplyHigh,
+        Self::SoftwareLatch,
+        Self::OamDataRead,
+        Self::VramDataReadLow,
+        Self::VramDataReadHigh,
+        Self::CgramDataRead,
+        Self::HorizontalCounter,
+        Self::VerticalCounter,
+        Self::Ppu1Status,
+        Self::Ppu2Status,
+    ];
 
     /// What a read of this register returns (ADR 0028, point 3).
     // @source: anomie-regs#registers
@@ -290,6 +283,23 @@ impl Register {
     }
 }
 
+impl TryFrom<u8> for Register {
+    type Error = NotAPpuRegister;
+
+    /// The register at B-bus address `address`, `$00–$3F`.
+    fn try_from(address: u8) -> Result<Self, Self::Error> {
+        Self::ALL
+            .get(usize::from(address))
+            .copied()
+            .ok_or(NotAPpuRegister(address))
+    }
+}
+
+/// A B-bus address above `$3F`, where no PPU register is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("B-bus address ${0:02X} is not a PPU register")]
+pub struct NotAPpuRegister(pub u8);
+
 /// What answers a read of a PPU register (ADR 0028, point 3).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReadKind {
@@ -311,11 +321,16 @@ mod tests {
     // @source: adr-0028
     #[test]
     fn each_b_bus_address_names_its_own_register() {
-        for address in 0x00..=0x3F_u8 {
-            let register = Register::from_b_bus(address).unwrap();
-            assert_eq!(register as u8, address);
+        for (index, register) in Register::ALL.into_iter().enumerate() {
+            assert_eq!(usize::from(register as u8), index);
         }
-        assert_eq!(Register::from_b_bus(0x40), None);
+        for address in 0x00..=0x3F_u8 {
+            assert_eq!(
+                Register::try_from(address).map(|found| found as u8),
+                Ok(address)
+            );
+        }
+        assert_eq!(Register::try_from(0x40), Err(NotAPpuRegister(0x40)));
     }
 
     // @source: anomie-regs#registers
@@ -332,7 +347,7 @@ mod tests {
                 (3, 0xC | 0xD) => ReadKind::Ppu2,
                 _ => ReadKind::Unimplemented,
             };
-            let register = Register::from_b_bus(address).unwrap();
+            let register = Register::try_from(address).unwrap();
             assert_eq!(
                 register.read_kind(),
                 expected,

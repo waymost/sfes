@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use sfes_api::{Addr24, Buttons, Cycles, DmaEvent, NoopObserver};
+use sfes_api::{Addr24, Buttons, Cycles, DmaEvent, NoopObserver, Rgb555};
 use sfes_snes_cart::{
     Cartridge, Mapping, Options, Region,
     test_support::{TestHeader, write_header},
@@ -1283,8 +1283,9 @@ fn a_line_is_drawn_when_the_ppu_is_synced_after_it_starts_or_when_the_frame_ends
     let frame = bus.video.frame();
     let pixels = frame.pixels;
     assert_eq!((frame.width, frame.height, frame.field), (256, 224, None));
-    assert!(pixels[..10 * 256].iter().all(|&pixel| pixel == 0x0011));
-    assert!(pixels[10 * 256..].iter().all(|&pixel| pixel == 0x0022));
+    let [first, later] = [0x0011, 0x0022].map(|bits| Rgb555::new(bits).unwrap());
+    assert!(pixels[..10 * 256].iter().all(|&pixel| pixel == first));
+    assert!(pixels[10 * 256..].iter().all(|&pixel| pixel == later));
     // Vertical blank draws nothing, and the next frame starts from line 1.
     assert_eq!(bus.ppu.next_line(), 1);
     write(&mut bus, 0x00_2100, 0x00);

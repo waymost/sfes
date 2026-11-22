@@ -13,6 +13,7 @@ extern crate alloc;
 mod accuracy;
 mod input;
 mod observer;
+mod pixel;
 mod random;
 mod state;
 mod system;
@@ -22,6 +23,7 @@ pub use crate::{
     accuracy::{Accuracy, Fast},
     input::Buttons,
     observer::{BusId, DmaEvent, InstrEvent, Interrupt, NoopObserver, Observer},
+    pixel::{InvalidRgb555, Rgb555},
     random::SplitMix64,
     state::{StateError, StateHash},
     system::{
