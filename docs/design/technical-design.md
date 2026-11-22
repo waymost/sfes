@@ -185,13 +185,12 @@ pub(crate) struct State {
 pub struct Snes<A: Accuracy = Fast, O: Observer = NoopObserver> {
     state: State,
     obs: O,
-    out: Outputs,    // frame, layer and audio buffers: not state (section 5)
     _profile: PhantomData<A>,
 }
 
 impl<A: Accuracy, O: Observer> Clone for Snes<A, O> {
     fn clone(&self) -> Self {
-        Self { state: self.state.clone(), obs: self.obs.clone(), out: Outputs::default(), _profile: PhantomData }
+        Self { state: self.state.clone(), obs: self.obs.clone(), _profile: PhantomData } // the bus's outputs clone empty
     }
 }
 
@@ -199,7 +198,7 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
     fn step_cpu(&mut self) {
         // Disjoint field borrows: the CPU gets the bus, observer and outputs, nothing else.
         let State { cpu, bus, .. } = &mut self.state;
-        let mut view = BusView::<A, O> { bus, obs: &mut self.obs, out: &mut self.out };
+        let mut view = BusView::<A, O> { bus, obs: &mut self.obs };
         cpu.step(&mut view);
     }
 }
@@ -270,7 +269,7 @@ Lines are 1364 master cycles, except a 1360-cycle NTSC line 240 in non-interlace
 ### Catch-up rules
 
 1. **Owner sync.** Before an access to a component's registers or shared memory, that component runs to `now`: PPU `$2100–$213F`, APU ports `$2140–$217F`, coprocessor registers and their shared RAM. Until M3 the APU is a placeholder whose ports read `$00` and keep writes, behind the same hook (ADR 0027).
-2. **Scanline rendering (`Fast`).** PPU catch-up renders every line whose start time is ≤ `now` and has not yet been drawn, using registers as they stand at that moment. A register write in the middle of line *L* therefore takes effect on line *L+1*, matching EMU-01. HDMA for a line runs as a deadline before that line renders: the transfer at H=278 of line *L* changes the registers line *L+1* renders (ADR 0026).
+2. **Scanline rendering (`Fast`).** PPU catch-up renders every line whose start time is ≤ `now` and has not yet been drawn, using registers as they stand at that moment. A register write in the middle of line *L* therefore takes effect on line *L+1*, matching EMU-01. HDMA for a line runs as a deadline before that line renders: the transfer at H=278 of line *L* changes the registers line *L+1* renders (ADR 0026). A frame outputs lines 1 to the line before vertical blank, and the lines not yet drawn when vertical blank begins are drawn then (ADR 0028, point 6).
 3. **APU laziness.** The SPC700 and S-DSP run only on port access, at frame end, and when the audio buffer needs samples. This is the largest performance win of the model.
 4. **General DMA.** A write to `$420B` executes the transfer inside the bus, advancing the clock per byte and checking the HDMA deadline between bytes, so HDMA pre-empts DMA (EMU-05). The transfer starts at the start of the second CPU cycle after the write, and the other deadlines are serviced between its bytes too (ADR 0025). An HDMA step that falls due during the transfer runs between bytes, and ends the transfer if it works on the same channel; one that falls due while the CPU runs pauses it at the start of its next cycle, timed as DMA is (ADR 0026, points 3 and 9).
 5. **Stop conditions.** `run(Stop)` checks its target after each instruction. A `Watch` stop is raised by the observer layer and also ends at the next instruction boundary. The frame boundary is the first instruction boundary at or after vertical-blank start, which is also when the next frame's input is latched (FND-04).
@@ -289,7 +288,7 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
 
 - Large memories are `Box<[u8; N]>`, never `[u8; N]` fields, so machines never put hundreds of KiB on the stack. They are allocated with `vec![0; N].into_boxed_slice().try_into()` instead of building the array on the stack first.
 - Immutable data (ROM, firmware, the memory map) is `Arc`-shared and skipped by serde, then rebuilt on load.
-- **Outputs are not state.** `Snes` holds a cloneable `State` and a separate `Outputs` (frame buffer, layer buffers, audio). `Clone for Snes` is implemented by hand: it clones `State` and gives the copy empty `Outputs`, which allocate on their first rendered frame. Search and RL snapshots that never render never pay for frame buffers.
+- **Outputs are not state.** The frame buffer, layer buffers and audio are outputs. They live in the bus, beside the state it holds, so every place that renders can reach them, in a wrapper whose clone is empty and which serialization skips (ADR 0028, point 10). A clone therefore gets empty outputs, which allocate on their first rendered frame. Search and RL snapshots that never render never pay for frame buffers.
 
 ### 65C816 (`sfes-snes-cpu`)
 
@@ -309,13 +308,13 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
   3. Build window masks, apply mosaic, then colour math and brightness.
   4. Write the line into the frame buffer; when layer output is requested (WM-02), copy the per-layer buffers too.
 - With render skip, steps 1, 3 and 4 are skipped but step 2 always runs, since its flags are readable state (EMU-06).
-- Lines are 256 pixels wide, or 512 in BG modes 5 and 6 and with pseudo-hi-res; frames have 224 or 239 visible lines, or 448 or 478 when interlaced. Hi-res and interlace are P1 but built in M2, so the frame buffer and `VideoFrame` are sized for them from the start; an ADR on frame geometry (#89) decides how mixed-width frames are presented and hashed.
+- Lines are 256 pixels wide, or 512 in BG modes 5 and 6 and with pseudo-hi-res; frames have 224 or 239 visible lines, or 448 or 478 when interlaced. Hi-res and interlace are P1 but built in M2, so the frame buffer and `VideoFrame` are sized for them from the start. A frame is 512 wide if any of its lines is, with 256-pixel lines doubled, and twice its line count high if any line is interlaced, each line filling two rows; it shows only its own field, which `VideoFrame::field` names, and goldens hash it as presented (ADR 0028).
 - Mode 7 uses the documented fixed-point matrix arithmetic in integers.
 
 ### SPC700 and S-DSP (`sfes-snes-spc`)
 
 - `Spc700` mirrors the CPU design: registers, `step(&mut self, bus: &mut impl SpcBus)`, one `match`, vector-tested (EMU-07).
-- `Dsp` holds 8 `Voice` structs (BRR decoder state, envelope, pitch counter) and echo state; it produces one stereo sample every 32 SPC700 cycles into `Outputs`.
+- `Dsp` holds 8 `Voice` structs (BRR decoder state, envelope, pitch counter) and echo state; it produces one stereo sample every 32 SPC700 cycles into the bus's outputs.
 - The APU unit owns audio RAM (64 KiB), timers and the four ports. `run_until(apu_cycles)` is what the bus calls on catch-up.
 - **IPL boot ROM:** `Ipl` is an enum, `CleanRoom` or `UserSupplied(Arc<[u8; 64]>)`. The clean-room variant is a 64-byte SPC700 program written by the project from the documented upload protocol, so its code is original. It is the default (decided in review); the variant is part of machine state and recorded in movie headers.
 

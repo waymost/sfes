@@ -20,6 +20,7 @@ sfes-env = { path = "crates/sfes-env", version = "0.0.0" }
 sfes-snes-cart = { path = "crates/sfes-snes-cart", version = "0.0.0", default-features = false }
 sfes-snes-cpu = { path = "crates/sfes-snes-cpu", version = "0.0.0", default-features = false }
 sfes-snes-core = { path = "crates/sfes-snes-core", version = "0.0.0", default-features = false }
+sfes-snes-ppu = { path = "crates/sfes-snes-ppu", version = "0.0.0", default-features = false }
 sfes-test-harness = { path = "crates/sfes-test-harness", version = "0.0.0" }
 
 # Chip and core crates may use only these (TDD section 12)

@@ -609,6 +609,7 @@ mod tests {
                 width: 4,
                 height: 2,
                 pixels: &self.pixels,
+                field: None,
             }
         }
     }
@@ -623,6 +624,7 @@ mod tests {
             width: 4,
             height: 2,
             pixels: &pixels,
+            field: None,
         })
     }
 
@@ -672,6 +674,7 @@ mod tests {
             width: 2,
             height: 1,
             pixels: &pixels,
+            field: None,
         });
         let expected = blake3::hash(&[0xFF, 0x7F, 0x01, 0x00]).to_hex().to_string();
         assert_eq!(
@@ -792,14 +795,18 @@ mod tests {
 
     // @source: adr-0015
     // @source: adr-0018
+    // @source: adr-0028
     #[test]
     fn the_own_halt_cartridge_boots_and_runs_frames() {
         let rom = include_bytes!("../../../tests/assets/carts/halt.sfc");
         let mut machine = boot(rom).unwrap();
         machine.set_buttons(0, Buttons::START);
         let frame = machine.run_frame();
-        // No PPU renders yet, so the frame is empty (ADR 0018).
-        assert_eq!((frame.width, frame.height, frame.pixels.len()), (0, 0, 0));
+        // The first frame is a plain 256 x 224 picture (ADR 0028, point 8).
+        assert_eq!(
+            (frame.width, frame.height, frame.pixels.len()),
+            (256, 224, 256 * 224)
+        );
     }
 
     // @source: adr-0015

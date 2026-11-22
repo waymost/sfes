@@ -1,6 +1,6 @@
 # The machine (`sfes-snes-core`)
 
-This page explains the SNES machine and how the crate models it (QA-08). It was written issue by issue during milestone M2 (#79 to #87) and covers the crate as built: the machine value, the bus, the scheduler, interrupts, the math unit, the controller ports, DMA, HDMA and the APU ports' placeholder. The PPU has its own page when it arrives. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
+This page explains the SNES machine and how the crate models it (QA-08). It was written issue by issue during milestone M2 (#79 to #87) and covers the crate as built: the machine value, the bus, the scheduler, interrupts, the math unit, the controller ports, DMA, HDMA, the APU ports' placeholder, and how the machine draws and presents the PPU's frames. The PPU itself has its own page, [`ppu.md`](ppu.md). Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
 
 - Anomie's memory-mapping doc (`anomie-memmap`) and timing doc (`anomie-timing`), by heading path;
 - fullsnes (`fullsnes`), by section anchor;
@@ -15,12 +15,12 @@ This page explains the SNES machine and how the crate models it (QA-08). It was 
 | Part | What | Cloned? |
 | --- | --- | --- |
 | `State::cpu` | The 65C816's registers and run state | yes |
-| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the multiply and divide unit, the controller ports (the held buttons, the pads, `$4016`, the auto-read and `$4218–$421F`, and the polled flags), the DMA channels, a requested transfer and HDMA's flags, the APU ports' placeholder, the clock, and the scheduler (the video standard, line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table) | yes |
+| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the PPU (its memories, registers and the H/V counter latch; [`ppu.md`](ppu.md)), the multiply and divide unit, the controller ports (the held buttons, the pads, `$4016`, the auto-read and `$4218–$421F`, and the polled flags), the DMA channels, a requested transfer and HDMA's flags, the APU ports' placeholder, the clock, and the scheduler (the video standard, line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table) | yes |
 | `State::meta` | The seed of the last power-on | yes |
 | `observer` | The observer | yes |
-| `outputs` | The frame buffer | no: a clone starts empty (technical design section 5) |
+| `State::bus.video` | The frame being drawn and the last presented frame | no: a clone starts empty (technical design section 5; ADR 0028, point 10) |
 
-The cartridge's ROM and memory map are `Arc`-shared, so a clone copies WRAM and registers and bumps two counts.
+The cartridge's ROM and memory map are `Arc`-shared, so a clone copies WRAM, the PPU's memories and the registers, and bumps two counts.
 
 `Snes::builder(rom)` loads the cartridge (ADR 0016, ADR 0017) and powers on, or returns a `BuildError`. It never yields a half-built machine. Options:
 - `.region(Region)` forces NTSC or PAL;
@@ -28,11 +28,11 @@ The cartridge's ROM and memory map are `Arc`-shared, so a clone copies WRAM and 
 - `.seed(u64)` sets the power-on seed, 0 by default (FND-02);
 - `.observer(o)` attaches an observer.
 
-Until `impl System` arrives in M4, the machine has an inherent API with the same shapes: `run(Stop)`, `set_input`, `polled`, `reset`, `power_cycle`, `region` and `region_mut`, `peek_bus` and `video` (FND-06, FND-08).
+Until `impl System` arrives in M4, the machine has an inherent API with the same shapes: `run(Stop)`, `set_input`, `polled`, `reset`, `power_cycle`, `region` and `region_mut` (WRAM, ROM, cartridge RAM, VRAM, CGRAM and OAM), `peek_bus` and `video` (FND-06, FND-08).
 
 ## Power-on and reset
 
-- **Power-on.** WRAM is filled from `SplitMix64::new(seed)`, eight bytes per output, little-endian, from `$7E:0000` up (`vigna-splitmix`, FND-02, ADR 0018). The CPU starts from `Cpu65816::new()`, the clock from 0, and the reset sequence runs at once.
+- **Power-on.** WRAM is filled from `SplitMix64::new(seed)`, eight bytes per output, little-endian, from `$7E:0000` up (`vigna-splitmix`, FND-02, ADR 0018). The same stream then fills VRAM, CGRAM and OAM (ADR 0028, point 1). The CPU starts from `Cpu65816::new()`, the clock from 0, and the reset sequence runs at once.
 - **RESB.** No document says how long the SNES holds RESB, so the machine spends no time on it. `Cycles(0)` is the moment RESB rises, and the reset sequence's seven cycles are the first ones charged (ADR 0018).
 - **The reset button.** It "leaves WRAM intact" (`fullsnes#snescontrollersotherinputs`). The SNES "returns to a known timing position on reset" (`anomie-timing`), so `reset` restarts the line and frame position at H=0, V=0 with field 0 (`fullsnes#snestiminghvevents`) and the refresh schedule, clears `$420D`, the scheduler's copy of `$2133` and the WRAM port address (`fullsnes#snesiomap`), then runs the CPU's reset sequence. Cartridge RAM is kept as well.
 - **The page-1 reads.** The reset sequence reads three stack bytes in page 1 of bank `$00` without writing (ADR 0011). On the SNES that page is WRAM (`anomie-memmap#memory-map`), so the reads have no side effects. They still reach observers as `on_read`.
@@ -66,14 +66,14 @@ The cartridge's memory map (ADR 0017) says what answers each 8 KiB page: WRAM, R
 
 | Addresses | Bus | What answers |
 | --- | --- | --- |
-| `$2100–$213F` | B, `$00–$3F` | PPU1 and PPU2 |
+| `$2100–$213F` | B, `$00–$3F` | PPU1 and PPU2, as one of the PPU's 64 registers (ADR 0028, point 2) |
 | `$2140–$217F` | B, `$40–$7F` | The APU's four ports, mirrored (`anomie-regs#2140`) |
 | `$2180–$2183` | B, `$80–$83` | The WRAM port |
 | `$2184–$21FF` | B | Nothing on the console |
 | `$4000–$43FF` | Internal | The 5A22's registers |
 | `$2000–$20FF`, `$2200–$3FFF`, `$4400–$5FFF` | A | Nothing on the console; only a cartridge could answer |
 
-Before an access to the PPU's or the APU's registers the bus calls that chip's sync hook, so the chip runs up to `now` (technical design, section 4, catch-up rule 1). The PPU's hook does nothing until the PPU exists, and until then its registers read as open bus. The APU's ports answer from a placeholder (below; ADR 0027).
+Before an access to the PPU's or the APU's registers the bus calls that chip's sync hook, so the chip runs up to `now` (technical design, section 4, catch-up rule 1). The PPU's hook draws the lines that have started (see [Drawing and presenting frames](#drawing-and-presenting-frames)). The APU's ports answer from a placeholder (below; ADR 0027).
 
 ### Adding a register
 
@@ -114,7 +114,7 @@ The data bus keeps the last value placed on it (`anomie-memmap#hardware/data-bus
 - a read that nothing answers, or of a write-only register, returns it unchanged;
 - every write places its value there, the 5A22's registers included.
 
-PPU1 and PPU2 have their own open bus (`anomie-regs`, preamble), which arrives with the PPU.
+PPU1 and PPU2 have their own open bus as well, held by the PPU (`anomie-regs#registers`, ADR 0028, point 4; [`ppu.md`](ppu.md)).
 
 ### The WRAM port
 
@@ -129,7 +129,7 @@ In emulation mode a read-modify-write instruction writes twice: first the value 
 Until M4 (ADR 0018, point 6):
 
 - **Watches.** `Stop::Watch` runs to its frame limit, since watches arrive in M4.
-- **Video.** No PPU renders yet, so `video()` is a 0 × 0 frame.
+- **Video.** The PPU draws only the backdrop until the layers arrive, so a frame is one colour, CGRAM entry 0 (ADR 0028, point 7).
 
 ### Test cartridge
 
@@ -255,10 +255,7 @@ Three things latch the H/V counters, only while `$4201` bit 7 is set (`anomie-re
 
 The latched H is the dot and the latched V is the line (ADR 0020, point 3). Each of `$213C` and `$213D` returns the low byte, then bit 8 over PPU2 open bus, on its own flip-flop. A latch does not reset the flip-flops (`anomie-regs#213c`).
 
-Until the PPU exists:
-- the latch lives in the bus;
-- PPU2 open bus is the last value read from `$213C` or `$213D`;
-- the `$213F` read that clears the latch flag and resets the flip-flops is missing (ADR 0021, point 7).
+The latch is PPU2 state and lives in the PPU, and the high byte's open bus is the PPU's PPU2 open bus (ADR 0028, point 4). Until #90 implements `$213F`, the read that clears the latch flag and resets the flip-flops is missing (ADR 0021, point 7).
 
 `$4201` is `$FF` at power-on and reset (`fullsnes#snesiomap`). The latched counters are `$1FF` at power-on and kept on reset.
 
@@ -499,6 +496,20 @@ What it rules out until M3 (point 8):
 - any ROM that waits for the APU, which is almost every commercial game;
 - goldens from any ROM that reads the ports, since M3 changes what it sees. None of the approved test ROMs is known to read them.
 
+## Drawing and presenting frames
+
+The bus draws the PPU's lines and presents its frames ([`video.rs`](../../crates/sfes-snes-core/src/video.rs); technical design section 4, catch-up rule 2; ADR 0028):
+
+- **Which lines.** A frame outputs lines 1 to the line before vertical blank, normally 224 or 239. Line 0 and vertical blank output nothing (`anomie-timing#s-ppu/rendering`).
+- **When.** Line *L* is drawn when the PPU is synced after *L* has started, or when vertical blank begins, with the registers as they stand then. Every register write syncs the PPU first, so those are the registers as they stood when the line started, and a write during line *L* takes effect from line *L* + 1.
+- **The frame.** At the start of vertical blank the lines become one `VideoFrame`:
+  - it is 512 wide if any line was, and a 256-pixel line then has each pixel twice;
+  - it is as many rows high as it has lines, or twice that if any line was interlaced, each line then filling two rows;
+  - an interlaced frame shows only its own field and names it in `field`.
+- **Outputs.** The lines and the presented frame are outputs, not state. They live in the bus in a wrapper whose clone is empty. A frame is presented only if every line was drawn into this machine's outputs, so a clone taken after some lines were drawn, or a reset, presents nothing for that frame, and `video()` keeps the frame before (point 10).
+
+Goldens hash the frame exactly as presented (ADR 0015).
+
 ## The code
 
 | File | What it holds |
@@ -507,7 +518,7 @@ What it rules out until M3 (point 8):
 | [`bus/mod.rs`](../../crates/sfes-snes-core/src/bus/mod.rs) | `Bus`, `BusView`, the `Registers` trait, `read_target`, `peek_target`, `after_read` and `write_target`, open bus, the WRAM port, and charging each access its time and any refresh |
 | [`bus/decode.rs`](../../crates/sfes-snes-core/src/bus/decode.rs) | `Target`, `BBus`, `CpuRegister`, `PpuRegister` and `Speed`: decode and access time. Each unit's register enum is in its own file |
 | [`bus/interrupts.rs`](../../crates/sfes-snes-core/src/bus/interrupts.rs) | `$4200` bit 7, the NMI and IRQ flags, the edge latch and the recorded lines |
-| [`bus/counters.rs`](../../crates/sfes-snes-core/src/bus/counters.rs) | The H/V counter latch and `$213C/$213D`, until the PPU exists |
+| [`bus/ppu.rs`](../../crates/sfes-snes-core/src/bus/ppu.rs) | The `Registers` impl for `sfes_snes_ppu::Ppu` |
 | [`bus/math.rs`](../../crates/sfes-snes-core/src/bus/math.rs) | The multiply and divide unit |
 | [`bus/ports.rs`](../../crates/sfes-snes-core/src/bus/ports.rs) | The pads, `$4016/$4017`, the auto-read and the polled flag |
 | [`bus/dma/mod.rs`](../../crates/sfes-snes-core/src/bus/dma/mod.rs) | The channel registers, `$420B`, `$420C` and the pause |
@@ -517,16 +528,17 @@ What it rules out until M3 (point 8):
 | [`timing/position.rs`](../../crates/sfes-snes-core/src/timing/position.rs) | Line lengths and the dot at a point in a line |
 | [`timing/irq.rs`](../../crates/sfes-snes-core/src/timing/irq.rs) | `$4200`'s timer bits, HTIME, VTIME and the H/V timer's trigger points |
 | [`timing/deadlines.rs`](../../crates/sfes-snes-core/src/timing/deadlines.rs) | The deadline table |
+| [`video.rs`](../../crates/sfes-snes-core/src/video.rs) | `Video`: the lines of the frame being drawn, presenting them, and the last frame |
 | [`carts.rs`](../../crates/sfes-snes-core/src/carts.rs) | The test-cartridge runs (below) |
 
-Each unit with CPU-visible registers implements `Registers`, and only decode matches on addresses (AGENTS.md section 4; [Adding a register](#adding-a-register)). The crate is `no_std` with `alloc` and depends on `sfes-api`, `sfes-snes-cpu`, `sfes-snes-cart`, `bitflags` and `thiserror` (technical design section 12).
+Each unit with CPU-visible registers implements `Registers`, and only decode matches on addresses (AGENTS.md section 4; [Adding a register](#adding-a-register)). The crate is `no_std` with `alloc` and depends on `sfes-api`, `sfes-snes-cpu`, `sfes-snes-cart`, `sfes-snes-ppu`, `bitflags` and `thiserror` (technical design section 12).
 
 ## Testing
 
 - **Unit tests.** `bus/tests.rs` covers decode, the WRAM port, open bus, access speed, refresh, the interrupt and timer registers, the math unit, the ports, DMA and the APU placeholder. `timing/tests.rs` covers line and frame lengths, the field, vertical blank, refresh and the H/V position. Smaller tests sit beside the code in each unit. Each test cites the section its expected values come from.
-- **Machine tests** in `machine.rs` cover the builder, power-on, reset and the observer events. ROM images come from `sfes_snes_cart::test_support` (see [the cartridge page](cart.md#testing)).
+- **Machine tests** in `machine.rs` cover the builder, power-on, reset, the observer events and the memory regions. `video.rs` tests the frame geometry. ROM images come from `sfes_snes_cart::test_support` (see [the cartridge page](cart.md#testing)).
 - **Test cartridges.** `carts.rs` runs six of the project's own cartridges (ADR 0013), one per feature: `bus-timing`, `interrupts`, `math`, `joypad`, `dma` and `hdma`. Each section above describes its cartridge. Expected values are worked out from the documents, not taken from an emulator.
-- **Cloning.** `a_clone_runs_the_same_and_starts_without_outputs` runs a machine and its clone for a frame. They must end at the same cycle with the same WRAM, and the clone's frame buffer must start empty (FND-01).
+- **Cloning.** `a_clone_runs_the_same_and_starts_without_outputs` runs a machine and its clone for a frame. They must end at the same cycle with the same WRAM and the same frame, and the clone's frame buffer must start empty (FND-01, ADR 0028).
 
 Golden frames (ADR 0015) need the PPU and follow in #100.
 
@@ -546,5 +558,6 @@ The documents left these points open or disagree on them. Each ADR quotes the so
 | [0025](../adr/0025-general-dma.md) | The channel registers, the pause, where each byte falls, what the A and B buses reach, open bus, and deadlines and the math unit during a transfer | high for the registers, modes, step and count; medium for the pause and the A bus; low for byte placement, open bus, refresh and the math unit |
 | [0026](../adr/0026-hdma.md) | `$420C` and the HDMA flags, when the steps fall due, the pause and its costs, the table steps and the last-channel case, mid-frame enabling, and pre-empting a DMA; amended for anomie-timing's overscan-bit slip | high for the registers, table and steps; medium for timing and costs; low for the overhead's placement, the last-channel case at frame start, mid-frame enabling and a pre-empted DMA |
 | [0027](../adr/0027-apu-port-placeholder-until-m3.md) | The APU ports' placeholder until M3: the register shape, reads of `$00`, kept writes, the sync hook, reset, and the ROMs and goldens it rules out | high for the register shape; the placeholder's values are a project choice and claim none |
+| [0028](../adr/0028-ppu-state-registers-and-frame-geometry.md) | The PPU's memories and their power-on fill, its registers and their reads, PPU1 and PPU2 open bus, which lines are drawn and when, and the frame geometry and where the outputs live | high for the reads and open bus; medium for which lines are output and their width; the power-on values and the geometry are project choices |
 
 ADR 0001 (catch-up scheduling) predates M1 and governs the bus's sync hooks and the deadline table. ADR 0004 is the CPU's bus contract, which `BusView` implements.

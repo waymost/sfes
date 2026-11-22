@@ -369,6 +369,12 @@ impl Timing {
         self.frames
     }
 
+    /// The line the clock is in: the last line whose start has been serviced.
+    // @source: adr-0020
+    pub(crate) const fn line(&self) -> u16 {
+        self.line
+    }
+
     /// The line and dot (V and H) at `now`, which is no earlier than the start of the line
     /// now running and before the next deadline (ADR 0020, point 3).
     // @source: anomie-regs#213c
@@ -386,7 +392,6 @@ impl Timing {
     // @source: anomie-timing#s-ppu/registers
     // @source: fullsnes#snestiminghvevents
     // @source: adr-0020
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by $213F with the PPU"))]
     pub(crate) const fn field(&self, now: Cycles) -> bool {
         if self.line == 0 && now.0 < self.line_start.after(FIELD_TOGGLE).0 {
             !self.field

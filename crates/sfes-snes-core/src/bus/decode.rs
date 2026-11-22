@@ -7,11 +7,11 @@
 
 use sfes_api::Addr24;
 use sfes_snes_cart::{MemoryMap, Page};
+use sfes_snes_ppu::Register;
 
 use crate::{
     bus::{
         apu::ApuPort,
-        counters::CounterRegister,
         dma::{Dma, DmaRegister},
         math::MathRegister,
         ports::{JoypadByte, Port, PortRegister},
@@ -60,8 +60,8 @@ pub(crate) enum Target {
 /// The devices on Address Bus B, by B-bus address.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BBus {
-    /// PPU1 and PPU2, `$00–$3F`.
-    Ppu(PpuRegister),
+    /// PPU1 and PPU2, `$00–$3F`: one of the PPU's 64 registers (ADR 0028, point 2).
+    Ppu(Register),
     /// The APU's four ports, `$40–$7F`; the low two bits select the port.
     Apu(ApuPort),
     /// $2180 WMDATA: WRAM through the port's address.
@@ -74,19 +74,6 @@ pub(crate) enum BBus {
     WramAddressHigh,
     /// `$84–$FF`: nothing on the console answers.
     Unanswered,
-}
-
-/// The PPU registers the bus models before the PPU exists.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PpuRegister {
-    /// $2133 SETINI: the interlace and overscan bits the scheduler keeps (ADR 0020, point 6).
-    ScreenMode,
-    /// $2137 SLHV: a read latches the H/V counters (ADR 0021, point 7).
-    SoftwareLatch,
-    /// $213C OPHCT and $213D OPVCT: the latched counters (ADR 0021, point 7).
-    Counter(CounterRegister),
-    /// Any other PPU register, by its B-bus address; open bus until the PPU exists.
-    Other(u8),
 }
 
 /// The CPU's internal registers, `$4000–$43FF`, that answer.
@@ -207,19 +194,16 @@ const fn decode_cpu_register(offset: u16) -> Option<CpuRegister> {
 /// The device at B-bus address `address`.
 // @source: anomie-memmap#hardware/address-bus-b
 // @source: anomie-memmap#memory-map
-// @source: anomie-regs#2133
-// @source: anomie-regs#2137
-// @source: anomie-regs#213c
-// @source: anomie-regs#213d
 // @source: anomie-regs#2140
+// @source: anomie-regs#registers
 // @source: adr-0019
+// @source: adr-0028
 pub(crate) const fn decode_b_bus(address: u8) -> BBus {
     match address {
-        0x33 => BBus::Ppu(PpuRegister::ScreenMode),
-        0x37 => BBus::Ppu(PpuRegister::SoftwareLatch),
-        0x3C => BBus::Ppu(PpuRegister::Counter(CounterRegister::Horizontal)),
-        0x3D => BBus::Ppu(PpuRegister::Counter(CounterRegister::Vertical)),
-        0x00..=0x3F => BBus::Ppu(PpuRegister::Other(address)),
+        0x00..=0x3F => match Register::from_b_bus(address) {
+            Some(register) => BBus::Ppu(register),
+            None => BBus::Unanswered,
+        },
         0x40..=0x7F => BBus::Apu(ApuPort::from_b_bus(address)),
         0x80 => BBus::WramData,
         0x81 => BBus::WramAddressLow,
@@ -299,18 +283,16 @@ mod tests {
     // @source: anomie-regs#2140
     // @source: fullsnes#snesiomap
     // @source: adr-0019
+    // @source: adr-0028
     #[test]
     fn the_system_area_decodes_to_the_b_bus_and_the_cpu_registers() {
         let cases = [
             (0x2000, Target::Unanswered),
-            (0x2100, Target::BBus(BBus::Ppu(PpuRegister::Other(0x00)))),
-            (0x2133, Target::BBus(BBus::Ppu(PpuRegister::ScreenMode))),
-            (0x2137, Target::BBus(BBus::Ppu(PpuRegister::SoftwareLatch))),
-            (
-                0x213D,
-                Target::BBus(BBus::Ppu(PpuRegister::Counter(CounterRegister::Vertical))),
-            ),
-            (0x213F, Target::BBus(BBus::Ppu(PpuRegister::Other(0x3F)))),
+            (0x2100, Target::BBus(BBus::Ppu(Register::DisplayControl))),
+            (0x2133, Target::BBus(BBus::Ppu(Register::ScreenMode))),
+            (0x2137, Target::BBus(BBus::Ppu(Register::SoftwareLatch))),
+            (0x213D, Target::BBus(BBus::Ppu(Register::VerticalCounter))),
+            (0x213F, Target::BBus(BBus::Ppu(Register::Ppu2Status))),
             (0x2140, Target::BBus(BBus::Apu(ApuPort::Port0))),
             (0x2147, Target::BBus(BBus::Apu(ApuPort::Port3))),
             (0x217F, Target::BBus(BBus::Apu(ApuPort::Port3))),

@@ -16,6 +16,7 @@ bitflags.workspace = true
 sfes-api.workspace = true
 sfes-snes-cart.workspace = true
 sfes-snes-cpu.workspace = true
+sfes-snes-ppu.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
@@ -23,4 +24,4 @@ sfes-snes-cart = { workspace = true, features = ["test-support"] }
 
 [features]
 default = ["std"]
-std = ["sfes-api/std", "sfes-snes-cart/std", "sfes-snes-cpu/std", "thiserror/std"]
+std = ["sfes-api/std", "sfes-snes-cart/std", "sfes-snes-cpu/std", "sfes-snes-ppu/std", "thiserror/std"]
