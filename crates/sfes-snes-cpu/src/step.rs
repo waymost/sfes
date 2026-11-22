@@ -23,11 +23,11 @@ impl Cpu65816 {
     /// The interrupt requests are read once, before the opcode fetch. Whether IRQs are
     /// enabled is [`irq_disabled_at_boundary`](Self::irq_disabled_at_boundary): the I flag
     /// from before the last cycle of the previous step (ADR 0022).
-    // @source: adr-0004
-    // @source: adr-0022
     // @source: anomie-timing#s-cpu/interrupts
     // @source: anomie-timing#s-cpu/instructions
     // @source: wdc-w65c816s#table-5-7-note-9
+    // @source: adr-0004
+    // @source: adr-0022
     pub fn step(&mut self, bus: &mut impl Bus65816) {
         let irq_disabled = self.irq_disabled_at_boundary();
         self.delayed_irq_disable = None;
@@ -59,10 +59,10 @@ impl Cpu65816 {
     /// keeps passing (ADR 0004): an internal cycle at PBR,PC, which after WAI or STP is the
     /// "PBR,PC+1" of their last cycle, repeated with the same signals (rows 19c and 19d, ADR
     /// 0011). The two cycles that end a wait are the same cycle (ADR 0022).
-    // @source: adr-0004
-    // @source: adr-0011
     // @source: wdc-w65c816s#table-5-7-19c
     // @source: wdc-w65c816s#table-5-7-19d
+    // @source: adr-0004
+    // @source: adr-0011
     // @source: adr-0022
     fn halted_cycle(&self, bus: &mut impl Bus65816) {
         bus.idle(self.program_address(), Pins::RWB | self.status_pins());
@@ -429,8 +429,8 @@ mod tests {
         assert_eq!((cpu.pbr, cpu.pc), (0x12, 0x0000));
     }
 
-    // @source: adr-0004
     // @source: wdc-w65c816s#7.14
+    // @source: adr-0004
     #[test]
     fn a_stopped_processor_idles_and_ignores_interrupts() {
         let mut cpu = cpu_at(0x12, 0x3456);
@@ -447,8 +447,8 @@ mod tests {
         assert_eq!(cpu, before);
     }
 
-    // @source: adr-0004
     // @source: wdc-w65c816s#7.13
+    // @source: adr-0004
     #[test]
     fn a_waiting_processor_idles_until_a_request_arrives() {
         let mut cpu = cpu_at(0x12, 0x3456);
@@ -487,8 +487,8 @@ mod tests {
         assert_eq!(cpu.pc, 0x3457);
     }
 
-    // @source: adr-0004
     // @source: wdc-w65c816s#2.18
+    // @source: adr-0004
     #[test]
     fn a_masked_irq_does_not_interrupt_a_running_processor() {
         let mut cpu = cpu_at(0, 0x8000);
@@ -501,11 +501,11 @@ mod tests {
         assert_eq!(bus.cycles[0], Cycle::Opcode(0x00_8000));
     }
 
-    // @source: adr-0004
     // @source: wdc-w65c816s#2.21
     // @source: wdc-w65c816s#7.19
     // @source: wdc-w65c816s#table-5-7-22a
     // @source: wdc-w65c816s#table-5-3
+    // @source: adr-0004
     #[test]
     fn a_recognized_interrupt_replaces_the_instruction() {
         let both = Pending {
@@ -844,8 +844,8 @@ mod tests {
 
     /// Every step clears the delayed I flag, so it applies to one boundary only, and reset
     /// clears it too.
-    // @source: adr-0022
     // @source: wdc-w65c816s#2.25
+    // @source: adr-0022
     #[test]
     fn the_delayed_i_flag_lasts_one_boundary() {
         let (mut cpu, mut bus) = flag_change(&[0x58], Flags::I, 0x30);

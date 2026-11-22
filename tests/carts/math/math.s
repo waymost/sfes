@@ -6,7 +6,7 @@
 ; @source: anomie-regs#4202, anomie-regs#4203, anomie-regs#4204, anomie-regs#4205
 ; @source: anomie-regs#4206, anomie-regs#4214, anomie-regs#4216, anomie-regs#4201
 ; @source: anomie-regs#4213, anomie-timing#s-cpu/registers, fullsnes#snesmathsmultiplydivide
-; @source: fullsnes#snescontrollersioportsmanualreading, adr-0023, adr-0013
+; @source: fullsnes#snescontrollersioportsmanualreading, adr-0013, adr-0023
 
 .p816
 .include "header.inc"

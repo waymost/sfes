@@ -33,4 +33,6 @@ An ADR ships with the code it governs; recent history is `feat(core): ... (ADR 0
 - Code that implements the decision carries `// @source: adr-NNNN`. Tests do too.
 - If the ADR changes or refines `docs/design/technical-design.md` or `docs/design/feature-specification.md`, edit that text in the same PR and put "(ADR NNNN)" at the changed text. Find the spot with `grep -n "<topic>" docs/design/*.md`.
 - If the ADR supersedes an older one, set the old one's status to `superseded by NNNN`.
+- To correct an accepted ADR without changing its decision's intent (a slip, a detail), edit it in place and add `- **Amended:** YYYY-MM-DD: what changed (where).` under its header. A changed decision is a new ADR.
+- Where a cited document is wrong, say so in Sources and add the slip to that entry's "Known slips" in `provenance/bibliography.toml`.
 - Run `cargo xtask provenance lint` (or the `sfes-preflight` skill) to check that every function and module still carries a known tag.

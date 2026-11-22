@@ -5,8 +5,8 @@
 ; time of each instruction with values computed from the documents (ADR 0013).
 ; @source: anomie-memmap#memory-map
 ; @source: anomie-regs#2180, anomie-regs#2181, anomie-regs#420d
-; @source: adr-0019
 ; @source: adr-0013
+; @source: adr-0019
 
 .p816
 .include "header.inc"

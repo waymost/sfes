@@ -144,9 +144,9 @@ impl Cpu65816 {
     /// pointer reads are data cycles (ADR 0008).
     // @source: wdc-w65c816s#table-5-7-2a
     // @source: wdc-w65c816s#3.5.2
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-jmp
     // @source: 6502org-65c816-opcodes#6.2.2.1
+    // @source: adr-0008
     pub(crate) fn jmp_indexed_indirect(&mut self, bus: &mut impl Bus65816) {
         let base = self.fetch_address(bus);
         self.internal_at_last_fetch(bus);
@@ -157,9 +157,9 @@ impl Cpu65816 {
     /// byte, and pushes the address of that byte, high byte first. In emulation mode the
     /// pushes stay in page 1.
     // @source: wdc-w65c816s#table-5-7-1c
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-jsr
     // @source: 6502org-65c816-opcodes#6.2.2.1
+    // @source: adr-0008
     pub(crate) fn jsr_absolute(&mut self, bus: &mut impl Bus65816) {
         let destination = self.fetch_address(bus);
         self.internal_at_last_fetch(bus);
@@ -172,9 +172,9 @@ impl Cpu65816 {
     /// program counter at PBR,AA+X. The pushes may leave page 1 in emulation mode (7.1).
     // @source: wdc-w65c816s#table-5-7-2b
     // @source: wdc-w65c816s#7.1
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-jsr
     // @source: 6502org-65c816-opcodes#6.2.2.1
+    // @source: adr-0008
     pub(crate) fn jsr_indexed_indirect(&mut self, bus: &mut impl Bus65816) {
         let low = self.fetch(bus);
         let [return_low, return_high] = self.pc.to_le_bytes();
@@ -192,9 +192,9 @@ impl Cpu65816 {
     /// emulation mode (7.1).
     // @source: wdc-w65c816s#table-5-7-4c
     // @source: wdc-w65c816s#7.1
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-jsl
     // @source: 6502org-65c816-opcodes#6.2.2.1
+    // @source: adr-0008
     pub(crate) fn jsl(&mut self, bus: &mut impl Bus65816) {
         let destination = self.fetch_address(bus);
         let pushed_at = self.stack_address();
@@ -211,9 +211,9 @@ impl Cpu65816 {
     /// and spends an internal cycle at the stack address of the last byte pulled. In
     /// emulation mode the pulls stay in page 1.
     // @source: wdc-w65c816s#table-5-7-22h
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-rts
     // @source: 6502org-65c816-opcodes#6.2.2.2
+    // @source: adr-0008
     pub(crate) fn rts(&mut self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
         self.internal_at_program_counter(bus);
@@ -227,9 +227,9 @@ impl Cpu65816 {
     /// page 1 in emulation mode (7.1).
     // @source: wdc-w65c816s#table-5-7-22i
     // @source: wdc-w65c816s#7.1
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-rtl
     // @source: 6502org-65c816-opcodes#6.2.2.2
+    // @source: adr-0008
     pub(crate) fn rtl(&mut self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
         self.internal_at_program_counter(bus);

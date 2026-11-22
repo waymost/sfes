@@ -7,7 +7,7 @@
 ; @source: anomie-regs#43x5, anomie-regs#43xb, anomie-regs#dma-and-hdma/dma
 ; @source: anomie-regs#2180, anomie-regs#2181, anomie-timing#s-cpu/dma
 ; @source: fullsnes#snesdmaandhdmachannel07registers, fullsnes#snesunpredictablethings
-; @source: adr-0025, adr-0013
+; @source: adr-0013, adr-0025
 
 .p816
 .include "header.inc"

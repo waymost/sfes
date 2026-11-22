@@ -8,7 +8,7 @@
 ; @source: anomie-regs#4016, anomie-regs#4017, anomie-regs#4200, anomie-regs#4212
 ; @source: anomie-regs#4218, anomie-timing#s-cpu/auto-joypad-read
 ; @source: fullsnes#snescontrollersioportsmanualreading
-; @source: fullsnes#snescontrollersioportsautomaticreading, adr-0024, adr-0013
+; @source: fullsnes#snescontrollersioportsautomaticreading, adr-0013, adr-0024
 
 .p816
 .include "header.inc"

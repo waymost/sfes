@@ -8,6 +8,10 @@
 //!   ([`STD_TRAITS`]: conversions, formatting, comparison, operators, …) are exempt;
 //! - every tag names a bibliography id or an existing ADR.
 //!
+//! In every `crates/` Rust file and every cartridge source, a run of consecutive tag lines lists
+//! documents first, in any order, then ADRs in ascending order, each tag once (AGENTS.md
+//! section 1).
+//!
 //! Tags anywhere else under `crates/` must also name known ids.
 //!
 //! In every test-cartridge source (`.s` and `.inc` under `tests/carts/`, ADR 0013):
@@ -99,6 +103,7 @@ pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
         let display = files::display(root, &path);
         let text = fs::read_to_string(&path).with_context(|| format!("reading {display}"))?;
         findings.extend(check_tag_ids(&display, &text, &known));
+        findings.extend(check_tag_order(&display, &text, "//"));
         if is_chip_crate_file(&display) {
             findings.extend(check_required_tags(&display, &text));
         }
@@ -114,6 +119,7 @@ pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
         let display = files::display(root, &path);
         let text = fs::read_to_string(&path).with_context(|| format!("reading {display}"))?;
         findings.extend(check_tag_ids(&display, &text, &known));
+        findings.extend(check_tag_order(&display, &text, ";"));
         findings.extend(check_cart_tags(&display, &text));
     }
     Ok(findings)
@@ -218,6 +224,63 @@ fn check_tag_ids(display: &str, text: &str, known: &KnownIds) -> Vec<Finding> {
                 Ok(_) => {}
                 Err(message) => findings.push(Finding::new(display, index + 1, message)),
             }
+        }
+    }
+    findings
+}
+
+/// The full tags (`id#anchor`) on a line that is nothing but a `prefix` comment holding tags,
+/// or `None` for any other line.
+fn tag_line(line: &str, prefix: &str) -> Option<Vec<String>> {
+    let rest = line.trim().strip_prefix(prefix)?.trim_start();
+    let list = rest.strip_prefix(MARKER)?;
+    let tags = list
+        .split(',')
+        .filter_map(|segment| segment.split_whitespace().next())
+        .map(String::from)
+        .collect::<Vec<_>>();
+    Some(tags)
+}
+
+/// The sort key of a tag: documents, all equal, before ADRs by number.
+fn tag_order_key(tag: &str) -> Option<&str> {
+    tag.strip_prefix("adr-")
+}
+
+/// Each run of consecutive tag lines lists documents, in any order, then ADRs in ascending
+/// order, with no tag twice.
+fn check_tag_order(display: &str, text: &str, prefix: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let mut previous: Option<String> = None;
+    let mut seen = Vec::<String>::new();
+    for (index, line) in text.lines().enumerate() {
+        let Some(tags) = tag_line(line, prefix) else {
+            previous = None;
+            seen.clear();
+            continue;
+        };
+        for tag in tags {
+            if seen.contains(&tag) {
+                findings.push(Finding::new(
+                    display,
+                    index + 1,
+                    format!("source tag `{tag}` is listed twice"),
+                ));
+                continue;
+            }
+            if let Some(before) = &previous
+                && tag_order_key(&tag) < tag_order_key(before)
+            {
+                findings.push(Finding::new(
+                    display,
+                    index + 1,
+                    format!(
+                        "source tag `{tag}` comes before `{before}`: documents first, then ADRs in ascending order"
+                    ),
+                ));
+            }
+            seen.push(tag.clone());
+            previous = Some(tag);
         }
     }
     findings
@@ -587,6 +650,35 @@ pub fn read() {}
             [
                 "1: unknown source id `fulsnes`: add it to provenance/bibliography.toml or cite an existing ADR",
                 "2: malformed source tag `Adr-0013`",
+            ]
+        );
+    }
+
+    #[test]
+    fn tags_are_listed_documents_then_adrs_once() {
+        let text = "\
+// @source: anomie-regs#2140
+// @source: fullsnes#dma
+// @source: adr-0001
+// @source: adr-0019
+
+// @source: fullsnes
+// @source: adr-0019
+// @source: anomie-regs
+// @source: adr-0019, adr-0001
+// @source: fullsnes
+let code = 0; // @source: zzz
+";
+        let messages = check_tag_order("crates/x.rs", text, "//")
+            .into_iter()
+            .map(|finding| format!("{}: {}", finding.line, finding.message))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            [
+                "8: source tag `anomie-regs` comes before `adr-0019`: documents first, then ADRs in ascending order",
+                "9: source tag `adr-0019` is listed twice",
+                "10: source tag `fullsnes` is listed twice",
             ]
         );
     }

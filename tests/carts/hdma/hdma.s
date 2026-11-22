@@ -7,7 +7,7 @@
 ; @source: anomie-regs#43xa, anomie-regs#dma-and-hdma/hdma, anomie-regs#2180
 ; @source: anomie-regs#4212, anomie-timing#s-cpu/hdma
 ; @source: fullsnes#snesdmaandhdmachannel07registers, fullsnes#snestiminghvevents
-; @source: fullsnes#snesdmaandhdmanotes, adr-0026, adr-0013
+; @source: fullsnes#snesdmaandhdmanotes, adr-0013, adr-0026
 
 .p816
 .include "header.inc"
@@ -119,7 +119,7 @@ loop:
 ; Marker bytes chosen by the cartridge (ADR 0013), in the table format of
 ; fullsnes#snesdmaandhdmachannel07registers.
 ; Direct: one unit, then a line without; then two units in repeat; then the end.
-; @source: adr-0013, fullsnes#snesdmaandhdmachannel07registers
+; @source: fullsnes#snesdmaandhdmachannel07registers, adr-0013
 direct_table:
     .byte $02, $D1
     .byte $82, $D2, $D3

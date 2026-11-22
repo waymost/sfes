@@ -605,7 +605,7 @@ Tests are layered from per-instruction vectors up to Python end-to-end runs; ben
 
 | Command | Checks | Spec |
 | --- | --- | --- |
-| `cargo xtask provenance lint` | Parses chip crates with `syn`: every module and every function, private ones and tests included, has an `@source:` tag; only methods of standard-library trait impls are exempt. Every tag under `crates/` names a known bibliography id or ADR. Test-cartridge sources need a `; @source:` tag per file and per `.proc` and `.macro` (ADR 0013) | PROV-03 |
+| `cargo xtask provenance lint` | Parses chip crates with `syn`: every module and every function, private ones and tests included, has an `@source:` tag; only methods of standard-library trait impls are exempt. Every tag under `crates/` names a known bibliography id or ADR, and each run of tags lists documents before ADRs, the ADRs in ascending order, each tag once. Test-cartridge sources need a `; @source:` tag per file and per `.proc` and `.macro` (ADR 0013) | PROV-03 |
 | `cargo xtask provenance scan` | Searches code files for known emulator copyright headers and author names | PROV-05 |
 | `cargo xtask provenance assets` | Every file under `tests/assets/` has a manifest entry with an allowed license; `tests/carts/` holds only sources and every cartridge has an `own` entry (ADR 0013) | PROV-09 |
 | `cargo xtask provenance commits` | Every commit in the PR has `Signed-off-by`; commits with `Assisted-by` touching chip crates require the PR's AI-review checklist to be ticked | PROV-06, PROV-07 |

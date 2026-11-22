@@ -6,8 +6,8 @@
 ; @source: anomie-timing#s-cpu/interrupts
 ; @source: anomie-regs#4200, anomie-regs#4207, anomie-regs#4209, anomie-regs#4210
 ; @source: anomie-regs#4211, anomie-regs#4212, anomie-regs#2137, anomie-regs#213c
-; @source: adr-0021
 ; @source: adr-0013
+; @source: adr-0021
 
 .p816
 .include "header.inc"

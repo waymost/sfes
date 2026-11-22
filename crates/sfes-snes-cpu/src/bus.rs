@@ -1,5 +1,5 @@
-// @source: adr-0004
 // @source: wdc-w65c816s#2.12
+// @source: adr-0004
 //! The bus a 65C816 core runs on: one call per clock cycle (ADR 0004).
 
 use sfes_api::Addr24;

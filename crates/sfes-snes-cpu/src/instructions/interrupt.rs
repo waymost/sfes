@@ -124,9 +124,9 @@ impl Cpu65816 {
     /// pulls stay in page 1 in emulation mode (ADR 0008).
     // @source: wdc-w65c816s#table-5-7-22g
     // @source: wdc-w65c816s#7.11.3
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-rti
     // @source: 6502org-65c816-opcodes#6.3.2
+    // @source: adr-0008
     pub(crate) fn rti(&mut self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
         self.internal_at_program_counter(bus);
@@ -217,9 +217,9 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#7.11
     // @source: wdc-w65c816s#7.12
     // @source: wdc-w65c816s#table-5-3
-    // @source: adr-0008
     // @source: 6502org-65c816-opcodes#6.3.1
     // @source: 6502org-65c816-opcodes#6.3.1.1
+    // @source: adr-0008
     fn enter_handler(&mut self, bus: &mut impl Bus65816, interrupt: Interrupt) {
         if !self.e {
             self.push(bus, self.pbr, StackWrap::PageOne);
@@ -475,8 +475,8 @@ mod tests {
     // @source: wdc-w65c816s#7.13
     // @source: wdc-w65c816s#2.24
     // @source: 6502org-65c816-opcodes#6.9
-    // @source: adr-0011
     // @source: anomie-timing#s-cpu/instructions
+    // @source: adr-0011
     // @source: adr-0022
     #[test]
     fn wai_waits_in_internal_cycles_and_an_irq_wakes_it_into_the_handler() {
@@ -529,8 +529,8 @@ mod tests {
     // @source: wdc-w65c816s#2.24
     // @source: wdc-65816-manual#chapter-18-wai
     // @source: 6502org-65c816-opcodes#6.9
-    // @source: adr-0011
     // @source: anomie-timing#s-cpu/instructions
+    // @source: adr-0011
     // @source: adr-0022
     #[test]
     fn wai_with_irqs_disabled_resumes_at_the_next_instruction() {

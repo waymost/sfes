@@ -51,6 +51,9 @@ Rules that are easy to get wrong:
 - Where a community source (6502.org, snesdev-wiki) and the datasheet differ, write an ADR.
 - When two sources disagree or are silent, write an ADR (`sfes-adr` skill) and cite it as `adr-NNNN` rather than guessing.
 - Only cite a section you have read. If it is not readable (the PDFs stay outside the repo), do not write the code.
+- List an item's tags documents first, in any order, then ADRs in ascending order, each tag once.
+- An entry's `notes` may end with "Known slips": places where that document is wrong. Check them for the section you cite, and do not build on a listed slip.
+- When you find a new slip, the ADR that relies on the section says so, and you add it to the entry's "Known slips".
 
 ## Restricted passages
 
@@ -65,4 +68,4 @@ Do not invent an entry. A new entry needs a licence, a retrieval date and a SHA-
 
 ## Check
 
-`cargo xtask provenance lint` checks that every chip-crate module and function has a known tag. Fix what it reports; do not guess more anchors.
+`cargo xtask provenance lint` checks that every chip-crate module and function has a known tag, and that each run of tags is in order. Fix what it reports; do not guess more anchors.
