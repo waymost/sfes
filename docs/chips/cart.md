@@ -1,6 +1,6 @@
 # The cartridge (`sfes-snes-cart`)
 
-This page explains the SNES cartridge and how the crate models it (QA-08). It grows with each M2 cartridge issue. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
+This page explains the SNES cartridge and how the crate models it (QA-08). It was written issue by issue during milestone M2 (#77, #78) and covers the crate as built: header detection and the LoROM, HiROM and ExHiROM boards. Coprocessors arrive with their own issues. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
 
 - fullsnes (`fullsnes`), by section anchor;
 - Anomie's memory-mapping doc (`anomie-memmap`);
@@ -123,7 +123,31 @@ The SRAM size comes from the header, `1 SHL n` KiB. It repeats through the board
 
 Such images may score wrongly and then need a board override.
 
+## The code
+
+| File | What it holds |
+| --- | --- |
+| [`header.rs`](../../crates/sfes-snes-cart/src/header.rs) | `Header`, `Mapping` and `Options`; `Header::detect` and `detect_with`, the score, `strip_copier_header`, `checksum` and `Region::from_country` |
+| [`board.rs`](../../crates/sfes-snes-cart/src/board.rs) | `Board`: each board's ROM and SRAM offset for an address, and `mirror` |
+| [`map.rs`](../../crates/sfes-snes-cart/src/map.rs) | `MemoryMap` and `Page`: the 2,048-page table and `resolve` |
+| [`cartridge.rs`](../../crates/sfes-snes-cart/src/cartridge.rs) | `Cartridge::load` and `CartError`; the ROM, SRAM and map, and the regions they expose |
+| [`test_support.rs`](../../crates/sfes-snes-cart/src/test_support.rs) | ROM images for tests, behind the `test-support` feature (below) |
+
+The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror` (technical design section 12). Only `Cartridge` holds state that changes: the SRAM. The ROM and the map are `Arc`-shared, so cloning a machine never copies them (technical design section 5).
+
+## Testing
+
+- **Unit tests** sit beside the code in each file. Each cites the section its expected values come from.
+- **Test images.** `test_support` builds a ROM image for a board: a plausible header, a valid checksum and, optionally, code at the RESET vector. `sfes-snes-core` enables the feature in its `[dev-dependencies]`, so the machine's tests load the same images instead of copies (AGENTS.md section 4).
+- **The own cartridge.** [`tests/carts/halt`](../../tests/carts/halt/halt.s), the smallest test cartridge (ADR 0013), must be detected as LoROM with the full score of 12. Its RESET vector must resolve to its ROM through the map.
+
 ## Decisions
 
-- [ADR 0016](../adr/0016-cartridge-header-detection.md): candidate locations, the reset-vector rule, the score weights, overrides and the region table.
-- [ADR 0017](../adr/0017-memory-map-and-boards.md): the page table, each board's ROM and SRAM areas, mirroring and the RAM size limit.
+The documents left these points open. Each ADR quotes the sources and states its confidence.
+
+| ADR | Decision | Confidence |
+| --- | --- | --- |
+| [0016](../adr/0016-cartridge-header-detection.md) | Candidate locations, the reset-vector rule, the score weights, overrides and the region table; amended for the checksum of an image whose length is not a power of two | medium |
+| [0017](../adr/0017-memory-map-and-boards.md) | The page table, each board's ROM and SRAM areas, mirroring and the RAM size limit | medium |
+
+ADRs 0013 to 0015 set up the test cartridges, the third-party test ROMs and the golden-frame files that M2's later issues use.

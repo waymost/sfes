@@ -1,6 +1,6 @@
 # The machine (`sfes-snes-core`)
 
-This page explains the SNES machine and how the crate models it (QA-08). It grows with each M2 machine issue. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
+This page explains the SNES machine and how the crate models it (QA-08). It was written issue by issue during milestone M2 (#79 to #87) and covers the crate as built: the machine value, the bus, the scheduler, interrupts, the math unit, the controller ports, DMA, HDMA and the APU ports' placeholder. The PPU has its own page when it arrives. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
 
 - Anomie's memory-mapping doc (`anomie-memmap`) and timing doc (`anomie-timing`), by heading path;
 - fullsnes (`fullsnes`), by section anchor;
@@ -499,15 +499,52 @@ What it rules out until M3 (point 8):
 - any ROM that waits for the APU, which is almost every commercial game;
 - goldens from any ROM that reads the ports, since M3 changes what it sees. None of the approved test ROMs is known to read them.
 
+## The code
+
+| File | What it holds |
+| --- | --- |
+| [`machine.rs`](../../crates/sfes-snes-core/src/machine.rs) | `Snes`, `SnesBuilder`, `BuildError`, the state, the step loop, the observer events and the inherent API |
+| [`bus/mod.rs`](../../crates/sfes-snes-core/src/bus/mod.rs) | `Bus`, `BusView`, the `Registers` trait, `read_target`, `peek_target`, `after_read` and `write_target`, open bus, the WRAM port, and charging each access its time and any refresh |
+| [`bus/decode.rs`](../../crates/sfes-snes-core/src/bus/decode.rs) | `Target`, `BBus`, `CpuRegister`, `PpuRegister` and `Speed`: decode and access time. Each unit's register enum is in its own file |
+| [`bus/interrupts.rs`](../../crates/sfes-snes-core/src/bus/interrupts.rs) | `$4200` bit 7, the NMI and IRQ flags, the edge latch and the recorded lines |
+| [`bus/counters.rs`](../../crates/sfes-snes-core/src/bus/counters.rs) | The H/V counter latch and `$213C/$213D`, until the PPU exists |
+| [`bus/math.rs`](../../crates/sfes-snes-core/src/bus/math.rs) | The multiply and divide unit |
+| [`bus/ports.rs`](../../crates/sfes-snes-core/src/bus/ports.rs) | The pads, `$4016/$4017`, the auto-read and the polled flag |
+| [`bus/dma/mod.rs`](../../crates/sfes-snes-core/src/bus/dma/mod.rs) | The channel registers, `$420B`, `$420C` and the pause |
+| [`bus/dma/hdma.rs`](../../crates/sfes-snes-core/src/bus/dma/hdma.rs) | HDMA's setup and line steps |
+| [`bus/apu.rs`](../../crates/sfes-snes-core/src/bus/apu.rs) | The APU ports' placeholder |
+| [`timing/mod.rs`](../../crates/sfes-snes-core/src/timing/mod.rs) | The scheduler: line, field, vertical blank, refresh, the NMI and timer points, the `$4201` latch, the auto-read and HDMA's steps, and `Timing::service`, which returns each due event |
+| [`timing/position.rs`](../../crates/sfes-snes-core/src/timing/position.rs) | Line lengths and the dot at a point in a line |
+| [`timing/irq.rs`](../../crates/sfes-snes-core/src/timing/irq.rs) | `$4200`'s timer bits, HTIME, VTIME and the H/V timer's trigger points |
+| [`timing/deadlines.rs`](../../crates/sfes-snes-core/src/timing/deadlines.rs) | The deadline table |
+| [`carts.rs`](../../crates/sfes-snes-core/src/carts.rs) | The test-cartridge runs (below) |
+
+Each unit with CPU-visible registers implements `Registers`, and only decode matches on addresses (AGENTS.md section 4; [Adding a register](#adding-a-register)). The crate is `no_std` with `alloc` and depends on `sfes-api`, `sfes-snes-cpu`, `sfes-snes-cart`, `bitflags` and `thiserror` (technical design section 12).
+
+## Testing
+
+- **Unit tests.** `bus/tests.rs` covers decode, the WRAM port, open bus, access speed, refresh, the interrupt and timer registers, the math unit, the ports, DMA and the APU placeholder. `timing/tests.rs` covers line and frame lengths, the field, vertical blank, refresh and the H/V position. Smaller tests sit beside the code in each unit. Each test cites the section its expected values come from.
+- **Machine tests** in `machine.rs` cover the builder, power-on, reset and the observer events. ROM images come from `sfes_snes_cart::test_support` (see [the cartridge page](cart.md#testing)).
+- **Test cartridges.** `carts.rs` runs six of the project's own cartridges (ADR 0013), one per feature: `bus-timing`, `interrupts`, `math`, `joypad`, `dma` and `hdma`. Each section above describes its cartridge. Expected values are worked out from the documents, not taken from an emulator.
+- **Cloning.** `a_clone_runs_the_same_and_starts_without_outputs` runs a machine and its clone for a frame. They must end at the same cycle with the same WRAM, and the clone's frame buffer must start empty (FND-01).
+
+Golden frames (ADR 0015) need the PPU and follow in #100.
+
 ## Decisions
 
-- [ADR 0018](../adr/0018-snes-reset-and-power-on.md): RESB timing, the page-1 reads, power-on and reset, the default region, observer events and the provisional timing.
-- [ADR 0019](../adr/0019-snes-bus-decode-and-refresh.md): decode, access speed, open bus, the WRAM port, refresh and read-modify-write writes to registers.
-- [ADR 0020](../adr/0020-snes-scanlines-frames-and-deadlines.md): line lengths and dots, frames, the field, vertical blank and overscan, the frame boundary, line and frame events, and the deadline table.
-- [ADR 0021](../adr/0021-snes-interrupts-timers-and-counter-latch.md): when a changed NMI or IRQ line is seen, the NMI and H/V timer trigger points, `$4210–$4212`, the counter latch, and their reset values.
-- [ADR 0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md) (CPU core): the IRQ check uses the I flag from before the last cycle, and WAI ends two internal cycles after a request.
-- [ADR 0023](../adr/0023-snes-multiply-divide-unit-and-io-port.md): the multiply and divide results, their latency in CPU cycles, reads before the result, and RDIO.
-- [ADR 0024](../adr/0024-controller-ports-and-the-auto-joypad-read.md): the pad, `$4016/$4017`, when the auto-read starts and takes its bits, reset, and the polled flag.
-- [ADR 0025](../adr/0025-general-dma.md): the channel registers, when the pause begins and how long it lasts, where each byte falls, what the A and B buses reach, open bus, deadlines and the math unit during a transfer, and `on_dma`.
-- [ADR 0026](../adr/0026-hdma.md): `$420C` and the HDMA flags, when setup and each line's transfer fall due, the pause and its costs, the table steps and the last-channel case, mid-frame enabling, and pre-empting a DMA.
-- [ADR 0027](../adr/0027-apu-port-placeholder-until-m3.md): the APU ports' placeholder until M3: the register shape, reads of `$00`, kept writes, the sync hook, reset, and the ROMs and goldens it rules out.
+The documents left these points open or disagree on them. Each ADR quotes the sources and states its confidence.
+
+| ADR | Decision | Confidence |
+| --- | --- | --- |
+| [0018](../adr/0018-snes-reset-and-power-on.md) | RESB timing, the page-1 reads, power-on and reset, the default region, observer events and the provisional timing | medium for the reset timing and the default region; high for the rest |
+| [0019](../adr/0019-snes-bus-decode-and-refresh.md) | Decode, access speed, open bus, the WRAM port, refresh and read-modify-write writes to registers | high for decode, speed and the WRAM port; medium for refresh, open bus on internal-register writes, the port's wrap and read-modify-write writes |
+| [0020](../adr/0020-snes-scanlines-frames-and-deadlines.md) | Line lengths and dots, frames, the field, vertical blank and overscan, the frame boundary, line and frame events, and the deadline table | high for line lengths, line counts and the frame boundary; medium for the long dots, the field at reset, when `$2133` is sampled and overscan changes in vertical blank |
+| [0021](../adr/0021-snes-interrupts-timers-and-counter-latch.md) | When a changed NMI or IRQ line is seen, the NMI and H/V timer trigger points, `$4210–$4212`, the counter latch, and their reset values | high for the trigger points and register bits; medium for when a line is seen and where in an access a read sees the machine; low for PPU2 open bus |
+| [0022](../adr/0022-irq-check-after-a-flag-change-and-the-end-of-wai.md) | (CPU core) The IRQ check uses the I flag from before the last cycle, and WAI ends two internal cycles after a request | high for the I flag; medium for the end of WAI |
+| [0023](../adr/0023-snes-multiply-divide-unit-and-io-port.md) | The multiply and divide results, their latency in CPU cycles, reads before the result, and RDIO | high for the results and latency; low for early reads, overlapping operations and refresh |
+| [0024](../adr/0024-controller-ports-and-the-auto-joypad-read.md) | The pad, `$4016/$4017`, when the auto-read starts and takes its bits, reset, and the polled flag | high for the pad and the registers; medium for the auto-read's start and the polled flag; low for the bits' timing, power-on and reset |
+| [0025](../adr/0025-general-dma.md) | The channel registers, the pause, where each byte falls, what the A and B buses reach, open bus, and deadlines and the math unit during a transfer | high for the registers, modes, step and count; medium for the pause and the A bus; low for byte placement, open bus, refresh and the math unit |
+| [0026](../adr/0026-hdma.md) | `$420C` and the HDMA flags, when the steps fall due, the pause and its costs, the table steps and the last-channel case, mid-frame enabling, and pre-empting a DMA; amended for anomie-timing's overscan-bit slip | high for the registers, table and steps; medium for timing and costs; low for the overhead's placement, the last-channel case at frame start, mid-frame enabling and a pre-empted DMA |
+| [0027](../adr/0027-apu-port-placeholder-until-m3.md) | The APU ports' placeholder until M3: the register shape, reads of `$00`, kept writes, the sync hook, reset, and the ROMs and goldens it rules out | high for the register shape; the placeholder's values are a project choice and claim none |
+
+ADR 0001 (catch-up scheduling) predates M1 and governs the bus's sync hooks and the deadline table. ADR 0004 is the CPU's bus contract, which `BusView` implements.
