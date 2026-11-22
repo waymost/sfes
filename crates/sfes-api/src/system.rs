@@ -2,7 +2,10 @@
 
 use alloc::vec::Vec;
 
-use crate::state::{StateError, StateHash};
+use crate::{
+    pixel::Rgb555,
+    state::{StateError, StateHash},
+};
 
 /// A memory region that can be read as a slice and written between steps (FND-06).
 #[derive(
@@ -99,9 +102,8 @@ pub struct VideoFrame<'frame> {
     pub width: u16,
     /// Height in pixels.
     pub height: u16,
-    /// RGB555 pixels, row-major: red in bits 4–0, green in bits 9–5, blue in bits 14–10, and
-    /// bit 15 clear.
-    pub pixels: &'frame [u16],
+    /// The pixels, row-major.
+    pub pixels: &'frame [Rgb555],
     /// For an interlaced frame, the field it shows; `None` otherwise (API-03).
     pub field: Option<Field>,
 }

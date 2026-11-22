@@ -16,7 +16,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use sfes_test_harness::{
-    golden::{self, Frame, Golden},
+    golden::{self, Frame, Golden, Rgb555},
     roms::Rom,
 };
 
@@ -157,12 +157,13 @@ fn encode(frame: &Frame) -> Result<Vec<u8>> {
 
 /// An RGB555 pixel, red in the low bits as CGRAM stores it, as 8-bit red, green and blue.
 /// Each 5-bit channel is widened by repeating its top bits (ADR 0015).
-fn rgb8(pixel: u16) -> [u8; 3] {
-    let widen = |shift: u16| {
-        let channel = u8::try_from((pixel >> shift) & 0x1F).unwrap_or_default();
-        (channel << 3) | (channel >> 2)
-    };
-    [widen(0), widen(5), widen(10)]
+fn rgb8(pixel: Rgb555) -> [u8; 3] {
+    let widen = |channel: u8| (channel << 3) | (channel >> 2);
+    [
+        widen(pixel.red()),
+        widen(pixel.green()),
+        widen(pixel.blue()),
+    ]
 }
 
 /// `path` relative to `root`, for messages.
@@ -178,14 +179,19 @@ fn display(root: &Path, path: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// `bits` as a pixel.
+    fn pixel(bits: u16) -> Rgb555 {
+        Rgb555::new(bits).unwrap()
+    }
+
     #[test]
     fn channels_widen_to_eight_bits() {
-        assert_eq!(rgb8(0x0000), [0, 0, 0]);
-        assert_eq!(rgb8(0x7FFF), [255, 255, 255]);
-        assert_eq!(rgb8(0x001F), [255, 0, 0]);
-        assert_eq!(rgb8(0x03E0), [0, 255, 0]);
-        assert_eq!(rgb8(0x7C00), [0, 0, 255]);
-        assert_eq!(rgb8(0x0010), [0x84, 0, 0]);
+        assert_eq!(rgb8(pixel(0x0000)), [0, 0, 0]);
+        assert_eq!(rgb8(pixel(0x7FFF)), [255, 255, 255]);
+        assert_eq!(rgb8(pixel(0x001F)), [255, 0, 0]);
+        assert_eq!(rgb8(pixel(0x03E0)), [0, 255, 0]);
+        assert_eq!(rgb8(pixel(0x7C00)), [0, 0, 255]);
+        assert_eq!(rgb8(pixel(0x0010)), [0x84, 0, 0]);
     }
 
     #[test]
@@ -193,7 +199,9 @@ mod tests {
         let frame = Frame {
             width: 3,
             height: 2,
-            pixels: vec![0x001F, 0x03E0, 0x7C00, 0x0000, 0x7FFF, 0x0010],
+            pixels: [0x001F, 0x03E0, 0x7C00, 0x0000, 0x7FFF, 0x0010]
+                .map(pixel)
+                .to_vec(),
         };
         let bytes = encode(&frame).unwrap();
         let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
@@ -215,7 +223,7 @@ mod tests {
         let frame = Frame {
             width: 2,
             height: 2,
-            pixels: vec![0; 3],
+            pixels: vec![Rgb555::BLACK; 3],
         };
         assert!(encode(&frame).is_err());
     }

@@ -25,7 +25,7 @@ mod ppu;
 mod register;
 
 pub use crate::{
-    line::{LineOut, NORMAL_LINE, WIDE_LINE},
+    line::{LineOut, LineWidth},
     ppu::{CGRAM_SIZE, OAM_SIZE, Ppu, VRAM_SIZE},
-    register::{ReadKind, Register},
+    register::{NotAPpuRegister, ReadKind, Register},
 };

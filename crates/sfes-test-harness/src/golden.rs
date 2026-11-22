@@ -31,6 +31,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use sfes_api::Rgb555;
 use sfes_api::{Buttons, Fast, Stop, VideoFrame};
 use sfes_snes_core::{BuildError, Snes};
 use sha2::{Digest, Sha256};
@@ -129,8 +130,8 @@ pub struct Frame {
     pub width: u16,
     /// Height in pixels.
     pub height: u16,
-    /// RGB555 pixels, row-major.
-    pub pixels: Vec<u16>,
+    /// The pixels, row-major.
+    pub pixels: Vec<Rgb555>,
 }
 
 /// A checkpoint whose frame differs from the golden.
@@ -581,7 +582,7 @@ mod tests {
     struct Counter {
         frame: u16,
         buttons: Buttons,
-        pixels: Vec<u16>,
+        pixels: Vec<Rgb555>,
     }
 
     impl Counter {
@@ -589,7 +590,7 @@ mod tests {
             Self {
                 frame: 0,
                 buttons: Buttons::empty(),
-                pixels: vec![0; 8],
+                pixels: vec![Rgb555::BLACK; 8],
             }
         }
     }
@@ -604,7 +605,7 @@ mod tests {
         fn run_frame(&mut self) -> VideoFrame<'_> {
             self.frame += 1;
             let value = self.frame.wrapping_add(self.buttons.bits());
-            self.pixels.fill(value);
+            self.pixels.fill(pixel(value));
             VideoFrame {
                 width: 4,
                 height: 2,
@@ -618,8 +619,13 @@ mod tests {
         String::from(digit).repeat(64)
     }
 
+    /// `bits` as a pixel.
+    fn pixel(bits: u16) -> Rgb555 {
+        Rgb555::new(bits).unwrap()
+    }
+
     fn counter_hash(value: u16) -> FrameHash {
-        let pixels = [value; 8];
+        let pixels = [pixel(value); 8];
         frame_hash(&VideoFrame {
             width: 4,
             height: 2,
@@ -669,7 +675,7 @@ mod tests {
     // @source: adr-0015
     #[test]
     fn the_frame_hash_is_blake3_of_little_endian_pixels() {
-        let pixels = [0x7FFF_u16, 0x0001];
+        let pixels = [pixel(0x7FFF), pixel(0x0001)];
         let found = frame_hash(&VideoFrame {
             width: 2,
             height: 1,
@@ -741,7 +747,7 @@ mod tests {
         let golden = golden();
         let frame = capture(&golden, &mut Counter::new(), 2).unwrap();
         assert_eq!((frame.width, frame.height), (4, 2));
-        assert_eq!(frame.pixels, vec![2 + Buttons::START.bits(); 8]);
+        assert_eq!(frame.pixels, vec![pixel(2 + Buttons::START.bits()); 8]);
     }
 
     // @source: adr-0015

@@ -120,8 +120,8 @@ pub(crate) trait Registers {
     fn write(&mut self, register: Self::Register, value: u8);
 }
 
-/// Everything on the CPU's side of the machine except the CPU itself.
-#[derive(Clone)]
+/// Everything on the CPU's side of the machine except the CPU itself. Its clone copies the
+/// state and starts with empty video outputs.
 pub(crate) struct Bus {
     /// Work RAM, 128 KiB, allocated on the heap without passing through the stack.
     pub(crate) wram: Box<[u8]>,
@@ -142,7 +142,7 @@ pub(crate) struct Bus {
     /// latch (ADR 0021, point 7; ADR 0028).
     pub(crate) ppu: Ppu,
     /// The frame being drawn and the last presented frame: outputs, not state, so a clone
-    /// of the bus starts without them (ADR 0028, point 10).
+    /// of the bus starts with `Video::default()` (ADR 0028, point 10).
     pub(crate) video: Video,
     /// $4202–$4206 and $4214–$4217: the multiply and divide unit (ADR 0023).
     pub(crate) math: Math,
@@ -158,6 +158,48 @@ pub(crate) struct Bus {
     pub(crate) now: Cycles,
     /// Line and frame position, the refresh schedule and the deadline table.
     pub(crate) timing: Timing,
+}
+
+impl Clone for Bus {
+    /// Copies every field but `video`, which starts empty: outputs are not state, and
+    /// snapshots that never render never pay for frame buffers (technical design section 5;
+    /// ADR 0028, point 10).
+    fn clone(&self) -> Self {
+        let Self {
+            wram,
+            cartridge,
+            open_bus_value,
+            wram_port_address,
+            fast_rom,
+            interrupts,
+            io_port,
+            ppu,
+            video: _,
+            math,
+            ports,
+            dma,
+            apu,
+            now,
+            timing,
+        } = self;
+        Self {
+            wram: wram.clone(),
+            cartridge: cartridge.clone(),
+            open_bus_value: *open_bus_value,
+            wram_port_address: *wram_port_address,
+            fast_rom: *fast_rom,
+            interrupts: *interrupts,
+            io_port: *io_port,
+            ppu: ppu.clone(),
+            video: Video::default(),
+            math: *math,
+            ports: *ports,
+            dma: *dma,
+            apu: *apu,
+            now: *now,
+            timing: *timing,
+        }
+    }
 }
 
 impl fmt::Debug for Bus {

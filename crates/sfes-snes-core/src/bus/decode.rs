@@ -127,7 +127,7 @@ pub(crate) fn decode(map: &MemoryMap, address: u32) -> Target {
     clippy::cast_possible_truncation,
     reason = "the B-bus address and the joypad register are the offset's low byte"
 )]
-const fn decode_system_area(offset: u16) -> Target {
+fn decode_system_area(offset: u16) -> Target {
     match offset {
         0x2100..=0x21FF => Target::BBus(decode_b_bus(offset as u8)),
         0x4000..=0x43FF => match decode_cpu_register(offset) {
@@ -198,11 +198,11 @@ const fn decode_cpu_register(offset: u16) -> Option<CpuRegister> {
 // @source: anomie-regs#registers
 // @source: adr-0019
 // @source: adr-0028
-pub(crate) const fn decode_b_bus(address: u8) -> BBus {
+pub(crate) fn decode_b_bus(address: u8) -> BBus {
     match address {
-        0x00..=0x3F => match Register::from_b_bus(address) {
-            Some(register) => BBus::Ppu(register),
-            None => BBus::Unanswered,
+        0x00..=0x3F => match Register::try_from(address) {
+            Ok(register) => BBus::Ppu(register),
+            Err(_) => BBus::Unanswered,
         },
         0x40..=0x7F => BBus::Apu(ApuPort::from_b_bus(address)),
         0x80 => BBus::WramData,

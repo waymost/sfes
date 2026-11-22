@@ -34,7 +34,7 @@ The crate models both chips as one `Ppu`. It holds no reference to the machine: 
 
 ## Registers
 
-[`Register`](../../crates/sfes-snes-ppu/src/register.rs) names all 64 registers. Each variant's discriminant is its B-bus address, and its doc line gives the address and the documents' mnemonic (AGENTS.md section 4). The bus decodes B-bus `$00–$3F` with `Register::from_b_bus`; nothing else in the PPU sees an address.
+[`Register`](../../crates/sfes-snes-ppu/src/register.rs) names all 64 registers. Each variant's discriminant is its B-bus address, and its doc line gives the address and the documents' mnemonic (AGENTS.md section 4). `Register::ALL` lists them in address order, and the bus decodes B-bus `$00–$3F` with `Register::try_from`, which fails above `$3F`; nothing else in the PPU sees an address.
 
 ### Reads
 
@@ -62,9 +62,9 @@ A read sets the latch to the whole byte it returned. A DMA transfer's B-bus read
 
 [`Ppu::render_line`](../../crates/sfes-snes-ppu/src/ppu.rs) draws one line into a [`LineOut`](../../crates/sfes-snes-ppu/src/line.rs), from the registers and memories as they stand (technical design section 5; ADR 0028, point 7):
 
-- **Width.** A line is 512 pixels in BG modes 5 and 6 (`$2105` bits 2–0) or with pseudo-hires (`$2133` bit 3), otherwise 256 (`anomie-regs#2105`, `#2133`, `fullsnes#snesppuresolution`).
+- **Width.** A line's `LineWidth` is `Wide`, 512 pixels, in BG modes 5 and 6 (`$2105` bits 2–0) or with pseudo-hires (`$2133` bit 3), otherwise `Normal`, 256 (`anomie-regs#2105`, `#2133`, `fullsnes#snesppuresolution`).
 - **Interlace.** The line records whether `$2133` bit 0 was set.
-- **Pixels.** A pixel is a CGRAM colour: red in bits 4–0, green in 9–5, blue in 14–10, bit 15 clear (`fullsnes#snesppucolorpalettememorycgramanddirectcolors`). Until the layers arrive, every pixel is the backdrop, CGRAM entry 0, which is what a line shows where every BG and sprite pixel is transparent. In a wide line the sub screen's pixels use colour 0 as well (`fullsnes#snesppuresolution`, "Hires Notes").
+- **Pixels.** A pixel is a CGRAM colour, an `sfes_api::Rgb555`: red in bits 4–0, green in 9–5, blue in 14–10, bit 15 clear (`fullsnes#snesppucolorpalettememorycgramanddirectcolors`). CGRAM does not store bit 15, so the PPU drops it, and `Rgb555` refuses a value with it set. Until the layers arrive, every pixel is the backdrop, CGRAM entry 0, which is what a line shows where every BG and sprite pixel is transparent. In a wide line the sub screen's pixels use colour 0 as well (`fullsnes#snesppuresolution`, "Hires Notes").
 
 The machine decides when a line is drawn and how lines make a frame ([`core.md`](core.md#drawing-and-presenting-frames)).
 
@@ -90,11 +90,11 @@ Two alternatives were rejected. A fixed 512 × 478 canvas would cost four times 
 | File | What it holds |
 | --- | --- |
 | [`ppu.rs`](../../crates/sfes-snes-ppu/src/ppu.rs) | `Ppu`: the state, power-on and reset, `peek`, `after_read`, `write`, the counter latch and `render_line` |
-| [`register.rs`](../../crates/sfes-snes-ppu/src/register.rs) | `Register` and `ReadKind`: the 64 registers and what a read of each returns |
+| [`register.rs`](../../crates/sfes-snes-ppu/src/register.rs) | `Register`, `ReadKind` and `NotAPpuRegister`: the 64 registers, the address conversion and what a read of each returns |
 | [`counters.rs`](../../crates/sfes-snes-ppu/src/counters.rs) | The H/V counter latch and its flip-flops |
-| [`line.rs`](../../crates/sfes-snes-ppu/src/line.rs) | `LineOut`: one drawn line |
+| [`line.rs`](../../crates/sfes-snes-ppu/src/line.rs) | `LineOut` and `LineWidth`: one drawn line and its width |
 
-The crate is `no_std` with `alloc` and depends only on `sfes-api` (technical design section 12). The machine implements its bus's `Registers` trait for `Ppu` in [`bus/ppu.rs`](../../crates/sfes-snes-core/src/bus/ppu.rs).
+The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror` (technical design section 12). The machine implements its bus's `Registers` trait for `Ppu` in [`bus/ppu.rs`](../../crates/sfes-snes-core/src/bus/ppu.rs).
 
 ## Testing
 

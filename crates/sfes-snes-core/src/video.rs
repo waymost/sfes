@@ -2,15 +2,16 @@
 // @source: fullsnes#snesppuresolution
 // @source: adr-0028
 //! The video outputs: the lines of the frame being drawn and the last presented frame
-//! (ADR 0028, points 8 to 10). They are outputs, not state: a clone of [`Video`] is empty,
-//! and serialization will skip it (technical design section 5).
+//! (ADR 0028, points 8 to 10). They are outputs, not state: the bus's clone starts a new,
+//! empty [`Video`], and serialization will skip it (technical design section 5).
 
 use alloc::vec::Vec;
 
-use sfes_api::{Field, VideoFrame};
-use sfes_snes_ppu::{LineOut, NORMAL_LINE, Ppu, WIDE_LINE};
+use sfes_api::{Field, Rgb555, VideoFrame};
+use sfes_snes_ppu::{LineOut, LineWidth, Ppu};
 
-/// The frame buffers. A clone starts empty.
+/// The frame buffers. They are not `Clone`: a copy of the machine starts with
+/// `Video::default()` (ADR 0028, point 10).
 #[derive(Debug, Default)]
 pub(crate) struct Video {
     /// The frame being drawn: line *L* is entry *L* − 1.
@@ -20,20 +21,13 @@ pub(crate) struct Video {
     /// Every line of the frame so far was rendered here, from line 1 on.
     complete: bool,
     /// The last presented frame, row-major.
-    frame: Vec<u16>,
+    frame: Vec<Rgb555>,
     /// Its width in pixels.
     width: u16,
     /// Its height in pixels.
     height: u16,
     /// The field it shows, if it is interlaced.
     field: Option<Field>,
-}
-
-impl Clone for Video {
-    /// An empty copy: outputs are not state (ADR 0028, point 10).
-    fn clone(&self) -> Self {
-        Self::default()
-    }
 }
 
 impl Video {
@@ -51,7 +45,7 @@ impl Video {
         self.next_line = line + 1;
         let index = usize::from(line.saturating_sub(1));
         if self.lines.len() <= index {
-            self.lines.resize_with(index + 1, LineOut::new);
+            self.lines.resize_with(index + 1, LineOut::default);
         }
         if let Some(out) = self.lines.get_mut(index) {
             ppu.render_line(line, out);
@@ -79,29 +73,32 @@ impl Video {
         let Some(lines) = self.lines.get(..count).filter(|_| complete) else {
             return;
         };
-        let wide = lines.iter().any(LineOut::wide);
+        let width = if lines.iter().any(|line| line.width() == LineWidth::Wide) {
+            LineWidth::Wide
+        } else {
+            LineWidth::Normal
+        };
         let rows = if lines.iter().any(LineOut::interlaced) {
             2
         } else {
             1
         };
-        let width = if wide { WIDE_LINE } else { NORMAL_LINE };
         self.frame.clear();
-        self.frame.reserve(width * count * rows);
+        self.frame.reserve(width.pixels() * count * rows);
         for line in lines {
             let start = self.frame.len();
-            if wide && !line.wide() {
+            if line.width() == width {
+                self.frame.extend_from_slice(line.pixels());
+            } else {
                 for &pixel in line.pixels() {
                     self.frame.extend([pixel, pixel]);
                 }
-            } else {
-                self.frame.extend_from_slice(line.pixels());
             }
             if rows == 2 {
                 self.frame.extend_from_within(start..);
             }
         }
-        self.width = u16::try_from(width).unwrap_or(u16::MAX);
+        self.width = u16::try_from(width.pixels()).unwrap_or(u16::MAX);
         self.height = u16::try_from(count * rows).unwrap_or(u16::MAX);
         self.field = (rows == 2).then_some(field);
     }
@@ -136,8 +133,21 @@ mod tests {
     // @source: adr-0028
     fn ppu(color: u16) -> Ppu {
         let mut ppu = Ppu::power_on(&mut SplitMix64::new(0));
-        ppu.cgram_mut()[..2].copy_from_slice(&color.to_le_bytes());
+        set_backdrop(&mut ppu, color);
         ppu
+    }
+
+    /// Sets the backdrop, CGRAM entry 0, to `color`.
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    // @source: adr-0028
+    fn set_backdrop(ppu: &mut Ppu, color: u16) {
+        ppu.cgram_mut()[..2].copy_from_slice(&color.to_le_bytes());
+    }
+
+    /// `bits` as a pixel.
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    fn pixel(bits: u16) -> Rgb555 {
+        Rgb555::new(bits).unwrap()
     }
 
     // @source: anomie-timing#s-ppu/rendering
@@ -158,7 +168,7 @@ mod tests {
         } = video.frame();
         assert_eq!(field, None);
         assert_eq!((width, height), (256, 224));
-        assert!(pixels.iter().all(|&pixel| pixel == 0x1234));
+        assert!(pixels.iter().all(|&found| found == pixel(0x1234)));
         assert_eq!(pixels.len(), 256 * 224);
     }
 
@@ -172,7 +182,7 @@ mod tests {
         for line in 1..=239 {
             if line == 100 {
                 ppu.write(Register::BackgroundMode, 0x05);
-                ppu.cgram_mut()[..2].copy_from_slice(&[0x02, 0x00]);
+                set_backdrop(&mut ppu, 0x0002);
             }
             if line == 101 {
                 ppu.write(Register::BackgroundMode, 0x01);
@@ -189,9 +199,9 @@ mod tests {
         assert_eq!(field, None);
         assert_eq!((width, height), (512, 239));
         let row = |row: usize| &pixels[row * 512..(row + 1) * 512];
-        assert!(row(0).iter().all(|&pixel| pixel == 0x0001));
-        assert!(row(99).iter().all(|&pixel| pixel == 0x0002));
-        assert!(row(100).iter().all(|&pixel| pixel == 0x0002));
+        assert!(row(0).iter().all(|&found| found == pixel(0x0001)));
+        assert!(row(99).iter().all(|&found| found == pixel(0x0002)));
+        assert!(row(100).iter().all(|&found| found == pixel(0x0002)));
     }
 
     // @source: anomie-regs#2133
@@ -202,7 +212,7 @@ mod tests {
         ppu.write(Register::ScreenMode, 0x01);
         let mut video = Video::default();
         for line in 1..=224_u16 {
-            ppu.cgram_mut()[..2].copy_from_slice(&line.to_le_bytes());
+            set_backdrop(&mut ppu, line);
             video.render(&mut ppu, line);
         }
         video.present(224, Field::First);
@@ -215,7 +225,7 @@ mod tests {
         assert_eq!((width, height, field), (256, 448, Some(Field::First)));
         for row in 0..448 {
             let line = u16::try_from(row / 2 + 1).unwrap();
-            assert_eq!(pixels[row * 256], line, "row {row}");
+            assert_eq!(pixels[row * 256], pixel(line), "row {row}");
         }
     }
 
@@ -228,8 +238,8 @@ mod tests {
             video.render(&mut ppu, line);
         }
         video.present(224, Field::First);
-        // A clone, or a reset, part-way through the next frame.
-        let mut copy = video.clone();
+        // A copy of the machine, or a reset, part-way through the next frame.
+        let mut copy = Video::default();
         for line in 1..=100 {
             video.render(&mut ppu, line);
         }
@@ -240,9 +250,15 @@ mod tests {
         copy.present(224, Field::First);
         assert_eq!(copy.frame().width, 0);
         video.abandon();
-        ppu.cgram_mut()[..2].copy_from_slice(&[0x05, 0x00]);
+        set_backdrop(&mut ppu, 0x0005);
         video.present(224, Field::First);
-        assert!(video.frame().pixels.iter().all(|&pixel| pixel == 0x0004));
+        assert!(
+            video
+                .frame()
+                .pixels
+                .iter()
+                .all(|&found| found == pixel(0x0004))
+        );
         // The next whole frame is presented.
         for line in 1..=224 {
             copy.render(&mut ppu, line);

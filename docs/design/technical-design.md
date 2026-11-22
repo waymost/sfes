@@ -288,7 +288,7 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
 
 - Large memories are `Box<[u8; N]>`, never `[u8; N]` fields, so machines never put hundreds of KiB on the stack. They are allocated with `vec![0; N].into_boxed_slice().try_into()` instead of building the array on the stack first.
 - Immutable data (ROM, firmware, the memory map) is `Arc`-shared and skipped by serde, then rebuilt on load.
-- **Outputs are not state.** The frame buffer, layer buffers and audio are outputs. They live in the bus, beside the state it holds, so every place that renders can reach them, in a wrapper whose clone is empty and which serialization skips (ADR 0028, point 10). A clone therefore gets empty outputs, which allocate on their first rendered frame. Search and RL snapshots that never render never pay for frame buffers.
+- **Outputs are not state.** The frame buffer, layer buffers and audio are outputs. They live in the bus, beside the state it holds, so every place that renders can reach them. They are not `Clone`: the bus's clone starts them empty, and serialization skips them (ADR 0028, point 10). A clone therefore gets empty outputs, which allocate on their first rendered frame. Search and RL snapshots that never render never pay for frame buffers.
 
 ### 65C816 (`sfes-snes-cpu`)
 

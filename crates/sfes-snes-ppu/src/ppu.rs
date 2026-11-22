@@ -7,11 +7,11 @@
 
 use alloc::{boxed::Box, vec};
 
-use sfes_api::SplitMix64;
+use sfes_api::{Rgb555, SplitMix64};
 
 use crate::{
     counters::{CounterLatch, CounterRegister},
-    line::LineOut,
+    line::{LineOut, LineWidth},
     register::{ReadKind, Register},
 };
 
@@ -196,20 +196,25 @@ impl Ppu {
     pub fn render_line(&mut self, line: u16, out: &mut LineOut) {
         let mode = self.background_mode & BACKGROUND_MODE_MASK;
         // BG modes 5 and 6 are true hi-res.
-        let wide = self.screen_mode & PSEUDO_HIRES != 0 || matches!(mode, 5 | 6);
+        let width = if self.screen_mode & PSEUDO_HIRES != 0 || matches!(mode, 5 | 6) {
+            LineWidth::Wide
+        } else {
+            LineWidth::Normal
+        };
         let interlaced = self.screen_mode & INTERLACE != 0;
-        out.fill(line, wide, interlaced, self.color(0));
+        out.fill(line, width, interlaced, self.color(0));
         self.next_line = line + 1;
     }
 
     /// CGRAM entry `index` as a 15-bit colour, little-endian.
     // @source: anomie-regs#213b
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
-    fn color(&self, index: u8) -> u16 {
+    fn color(&self, index: u8) -> Rgb555 {
         let offset = usize::from(index) * 2;
         let low = self.cgram.get(offset).copied().unwrap_or_default();
         let high = self.cgram.get(offset + 1).copied().unwrap_or_default();
-        u16::from_le_bytes([low, high]) & COLOR_MASK
+        // Masked to 15 bits, so it is always a colour.
+        Rgb555::new(u16::from_le_bytes([low, high]) & COLOR_MASK).unwrap_or_default()
     }
 
     /// VRAM, 64 KiB.
@@ -346,23 +351,30 @@ mod tests {
     fn a_line_is_the_backdrop_and_wide_in_modes_5_and_6_or_pseudo_hires() {
         let mut ppu = ppu();
         ppu.cgram_mut()[..2].copy_from_slice(&[0x1F, 0xFC]);
-        let mut out = LineOut::new();
+        let mut out = LineOut::default();
         ppu.write(Register::BackgroundMode, 0x01);
         ppu.render_line(1, &mut out);
         assert_eq!(out.line(), 1);
-        assert!(!out.wide());
+        assert_eq!(out.width(), LineWidth::Normal);
         assert!(!out.interlaced());
         // Bit 15 is not part of the colour.
-        assert_eq!(out.pixels(), [0x7C1F; 256]);
+        assert_eq!(out.pixels(), [Rgb555::new(0x7C1F).unwrap(); 256]);
         assert_eq!(ppu.next_line(), 2);
-        for (mode, screen_mode, wide) in
-            [(5, 0, true), (6, 0, true), (7, 0, false), (1, 0x08, true)]
-        {
+        for (mode, screen_mode, width) in [
+            (5, 0, LineWidth::Wide),
+            (6, 0, LineWidth::Wide),
+            (7, 0, LineWidth::Normal),
+            (1, 0x08, LineWidth::Wide),
+        ] {
             ppu.write(Register::BackgroundMode, mode);
             ppu.write(Register::ScreenMode, screen_mode);
             ppu.render_line(2, &mut out);
-            assert_eq!(out.wide(), wide, "mode {mode}, $2133 = {screen_mode:#04X}");
-            assert_eq!(out.pixels().len(), if wide { 512 } else { 256 });
+            assert_eq!(
+                out.width(),
+                width,
+                "mode {mode}, $2133 = {screen_mode:#04X}"
+            );
+            assert_eq!(out.pixels().len(), width.pixels());
         }
         ppu.write(Register::ScreenMode, 0x01);
         ppu.render_line(3, &mut out);
@@ -377,7 +389,7 @@ mod tests {
         ppu.write(Register::BackgroundMode, 0x05);
         ppu.write(Register::ScreenMode, 0x0D);
         ppu.ppu1_open_bus = 0x11;
-        ppu.render_line(1, &mut LineOut::new());
+        ppu.render_line(1, &mut LineOut::default());
         let before = ppu.clone();
         ppu.reset();
         assert_eq!(ppu.screen_mode, 0);
