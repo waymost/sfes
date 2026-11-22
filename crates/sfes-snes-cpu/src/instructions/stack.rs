@@ -90,9 +90,9 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7-22c
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-w65c816s#7.1
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-phd
     // @source: 6502org-65c816-opcodes#6.8.3
+    // @source: adr-0008
     pub(crate) fn phd(&mut self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
         self.push_value(bus, self.d, StackWrap::BankZero);
@@ -153,9 +153,9 @@ impl Cpu65816 {
     /// 1 in emulation mode, although 7.1 does not list it (ADR 0009).
     // @source: wdc-w65c816s#table-5-7-22b
     // @source: wdc-w65c816s#table-5-5
-    // @source: adr-0009
     // @source: wdc-65816-manual#chapter-18-plb
     // @source: 6502org-65c816-opcodes#6.8.3
+    // @source: adr-0009
     pub(crate) fn plb(&mut self, bus: &mut impl Bus65816) {
         self.pull_internal_cycles(bus);
         let value = self.pull(bus, StackWrap::BankZero);
@@ -169,9 +169,9 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7-22b
     // @source: wdc-w65c816s#table-5-5
     // @source: wdc-w65c816s#7.1
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-pld
     // @source: 6502org-65c816-opcodes#6.8.3
+    // @source: adr-0008
     pub(crate) fn pld(&mut self, bus: &mut impl Bus65816) {
         self.pull_internal_cycles(bus);
         let value = self.pull_value::<u16>(bus, StackWrap::BankZero);
@@ -184,9 +184,9 @@ impl Cpu65816 {
     /// 22d). No memory is read at that address.
     // @source: wdc-w65c816s#table-5-7-22d
     // @source: wdc-w65c816s#7.1
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-pea
     // @source: 6502org-65c816-opcodes#6.8.1
+    // @source: adr-0008
     pub(crate) fn pea(&mut self, bus: &mut impl Bus65816) {
         let value = self.fetch_address(bus);
         self.push_value(bus, value, StackWrap::BankZero);
@@ -197,9 +197,9 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7-22e
     // @source: wdc-w65c816s#7.1
     // @source: wdc-w65c816s#7.2
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-pei
     // @source: 6502org-65c816-opcodes#6.8.1
+    // @source: adr-0008
     pub(crate) fn pei(&mut self, bus: &mut impl Bus65816) {
         let value = self.effective_indirect(bus);
         self.push_value(bus, value, StackWrap::BankZero);
@@ -212,9 +212,9 @@ impl Cpu65816 {
     // @source: wdc-w65c816s#table-5-7-22f
     // @source: wdc-w65c816s#3.5.20
     // @source: wdc-w65c816s#7.1
-    // @source: adr-0008
     // @source: wdc-65816-manual#chapter-18-per
     // @source: 6502org-65c816-opcodes#6.8.1
+    // @source: adr-0008
     pub(crate) fn per(&mut self, bus: &mut impl Bus65816) {
         let offset = self.fetch_address(bus);
         self.internal_at_last_fetch(bus);

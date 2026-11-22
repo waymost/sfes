@@ -69,7 +69,8 @@ notes = """
 File timing.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors: the path of headings from the \
 top, each in kebab case as for anomie-regs, joined by `/`. The top level is the chip part (S-CPU (5A22) becomes s-cpu): \
 anomie-timing#s-cpu/clocks-and-refresh, anomie-timing#s-cpu/dma, anomie-timing#s-cpu/registers, anomie-timing#s-ppu/registers, \
-anomie-timing#s-ppu/detailed-renderer-timing, anomie-timing#s-apu/spc700."""
+anomie-timing#s-ppu/detailed-renderer-timing, anomie-timing#s-apu/spc700. \
+Known slips: s-cpu/dma gives the overscan bit as "$2133 bit 3"; it is bit 2 (anomie-regs#2133; ADR 0026)."""
 
 [[source]]
 id = "anomie-spc700"

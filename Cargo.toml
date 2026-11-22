@@ -57,6 +57,8 @@ undocumented_unsafe_blocks = "deny"
 self_named_module_files = "deny"
 wildcard_imports = "deny"
 enum_glob_use = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
 
 # `cargo xtask` hashes gigabytes of test vectors; unoptimized SHA-256 takes minutes.
 [profile.dev.package.sha2]

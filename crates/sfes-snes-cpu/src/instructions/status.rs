@@ -102,9 +102,9 @@ impl Cpu65816 {
     /// WDM: "performs no operation" (7.16) as a two-byte instruction. Its second cycle is an
     /// internal cycle at the second byte's address, which is skipped (ADR 0010).
     // @source: wdc-w65c816s#7.16
-    // @source: adr-0010
     // @source: wdc-65816-manual#chapter-18-wdm
     // @source: 6502org-65c816-opcodes#6.7
+    // @source: adr-0010
     pub(crate) fn wdm(&mut self, bus: &mut impl Bus65816) {
         self.internal_at_program_counter(bus);
         self.pc = self.pc.wrapping_add(1);
@@ -197,8 +197,8 @@ mod tests {
         assert_eq!(cpu.p, Flags::M | Flags::X);
     }
 
-    // @source: adr-0010
     // @source: 6502org-65c816-opcodes#6.7
+    // @source: adr-0010
     #[test]
     fn wdm_skips_its_second_byte_in_an_internal_cycle() {
         let mut cpu = native(Flags::empty());
