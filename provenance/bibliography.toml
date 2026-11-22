@@ -40,7 +40,9 @@ File regs.txt. Retrieved by hand by the project owner (the page refuses automate
 printed at the start of the entry, in lower case (anomie-regs#2100, anomie-regs#210d, anomie-regs#43x0, anomie-regs#43xa). A section is the \
 path of its headings from the top, each in kebab case, joined by `/` (anomie-regs#sprites, anomie-regs#backgrounds/mode-7, \
 anomie-regs#rendering-the-screen/mosaic). Kebab case lower-cases the heading, writes `&` as `and`, drops parenthesised text and other \
-punctuation, and joins words with `-`."""
+punctuation, and joins words with `-`. \
+Known slips: backgrounds/tile-maps-and-character-maps gives a tilemap's word address as starting `(Addr<<9)`; the field is `Addr>>10`, 1K words (anomie-regs#2107, \
+fullsnes#snesppubgcontrol; ADR 0030)."""
 
 [[source]]
 id = "anomie-memmap"

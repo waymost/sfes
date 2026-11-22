@@ -12,6 +12,7 @@ use alloc::{boxed::Box, vec};
 use sfes_api::{Rgb555, SplitMix64};
 
 use crate::{
+    background::{Background, Backgrounds, Color, Setup, priority_order},
     counters::{CounterLatch, CounterRegister},
     line::{LineOut, LineWidth},
     memory::{CgramPort, Half, OamPort, VramPort},
@@ -49,6 +50,14 @@ const PPU2_VERSION: u8 = 3;
 const BACKGROUND_MODE_POWER_ON: u8 = 0x0F;
 /// `$2105` bits 2–0: the BG mode.
 const BACKGROUND_MODE_MASK: u8 = 0x07;
+/// `$2105` bit 3: mode 1's BG3 priority bit.
+const BACKGROUND_3_FIRST: u8 = 0x08;
+/// `$2130` bit 0: direct colour.
+const DIRECT_COLOR: u8 = 0x01;
+/// `$212C` bits 3–0: BG4 to BG1 on the main screen; bit 4 is the sprites.
+const MAIN_SCREEN_BACKGROUNDS: u8 = 0x0F;
+/// The pixels of a normal line.
+const LINE_PIXELS: u16 = 256;
 /// `$2133` bit 3: pseudo-hires.
 const PSEUDO_HIRES: u8 = 0x08;
 /// `$2133` bit 0: interlace.
@@ -79,6 +88,12 @@ pub struct Ppu {
     mode7: Mode7,
     /// $2105 BGMODE: the BG mode and character sizes.
     background_mode: u8,
+    /// $2107–$2114 BG1SC–BG4VOFS: the backgrounds' tilemaps, characters and scrolls.
+    backgrounds: Backgrounds,
+    /// $212C TM: the layers on the main screen.
+    main_screen: u8,
+    /// $2130 CGWSEL: colour math control A; only its direct-colour bit is used so far.
+    color_select: u8,
     /// $2133 SETINI: external sync, EXTBG, pseudo-hires, overscan and interlace.
     screen_mode: u8,
     /// The last value read from `$2134–$2136`, `$2138–$213A` or `$213E`.
@@ -124,6 +139,9 @@ impl Ppu {
             cgram_port: CgramPort::power_on(),
             mode7: Mode7::power_on(),
             background_mode: BACKGROUND_MODE_POWER_ON,
+            backgrounds: Backgrounds::power_on(),
+            main_screen: 0,
+            color_select: 0,
             screen_mode: 0,
             ppu1_open_bus: 0,
             ppu2_open_bus: 0,
@@ -333,9 +351,24 @@ impl Ppu {
             Register::OamAddressHigh => self.oam_port.write_address_high(value),
             Register::OamData => self.oam_port.write(&mut self.oam, value, blank),
             Register::BackgroundMode => self.background_mode = value,
-            Register::Background1HorizontalScroll
-            | Register::Background1VerticalScroll
-            | Register::Mode7MatrixC
+            Register::Background1Tilemap
+            | Register::Background2Tilemap
+            | Register::Background3Tilemap
+            | Register::Background4Tilemap
+            | Register::Background12Characters
+            | Register::Background34Characters
+            | Register::Background2HorizontalScroll
+            | Register::Background2VerticalScroll
+            | Register::Background3HorizontalScroll
+            | Register::Background3VerticalScroll
+            | Register::Background4HorizontalScroll
+            | Register::Background4VerticalScroll => self.backgrounds.write(register, value),
+            // These two are also the Mode 7 scroll, which has a latch of its own.
+            Register::Background1HorizontalScroll | Register::Background1VerticalScroll => {
+                self.backgrounds.write(register, value);
+                self.mode7.write(value);
+            }
+            Register::Mode7MatrixC
             | Register::Mode7MatrixD
             | Register::Mode7CenterX
             | Register::Mode7CenterY => {
@@ -361,6 +394,8 @@ impl Ppu {
                 let allowed = blank || self.signals.period == Period::HorizontalBlank;
                 self.cgram_port.write(&mut self.cgram, value, allowed);
             }
+            Register::MainScreen => self.main_screen = value,
+            Register::ColorMathSelect => self.color_select = value,
             Register::ScreenMode => self.screen_mode = value,
             _ => {}
         }
@@ -392,16 +427,23 @@ impl Ppu {
 
     /// Renders `line` into `out` from the registers and memories as they stand, and makes
     /// the next line the one after it (technical design section 5; ADR 0028, points 6 and
-    /// 7):
+    /// 7; ADR 0030):
     ///
     /// - the line is 512 pixels in BG mode 5 or 6 or with pseudo-hires, else 256;
-    /// - until the layers arrive, every pixel, the sub screen's included, is the backdrop,
-    ///   CGRAM entry 0.
+    /// - in BG modes 0 to 4 each pixel is the first non-transparent pixel, front to back,
+    ///   of the backgrounds `$212C` puts on the main screen, else the backdrop, CGRAM
+    ///   entry 0;
+    /// - in the other modes every pixel is the backdrop, until #93 and #97;
+    /// - a wide line writes each main-screen pixel twice, until the sub screen arrives.
     // @source: anomie-regs#2105
+    // @source: anomie-regs#212c
     // @source: anomie-regs#2133
+    // @source: anomie-regs#backgrounds/bg-modes
+    // @source: anomie-regs#rendering-the-screen/rendering-the-screen
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: fullsnes#snesppuresolution
     // @source: adr-0028
+    // @source: adr-0030
     pub fn render_line(&mut self, line: u16, out: &mut LineOut) {
         let mode = self.background_mode & BACKGROUND_MODE_MASK;
         // BG modes 5 and 6 are true hi-res.
@@ -412,6 +454,39 @@ impl Ppu {
         };
         let interlaced = self.screen_mode & INTERLACE != 0;
         out.fill(line, width, interlaced, self.color(0));
+        let setup = Setup {
+            control: self.background_mode,
+            direct_color: self.color_select & DIRECT_COLOR != 0,
+        };
+        let order = priority_order(mode, self.background_mode & BACKGROUND_3_FIRST != 0);
+        let enabled = self.main_screen & MAIN_SCREEN_BACKGROUNDS;
+        let repeat = width.pixels() / usize::from(LINE_PIXELS);
+        for x in 0..LINE_PIXELS {
+            // Each enabled background's pixel here, fetched once however many layers it has.
+            let samples = Background::ALL.map(|background| {
+                if enabled >> background as u8 & 1 == 0 {
+                    return None;
+                }
+                self.backgrounds
+                    .sample(&self.vram, setup, background, x, line)
+            });
+            let shown = order.iter().find_map(|layer| {
+                samples
+                    .get(layer.background as usize)
+                    .copied()
+                    .flatten()
+                    .filter(|sample| sample.high == layer.high)
+            });
+            let Some(sample) = shown else { continue };
+            let color = match sample.color {
+                Color::Palette(index) => self.color(index),
+                Color::Direct(color) => Rgb555::new(color).unwrap_or_default(),
+            };
+            let start = usize::from(x) * repeat;
+            if let Some(pixels) = out.pixels_mut().get_mut(start..start + repeat) {
+                pixels.fill(color);
+            }
+        }
         self.next_line = line + 1;
     }
 
@@ -804,5 +879,99 @@ mod tests {
         assert_eq!(read(&mut ppu, Register::VramDataReadLow), Some(0x03));
         assert_eq!(ppu.ppu1_open_bus, 0x03);
         assert_eq!(ppu.vram_port.address(), 0x000B);
+    }
+
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    // @source: adr-0030
+    /// A PPU with empty VRAM and the colours 0 to 3 distinct: `$0001`, `$0002`, `$0004`
+    /// and `$0008`.
+    fn drawing_ppu() -> Ppu {
+        let mut ppu = ppu();
+        ppu.vram_mut().fill(0);
+        for (entry, color) in [1u16, 2, 4, 8].into_iter().enumerate() {
+            ppu.cgram_mut()[entry * 2..entry * 2 + 2].copy_from_slice(&color.to_le_bytes());
+        }
+        ppu
+    }
+
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    // @source: adr-0030
+    /// The colour of pixel `x` of a rendered line.
+    fn pixel(out: &LineOut, x: usize) -> u16 {
+        out.pixels()[x].bits()
+    }
+
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#backgrounds/mode-1
+    // @source: anomie-regs#rendering-the-screen/rendering-the-screen
+    // @source: adr-0030
+    #[test]
+    fn a_line_shows_the_first_enabled_opaque_layer_front_to_back() {
+        let mut ppu = drawing_ppu();
+        let mut out = LineOut::default();
+        // Mode 1. BG1's map at word $0400, characters at 0; BG2's map at $0800, characters
+        // at byte $2000.
+        ppu.write(Register::BackgroundMode, 0x01);
+        ppu.write(Register::Background1Tilemap, 0x04);
+        ppu.write(Register::Background2Tilemap, 0x08);
+        ppu.write(Register::Background12Characters, 0x10);
+        // BG1: tile 1, priority 0. BG2: tile 1, priority 1.
+        ppu.vram_mut()[0x800..0x802].copy_from_slice(&[0x01, 0x00]);
+        ppu.vram_mut()[0x1000..0x1002].copy_from_slice(&[0x01, 0x20]);
+        // A 4-bit tile is 32 bytes. BG1's tile 1: pixel 0 colour 1, pixel 1 colour 1.
+        // BG2's tile 1: pixel 0 colour 2.
+        ppu.vram_mut()[32] = 0xC0;
+        ppu.vram_mut()[0x2000 + 32 + 1] = 0x80;
+
+        // Nothing on the main screen: the backdrop.
+        ppu.render_line(0, &mut out);
+        assert_eq!(pixel(&out, 0), 1);
+        // BG1 alone.
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.render_line(0, &mut out);
+        assert_eq!([pixel(&out, 0), pixel(&out, 1), pixel(&out, 2)], [2, 2, 1]);
+        // BG2's priority-1 tile is in front of BG1's priority-0 one; BG1 shows where BG2
+        // is transparent.
+        ppu.write(Register::MainScreen, 0x03);
+        ppu.render_line(0, &mut out);
+        assert_eq!([pixel(&out, 0), pixel(&out, 1), pixel(&out, 2)], [4, 2, 1]);
+        // The sprite bit is not a background.
+        ppu.write(Register::MainScreen, 0x10);
+        ppu.render_line(0, &mut out);
+        assert_eq!(pixel(&out, 0), 1);
+    }
+
+    // @source: anomie-regs#2133
+    // @source: anomie-regs#backgrounds/bg-scrolling
+    // @source: adr-0028
+    // @source: adr-0030
+    #[test]
+    fn a_line_is_scrolled_by_its_background_and_a_wide_line_repeats_each_pixel() {
+        let mut ppu = drawing_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::BackgroundMode, 0x00);
+        ppu.write(Register::Background1Tilemap, 0x04);
+        ppu.write(Register::MainScreen, 0x01);
+        // Tile 1 at tile (0, 0), pixel 0 of its row 3 colour 1; BG1's vertical scroll
+        // moves line 5 to row 3 of the BG, which is -2 mod 1024 away.
+        ppu.vram_mut()[0x800] = 0x01;
+        ppu.vram_mut()[16 + 3 * 2] = 0x80;
+        ppu.write(Register::Background1VerticalScroll, 0xFE);
+        ppu.write(Register::Background1VerticalScroll, 0xFF);
+        ppu.render_line(5, &mut out);
+        assert_eq!([pixel(&out, 0), pixel(&out, 1)], [2, 1]);
+        // Horizontal scroll 1: pixel 0 shows what was pixel 1.
+        ppu.write(Register::Background1HorizontalScroll, 0x01);
+        ppu.write(Register::Background1HorizontalScroll, 0x00);
+        ppu.render_line(5, &mut out);
+        assert_eq!(pixel(&out, 0), 1);
+        // Pseudo-hires: 512 pixels, each written twice until the sub screen arrives.
+        ppu.write(Register::Background1HorizontalScroll, 0x00);
+        ppu.write(Register::Background1HorizontalScroll, 0x00);
+        ppu.write(Register::ScreenMode, 0x08);
+        ppu.render_line(5, &mut out);
+        assert_eq!(out.pixels().len(), 512);
+        let first = [0, 1, 2, 3].map(|x| pixel(&out, x));
+        assert_eq!(first, [2, 2, 1, 1]);
     }
 }

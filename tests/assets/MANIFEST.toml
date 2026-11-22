@@ -54,6 +54,36 @@ sha256 = "379aba977e6f29e222b9fb215e846b053a7ba49ed4a6f207c4fd8d70c79e7674"
 notes = "Own test cartridge: boots, writes $A5 to WRAM $7E:0000 and stops. Built from tests/carts/halt/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/bg-mode0.sfc"
+license = "own"
+sha256 = "5e3af3e5976481a6b49f6c0c525fc9f0cb84619f6147df02dad32fbf96091c0c"
+notes = "Own test cartridge: Draws BG mode 0: four 2-bit backgrounds with palettes 32 entries apart, overlapping at both tile priorities. Built from tests/carts/bg-mode0/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
+path = "carts/bg-mode1.sfc"
+license = "own"
+sha256 = "660bbc13f96e7707e6abdb04f493ca73a7ba7dbeea6fe68646731abf2995beb9"
+notes = "Own test cartridge: Draws BG mode 1 with the BG3 priority bit set: two 4-bit backgrounds and a 2-bit one in front. Built from tests/carts/bg-mode1/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
+path = "carts/bg-mode2.sfc"
+license = "own"
+sha256 = "98a72d312c5567f8196217a0ec8b5842c3e498bd847a458b63daf0923cd9fc0a"
+notes = "Own test cartridge: Draws BG mode 2: 4-bit backgrounds with 16x16 tiles, plain and flipped both ways, and an empty offset-per-tile map. Built from tests/carts/bg-mode2/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
+path = "carts/bg-mode3.sfc"
+license = "own"
+sha256 = "fb559c52608043db0057fe107a527ef3822f3962fccc914731c94b94a40a05ac"
+notes = "Own test cartridge: Draws BG mode 3: a 256-colour BG1 on a 64x32 map scrolled across the screen boundary, and a 16-colour BG2. Built from tests/carts/bg-mode3/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
+path = "carts/bg-mode4.sfc"
+license = "own"
+sha256 = "ad338fd56ecec36422f8be3fd60427faa4cf4fc20e1dfb49da4cf0a066411bfa"
+notes = "Own test cartridge: Draws BG mode 4: a 256-colour BG1 in direct colour mode and a 4-colour BG2. Built from tests/carts/bg-mode4/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "carts/bus-timing.sfc"
 license = "own"
 sha256 = "643a93c14c01b0d644286b8d4f539121a62decd85071157538b7964483c7fecf"
