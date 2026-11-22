@@ -4,8 +4,10 @@
 // @source: fullsnes#snespputimersandstatus
 // @source: adr-0021
 // @source: adr-0028
+// @source: adr-0029
 //! The H/V counter latch read at `$213C` OPHCT and `$213D` OPVCT (ADR 0021, point 7), with
-//! PPU2 open bus in the high byte's bits 7–1 (ADR 0028, point 4).
+//! PPU2 open bus in the high byte's bits 7–1 (ADR 0028, point 4), and the latch flag of
+//! `$213F` bit 6 (ADR 0029, point 10).
 
 /// OPHCT and OPVCT at power-on (fullsnes#snesiomap).
 const COUNTER_POWER_ON: u16 = 0x1FF;
@@ -82,11 +84,26 @@ impl CounterLatch {
         self.latched = true;
     }
 
-    /// Whether the counters were latched since `$213F` was last read.
+    /// Whether the counters were latched since the latch flag was last cleared: `$213F`
+    /// bit 6.
     // @source: anomie-regs#213f
-    #[cfg(test)]
+    // @source: fullsnes#snespputimersandstatus
     pub(crate) const fn latched(&self) -> bool {
         self.latched
+    }
+
+    /// A `$213F` read: both flip-flops return to the low byte, and the latch flag clears
+    /// if `external_latch`, `$4201` bit 7, is set (ADR 0029, point 10).
+    // @source: anomie-regs#213c
+    // @source: anomie-regs#213f
+    // @source: fullsnes#snespputimersandstatus
+    // @source: adr-0029
+    pub(crate) const fn read_status(&mut self, external_latch: bool) {
+        self.horizontal.high_next = false;
+        self.vertical.high_next = false;
+        if external_latch {
+            self.latched = false;
+        }
     }
 
     /// The byte a read of `register` returns, with `open_bus` as PPU2 open bus.

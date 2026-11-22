@@ -34,9 +34,9 @@ use alloc::{boxed::Box, vec};
 use core::fmt;
 
 use sfes_api::{Addr24, BusId, Cycles, Field, Observer, SplitMix64};
-use sfes_snes_cart::{Cartridge, WRAM_SIZE};
+use sfes_snes_cart::{Cartridge, Region, WRAM_SIZE};
 use sfes_snes_cpu::{Bus65816, Pending, Pins};
-use sfes_snes_ppu::{Ppu, Register};
+use sfes_snes_ppu::{Period, Ppu, Register, Signals};
 
 use crate::{
     bus::{
@@ -362,7 +362,7 @@ impl Bus {
             Target::BBus(device) => match device {
                 BBus::Ppu(Register::SoftwareLatch) => (None, true),
                 BBus::Ppu(register) => (
-                    self.ppu.peek(register),
+                    self.ppu.peek_with(register, self.ppu_signals()),
                     Ppu::read_has_side_effects(register),
                 ),
                 BBus::Apu(port) => (self.apu.peek(port), false),
@@ -646,13 +646,50 @@ impl Bus {
 
     /// Runs the PPU up to `now` before an access to its registers: renders every output
     /// line that has started and not been drawn (technical design section 4, catch-up rule
-    /// 2; ADR 0028, point 6). Vertical blank outputs nothing.
+    /// 2; ADR 0028, point 6), then passes it the signals of this moment (ADR 0029,
+    /// point 1). Vertical blank outputs nothing.
     // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0019
     // @source: adr-0028
+    // @source: adr-0029
     fn sync_ppu(&mut self) {
         if !self.timing.in_vertical_blank() {
             self.render_through(self.timing.line());
+        }
+        self.ppu.set_signals(self.ppu_signals());
+    }
+
+    /// What the PPU sees from the machine at `now` (ADR 0029, point 1):
+    ///
+    /// - the period: vertical blank, else horizontal blank from H=274 to H=1, else active
+    ///   display;
+    /// - the field, `$213F` bit 7 (ADR 0020, point 4);
+    /// - whether the console is PAL;
+    /// - `$4201` bit 7.
+    // @source: anomie-regs#213f
+    // @source: anomie-regs#4201
+    // @source: anomie-timing#s-ppu/blanking-periods
+    // @source: adr-0020
+    // @source: adr-0021
+    // @source: adr-0029
+    const fn ppu_signals(&self) -> Signals {
+        let period = if self.timing.in_vertical_blank() {
+            Period::VerticalBlank
+        } else if self.timing.in_horizontal_blank(self.now) {
+            Period::HorizontalBlank
+        } else {
+            Period::Active
+        };
+        let field = if self.timing.field(self.now) {
+            Field::Second
+        } else {
+            Field::First
+        };
+        Signals {
+            period,
+            field,
+            pal: matches!(self.timing.region(), Region::Pal),
+            external_latch: self.io_port & PPU_LATCH != 0,
         }
     }
 
@@ -667,12 +704,15 @@ impl Bus {
     }
 
     /// Vertical blank has begun on `line`: the PPU renders the lines left before it, the
-    /// frame is presented with the field it shows and the next frame starts from line 1
-    /// (ADR 0028, points 6 and 8).
+    /// frame is presented with the field it shows, the next frame starts from line 1
+    /// (ADR 0028, points 6 and 8), and the OAM address is reloaded unless forced blank is
+    /// on (ADR 0029, point 6).
     // @source: anomie-regs#213f
+    // @source: anomie-timing#oam-reset
     // @source: anomie-timing#s-ppu/blanking-periods
     // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0028
+    // @source: adr-0029
     fn end_frame_video(&mut self, line: u16) {
         let last = line.saturating_sub(1);
         self.render_through(last);
@@ -683,6 +723,7 @@ impl Bus {
         };
         self.video.present(last, field);
         self.ppu.start_frame();
+        self.ppu.start_vertical_blank();
     }
 
     /// Ends a CPU cycle at `speed`: the multiply and divide unit counts it (ADR 0023,

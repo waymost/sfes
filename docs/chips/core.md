@@ -73,7 +73,7 @@ The cartridge's memory map (ADR 0017) says what answers each 8 KiB page: WRAM, R
 | `$4000–$43FF` | Internal | The 5A22's registers |
 | `$2000–$20FF`, `$2200–$3FFF`, `$4400–$5FFF` | A | Nothing on the console; only a cartridge could answer |
 
-Before an access to the PPU's or the APU's registers the bus calls that chip's sync hook, so the chip runs up to `now` (technical design, section 4, catch-up rule 1). The PPU's hook draws the lines that have started (see [Drawing and presenting frames](#drawing-and-presenting-frames)). The APU's ports answer from a placeholder (below; ADR 0027).
+Before an access to the PPU's or the APU's registers the bus calls that chip's sync hook, so the chip runs up to `now` (technical design, section 4, catch-up rule 1). The PPU's hook draws the lines that have started (see [Drawing and presenting frames](#drawing-and-presenting-frames)), then passes the PPU the `Signals` it cannot know itself: the display period, the field, the video standard and `$4201` bit 7 (ADR 0029, point 1; [`ppu.md`](ppu.md#signals)). `peek_bus`, which cannot sync, works the signals out for its own moment. The APU's ports answer from a placeholder (below; ADR 0027).
 
 ### Adding a register
 
@@ -255,7 +255,7 @@ Three things latch the H/V counters, only while `$4201` bit 7 is set (`anomie-re
 
 The latched H is the dot and the latched V is the line (ADR 0020, point 3). Each of `$213C` and `$213D` returns the low byte, then bit 8 over PPU2 open bus, on its own flip-flop. A latch does not reset the flip-flops (`anomie-regs#213c`).
 
-The latch is PPU2 state and lives in the PPU, and the high byte's open bus is the PPU's PPU2 open bus (ADR 0028, point 4). Until #90 implements `$213F`, the read that clears the latch flag and resets the flip-flops is missing (ADR 0021, point 7).
+The latch is PPU2 state and lives in the PPU, and the high byte's open bus is the PPU's PPU2 open bus (ADR 0028, point 4). Each latch sets `$213F` bit 6. A `$213F` read resets both flip-flops to the low byte, and clears the flag only while `$4201` bit 7 is set, as anomie says; fullsnes clears it on every read (`anomie-regs#213f`, `fullsnes#snespputimersandstatus`; ADR 0029, point 10).
 
 `$4201` is `$FF` at power-on and reset (`fullsnes#snesiomap`). The latched counters are `$1FF` at power-on and kept on reset.
 
@@ -506,6 +506,7 @@ The bus draws the PPU's lines and presents its frames ([`video.rs`](../../crates
   - it is 512 wide if any line was, and a 256-pixel line then has each pixel twice;
   - it is as many rows high as it has lines, or twice that if any line was interlaced, each line then filling two rows;
   - an interlaced frame shows only its own field and names it in `field`.
+- **The OAM address.** When vertical blank begins, the PPU reloads its OAM address unless forced blank is on (`anomie-timing#oam-reset`; ADR 0029, point 6).
 - **Outputs.** The lines and the presented frame are outputs, not state. They live in the bus; `Video` is not `Clone`, and the bus's own clone starts it empty. A frame is presented only if every line was drawn into this machine's outputs, so a clone taken after some lines were drawn, or a reset, presents nothing for that frame, and `video()` keeps the frame before (point 10).
 
 Goldens hash the frame exactly as presented (ADR 0015).
@@ -559,5 +560,6 @@ The documents left these points open or disagree on them. Each ADR quotes the so
 | [0026](../adr/0026-hdma.md) | `$420C` and the HDMA flags, when the steps fall due, the pause and its costs, the table steps and the last-channel case, mid-frame enabling, and pre-empting a DMA; amended for anomie-timing's overscan-bit slip | high for the registers, table and steps; medium for timing and costs; low for the overhead's placement, the last-channel case at frame start, mid-frame enabling and a pre-empted DMA |
 | [0027](../adr/0027-apu-port-placeholder-until-m3.md) | The APU ports' placeholder until M3: the register shape, reads of `$00`, kept writes, the sync hook, reset, and the ROMs and goldens it rules out | high for the register shape; the placeholder's values are a project choice and claim none |
 | [0028](../adr/0028-ppu-state-registers-and-frame-geometry.md) | The PPU's memories and their power-on fill, its registers and their reads, PPU1 and PPU2 open bus, which lines are drawn and when, and the frame geometry and where the outputs live | high for the reads and open bus; medium for which lines are output and their width; the power-on values and the geometry are project choices |
+| [0029](../adr/0029-ppu-memory-ports-multiplier-and-status-registers.md) | The signals the bus passes the PPU, the OAM reload at vertical blank, and `$213F`'s latch flag; the rest is the PPU's ([`ppu.md`](ppu.md#decisions)) | medium for the reload; low for the latch flag rule |
 
 ADR 0001 (catch-up scheduling) predates M1 and governs the bus's sync hooks and the deadline table. ADR 0004 is the CPU's bus contract, which `BusView` implements.

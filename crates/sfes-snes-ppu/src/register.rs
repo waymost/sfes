@@ -207,10 +207,11 @@ impl Register {
         Self::Ppu2Status,
     ];
 
-    /// What a read of this register returns (ADR 0028, point 3).
+    /// What a read of this register returns (ADR 0028, point 3; ADR 0029, point 11).
     // @source: anomie-regs#registers
     // @source: fullsnes#snesunpredictablethings
     // @source: adr-0028
+    // @source: adr-0029
     #[must_use]
     pub const fn read_kind(self) -> ReadKind {
         match self {
@@ -233,16 +234,17 @@ impl Register {
             | Self::Window2Left
             | Self::Window2Right
             | Self::WindowLogicBackgrounds => ReadKind::Ppu1OpenBus,
-            Self::HorizontalCounter | Self::VerticalCounter => ReadKind::Ppu2,
             Self::MultiplyLow
             | Self::MultiplyMiddle
             | Self::MultiplyHigh
             | Self::OamDataRead
             | Self::VramDataReadLow
             | Self::VramDataReadHigh
-            | Self::CgramDataRead
-            | Self::Ppu1Status
-            | Self::Ppu2Status => ReadKind::Unimplemented,
+            | Self::Ppu1Status => ReadKind::Ppu1,
+            Self::CgramDataRead
+            | Self::HorizontalCounter
+            | Self::VerticalCounter
+            | Self::Ppu2Status => ReadKind::Ppu2,
             // $21x0-$21x3 and $21x7, x = 0 to 3, and $21xB-$21xF, x = 0, 1, 2.
             Self::DisplayControl
             | Self::ObjectSelect
@@ -300,17 +302,18 @@ impl TryFrom<u8> for Register {
 #[error("B-bus address ${0:02X} is not a PPU register")]
 pub struct NotAPpuRegister(pub u8);
 
-/// What answers a read of a PPU register (ADR 0028, point 3).
+/// What answers a read of a PPU register (ADR 0028, point 3; ADR 0029, point 11).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReadKind {
     /// A write-only register that returns PPU1 open bus in all 8 bits.
     Ppu1OpenBus,
     /// A write-only register, or the `$2137` strobe, that returns CPU open bus.
     CpuOpenBus,
-    /// A PPU2 register the PPU answers, which sets PPU2 open bus.
+    /// A PPU1 register the PPU answers, which sets PPU1 open bus: `$2134–$2136`,
+    /// `$2138–$213A` and `$213E`.
+    Ppu1,
+    /// A PPU2 register the PPU answers, which sets PPU2 open bus: `$213B–$213D` and `$213F`.
     Ppu2,
-    /// A readable register #90 implements; until then it reads as CPU open bus.
-    Unimplemented,
 }
 
 #[cfg(test)]
@@ -336,6 +339,7 @@ mod tests {
     // @source: anomie-regs#registers
     // @source: fullsnes#snesunpredictablethings
     // @source: adr-0028
+    // @source: adr-0029
     #[test]
     fn reads_follow_the_open_bus_lists() {
         for address in 0x00..=0x3F_u8 {
@@ -344,8 +348,8 @@ mod tests {
             let expected = match (row, low) {
                 (0..=2, 0x4..=0x6 | 0x8..=0xA) => ReadKind::Ppu1OpenBus,
                 (_, 0x0..=0x3 | 0x7) | (0..=2, 0xB..=0xF) => ReadKind::CpuOpenBus,
-                (3, 0xC | 0xD) => ReadKind::Ppu2,
-                _ => ReadKind::Unimplemented,
+                (3, 0x4..=0x6 | 0x8..=0xA | 0xE) => ReadKind::Ppu1,
+                _ => ReadKind::Ppu2,
             };
             let register = Register::try_from(address).unwrap();
             assert_eq!(
