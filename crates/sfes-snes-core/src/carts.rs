@@ -335,3 +335,199 @@ fn hdma_cart_runs_a_direct_and_an_indirect_table_into_the_wram_port() {
     let [low, high] = (indirect + 8).to_le_bytes();
     assert_eq!(wram[0x133..0x138], [0x00, 0x77, low, high, 0x00]);
 }
+
+/// How many pixels of a row the background carts' tests compare.
+const PICTURE_PIXELS: usize = 64;
+
+// @source: adr-0013
+/// Runs a drawing cartridge until its picture is steady: its setup, which clears VRAM by DMA,
+/// takes more than a frame, and the frame after is whole.
+fn drawn(rom: &[u8]) -> Snes<Fast> {
+    let mut snes = Snes::<Fast>::builder(Arc::from(rom))
+        .build()
+        .expect("builds");
+    snes.run(Stop::Frames(4));
+    assert_eq!(snes.cpu().run, RunState::Stopped);
+    snes
+}
+
+// @source: adr-0013
+/// The first 64 pixels of picture row `row`, as 15-bit colours. Row 0 is line 1.
+fn picture_row(snes: &Snes<Fast>, row: usize) -> Vec<u16> {
+    let video = snes.video();
+    assert_eq!(video.width, 256);
+    let start = row * 256;
+    video.pixels[start..start + PICTURE_PIXELS]
+        .iter()
+        .map(|pixel| pixel.bits())
+        .collect()
+}
+
+// @source: adr-0013
+/// A row of runs `(colour, length)`, then `fill` to the end of the compared pixels.
+fn runs(list: &[(u16, usize)], fill: u16) -> Vec<u16> {
+    let mut row = Vec::new();
+    for &(color, length) in list {
+        row.extend(core::iter::repeat_n(color, length));
+    }
+    row.resize(PICTURE_PIXELS, fill);
+    row
+}
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2107
+// @source: anomie-regs#210b
+// @source: anomie-regs#212c
+// @source: anomie-regs#backgrounds/mode-0
+// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: fullsnes#snesppubgcontrol
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0030
+#[test]
+fn bg_mode_0_cart_draws_four_2_bit_backgrounds_in_priority_order() {
+    const BLUE: u16 = 0x7C00;
+    const RED: u16 = 0x001F;
+    const GREEN: u16 = 0x03E0;
+    const WHITE: u16 = 0x7FFF;
+    const MAGENTA: u16 = 0x7C1F;
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode0.sfc"));
+    // Pixels 0-1: only BG1 (red). 2-5: BG2's priority-1 tile (green) is in front of BG1's
+    // priority-0 one, and of BG3's priority-1 tile at 4-5, since BG2 comes first at the
+    // same priority. 6-7: BG3 (white). 8-15: BG4 (magenta). Then the backdrop (blue).
+    let expected = runs(&[(RED, 2), (GREEN, 4), (WHITE, 2), (MAGENTA, 8)], BLUE);
+    // Lines 1 to 7 are rows 1 to 7 of the tile, which repeat; line 8 is the next tile row.
+    for row in 0..7 {
+        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+    assert_eq!(picture_row(&snes, 7), runs(&[], BLUE));
+}
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2107
+// @source: anomie-regs#210b
+// @source: anomie-regs#212c
+// @source: anomie-regs#backgrounds/mode-1
+// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: fullsnes#snesppubgcontrol
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0030
+#[test]
+fn bg_mode_1_cart_puts_bg3_in_front_when_bit_3_is_set() {
+    const WHITE: u16 = 0x7FFF;
+    const BLUE: u16 = 0x7C00;
+    const GREEN: u16 = 0x03E0;
+    const RED: u16 = 0x001F;
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode1.sfc"));
+    // BG1's priority-1 tile covers pixels 0-3 and BG3's covers 2-5; with $2105 bit 3 set
+    // BG3 is in front of BG1 at 2-3. BG2's priority-0 tile shows behind both at 6-7.
+    let expected = runs(&[(RED, 2), (GREEN, 4), (BLUE, 2)], WHITE);
+    for row in 0..7 {
+        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+}
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2107
+// @source: anomie-regs#210b
+// @source: anomie-regs#212c
+// @source: anomie-regs#backgrounds/mode-2
+// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: fullsnes#snesppubgcontrol
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0030
+#[test]
+fn bg_mode_2_cart_draws_16_by_16_tiles_and_flips_them_whole() {
+    const WHITE: u16 = 0x7FFF;
+    const RED: u16 = 0x001F;
+    const GREEN: u16 = 0x03E0;
+    const BLUE: u16 = 0x7C00;
+    const YELLOW: u16 = 0x03FF;
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode2.sfc"));
+    // The top half of a 16x16 tile is tiles 1 and 2 (red, green) and the bottom half tiles
+    // $11 and $12 (blue, yellow). Flipped horizontally the two columns swap and, since the
+    // tile is turned as a whole, so do the halves of the second one.
+    let top = runs(
+        &[
+            (RED, 8),
+            (GREEN, 8),
+            (GREEN, 8),
+            (RED, 8),
+            (BLUE, 8),
+            (YELLOW, 8),
+        ],
+        WHITE,
+    );
+    let bottom = runs(
+        &[
+            (BLUE, 8),
+            (YELLOW, 8),
+            (YELLOW, 8),
+            (BLUE, 8),
+            (RED, 8),
+            (GREEN, 8),
+        ],
+        WHITE,
+    );
+    // Lines 1 to 7 are the top half; line 8 is the tile's row 8, the bottom half.
+    for row in 0..7 {
+        assert_eq!(picture_row(&snes, row), top, "row {row}");
+    }
+    for row in 7..15 {
+        assert_eq!(picture_row(&snes, row), bottom, "row {row}");
+    }
+    // Line 16 is the second row of tiles, which the map leaves empty.
+    assert_eq!(picture_row(&snes, 15), runs(&[], WHITE));
+}
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2107
+// @source: anomie-regs#210b
+// @source: anomie-regs#210d
+// @source: anomie-regs#212c
+// @source: anomie-regs#backgrounds/mode-3
+// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: fullsnes#snesppubgcontrol
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0030
+#[test]
+fn bg_mode_3_cart_scrolls_a_256_colour_background_across_its_second_screen() {
+    const WHITE: u16 = 0x7FFF;
+    const GREEN: u16 = 0x03E0;
+    const RED: u16 = 0x001F;
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode3.sfc"));
+    // BG1HOFS = 252 puts map column 32 at pixel 4: BG1's priority-0 tile (red, entry $A5)
+    // covers 4-11 and is in front of BG2's tile (green) at 4-7, which shows at 0-3.
+    let expected = runs(&[(GREEN, 4), (RED, 8)], WHITE);
+    for row in 0..7 {
+        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+}
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2107
+// @source: anomie-regs#210b
+// @source: anomie-regs#212c
+// @source: anomie-regs#2130
+// @source: anomie-regs#backgrounds/direct-color-mode
+// @source: anomie-regs#backgrounds/mode-4
+// @source: fullsnes#snesppubgcontrol
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0030
+#[test]
+fn bg_mode_4_cart_draws_bg1_in_direct_colour_and_bg2_from_the_palette() {
+    const WHITE: u16 = 0x7FFF;
+    const GREEN: u16 = 0x03E0;
+    const DIRECT: u16 = (0b10100 << 10) | (0b11000 << 5) | 0b11010;
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode4.sfc"));
+    // Character $B6 with palette bits 101 is blue 10 1, green 110 0, red 110 1: $531A.
+    assert_eq!(DIRECT, 0x531A);
+    let expected = runs(&[(DIRECT, 8), (GREEN, 8)], WHITE);
+    for row in 0..7 {
+        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+}

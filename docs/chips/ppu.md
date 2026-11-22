@@ -1,6 +1,6 @@
 # The PPU (`sfes-snes-ppu`)
 
-This page explains the SNES's picture processing unit and how the crate models it (QA-08). It is written issue by issue during milestone M2: #89 and #90 so far. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
+This page explains the SNES's picture processing unit and how the crate models it (QA-08). It is written issue by issue during milestone M2: #89, #90 and #91 so far. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
 
 - Anomie's register doc (`anomie-regs`), by register or heading path;
 - Anomie's timing doc (`anomie-timing`), by heading path;
@@ -28,6 +28,8 @@ The crate models both chips as one `Ppu`. It holds no reference to the machine: 
 | `cgram_port` | The CGRAM address, flip-flop and latch | 0 | kept |
 | `mode7` | The Mode 7 write-twice latch, `$211B M7A` and `$211C M7B` | `$FF`, `$FFFF`, `$FFFF` | kept |
 | `background_mode` | `$2105 BGMODE` | `$0F` | kept |
+| `backgrounds` | `$2107–$210A BGnSC`, `$210B/$210C BGnnNBA`, the eight scroll registers and their latch | 0 | kept |
+| `main_screen`, `color_select` | `$212C TM`, `$2130 CGWSEL` | 0 | kept |
 | `screen_mode` | `$2133 SETINI` | `$00` | `$00` |
 | `ppu1_open_bus`, `ppu2_open_bus` | The two open-bus latches | 0 | kept |
 | `counters` | The H/V counter latch, `$213C/$213D`, and the latch flag | `$1FF` | kept |
@@ -155,9 +157,48 @@ Sources: `anomie-regs#213e`, `#213f`, `fullsnes#snespputimersandstatus`; ADR 002
 
 - **Width.** A line's `LineWidth` is `Wide`, 512 pixels, in BG modes 5 and 6 (`$2105` bits 2–0) or with pseudo-hires (`$2133` bit 3), otherwise `Normal`, 256 (`anomie-regs#2105`, `#2133`, `fullsnes#snesppuresolution`).
 - **Interlace.** The line records whether `$2133` bit 0 was set.
-- **Pixels.** A pixel is a CGRAM colour, an `sfes_api::Rgb555`: red in bits 4–0, green in 9–5, blue in 14–10, bit 15 clear (`fullsnes#snesppucolorpalettememorycgramanddirectcolors`). CGRAM does not store bit 15, so the PPU drops it, and `Rgb555` refuses a value with it set. Until the layers arrive, every pixel is the backdrop, CGRAM entry 0, which is what a line shows where every BG and sprite pixel is transparent. In a wide line the sub screen's pixels use colour 0 as well (`fullsnes#snesppuresolution`, "Hires Notes").
+- **Pixels.** A pixel is a CGRAM colour, an `sfes_api::Rgb555`: red in bits 4–0, green in 9–5, blue in 14–10, bit 15 clear (`fullsnes#snesppucolorpalettememorycgramanddirectcolors`). CGRAM does not store bit 15, so the PPU drops it, and `Rgb555` refuses a value with it set. Where no layer shows a pixel it is the backdrop, CGRAM entry 0 (`fullsnes#snesppuresolution`, "Hires Notes"). [The backgrounds](#the-backgrounds) draw the rest in BG modes 0 to 4; in the other modes every pixel is the backdrop until #93 and #97.
 
 The machine decides when a line is drawn and how lines make a frame ([`core.md`](core.md#drawing-and-presenting-frames)).
+
+## The backgrounds
+
+[`background.rs`](../../crates/sfes-snes-ppu/src/background.rs) holds BG1 to BG4's registers and finds one pixel of one background; `render_line` puts them in order (ADR 0030). The main screen of BG modes 0 to 4 is drawn; everything else waits for its issue.
+
+### Where a pixel comes from
+
+- **Scroll.** The pixel at column `x` of line `L` is the background's (`x + HOFS`, `L + VOFS`), each taken modulo the background's size: 256, 512 or 1024 pixels, from 32 or 64 tiles of 8 or 16 pixels (`anomie-regs#backgrounds/bg-scrolling`). A scroll register is written twice, low byte then high, with one latch for all eight, which the Mode 7 registers do not share (`anomie-regs#210d`). Games set `VOFS` to −1 because line 0 is not output, so the row shown is `L + VOFS`, not the frame's row.
+- **Tilemap.** `$2107–$210A` give the map's address in 1K-word steps and, in bits 1–0, a second 32×32 screen to the right, below, or both, in the order A B / C D, each 0x400 words (`anomie-regs#2107`, `fullsnes#snesppubgcontrol`). An entry is `vhopppcc cccccccc`: flips, priority, palette and a 10-bit tile number (`anomie-regs#backgrounds/tile-maps-and-character-maps`).
+- **Characters.** `$210B/$210C` give each background's base in 8 KiB steps, and a tile is `8 × planes` bytes from there. A row is a byte per plane, the leftmost pixel in bit 7; planes come in pairs, a pair to sixteen bytes. With `$2105`'s size bit set a tile is 16×16: the tile, the next, and the two sixteen on, flipped as a whole.
+
+### Colour
+
+A value of 0 is transparent. Otherwise:
+
+| Depth | Where | CGRAM entry |
+| --- | --- | --- |
+| 2 planes | mode 0, BG*n* | `32 × (n − 1) + palette × 4 + value` |
+| 2 planes | modes 1 and 4 | `palette × 4 + value` |
+| 4 planes | modes 1 to 3 | `palette × 16 + value` |
+| 8 planes | modes 3 and 4 | `value`, or direct colour |
+
+Direct colour, `$2130` bit 0, makes the colour from the character `BBGGGRRR` and the palette `bgr`: `BBb00 RRRr0 GGGg0` (`anomie-regs#backgrounds/direct-color-mode`).
+
+### Which layer shows
+
+The first of these, front to back, that `$212C` turns on and that is not transparent; else the backdrop. "Low" and "high" are the entry's priority bit. Sprites will join them in #94.
+
+| Mode | Order |
+| --- | --- |
+| 0 | BG1 high, BG2 high, BG1 low, BG2 low, BG3 high, BG4 high, BG3 low, BG4 low |
+| 1 | BG1 high, BG2 high, BG1 low, BG2 low, BG3 high, BG3 low; with `$2105` bit 3, BG3 high first |
+| 2, 3, 4 | BG1 high, BG2 high, BG1 low, BG2 low |
+
+### Not yet
+
+- Offset-per-tile (#92): modes 2 and 4 use each background's own scroll.
+- Modes 5, 6 and 7 (#97, #93): the backdrop.
+- Sprites (#94), windows (#95), the sub screen, colour math, mosaic, brightness and forced blank (#96): not applied. A wide line repeats each main-screen pixel.
 
 ## Frame geometry
 
@@ -184,6 +225,7 @@ Two alternatives were rejected. A fixed 512 × 478 canvas would cost four times 
 | [`register.rs`](../../crates/sfes-snes-ppu/src/register.rs) | `Register`, `ReadKind` and `NotAPpuRegister`: the 64 registers, the address conversion and what a read of each returns |
 | [`signals.rs`](../../crates/sfes-snes-ppu/src/signals.rs) | `Signals` and `Period`: what the bus passes in before each access |
 | [`memory.rs`](../../crates/sfes-snes-ppu/src/memory.rs) | The VRAM, CGRAM and OAM ports |
+| [`background.rs`](../../crates/sfes-snes-ppu/src/background.rs) | BG1 to BG4's registers, the pixel fetch and each mode's priority order |
 | [`mode7.rs`](../../crates/sfes-snes-ppu/src/mode7.rs) | The Mode 7 latch, M7A, M7B and the multiplier |
 | [`counters.rs`](../../crates/sfes-snes-ppu/src/counters.rs) | The H/V counter latch, its flip-flops and the latch flag |
 | [`line.rs`](../../crates/sfes-snes-ppu/src/line.rs) | `LineOut` and `LineWidth`: one drawn line and its width |
@@ -198,10 +240,11 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
   - the open-bus latches and the counters;
   - each line's width and colour;
   - each port's increments, translation and prefetch, with anomie's OAM examples;
-  - which writes land in each period, the OAM reload, the multiplier and the status bits.
+  - which writes land in each period, the OAM reload, the multiplier and the status bits;
+  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, and a line's composition.
 - **The machine's tests** cover reads through the bus, when lines are drawn, overscan and interlaced frames, the frame geometry, VRAM writes by period, the OAM reload at vertical blank, `$213F` through the bus and a DMA into VRAM ([`core.md`](core.md#testing)).
 
-No test cartridge exercises the PPU yet: a frame is one colour until the layers arrive. Goldens follow in #100.
+- **Test cartridges** `bg-mode0` to `bg-mode4` (`tests/carts/`) draw each mode; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
 
 ## Decisions
 
@@ -209,5 +252,6 @@ No test cartridge exercises the PPU yet: a frame is one colour until the layers 
 | --- | --- | --- |
 | [0028](../adr/0028-ppu-state-registers-and-frame-geometry.md) | The memories and their power-on fill, the registers and their reads, PPU1 and PPU2 open bus, which lines are drawn and when, a line's width and pixels, the frame geometry, and where the outputs live | high for the reads and open bus; medium for which lines are output and their width; the power-on values and the geometry are project choices |
 | [0029](../adr/0029-ppu-memory-ports-multiplier-and-status-registers.md) | The signals, `$2100`, the VRAM, CGRAM and OAM ports, the OAM reload, which writes land in each period, the multiplier, `$213E` and `$213F`, and the ports' power-on values | high for the ports, the multiplier and the status bits; medium for the reload and `$2100`'s reset value; low for access by period, the PPU2 version and the latch flag rule |
+| [0030](../adr/0030-backgrounds-in-bg-modes-0-to-4.md) | The background registers, the scroll write rule, where a tile and a pixel are, the palette and direct colour of each mode and depth, each mode's priority order, which row a line shows, and what is left to the other layer issues | high for the formats, palettes and orders; medium for the scroll write and the row |
 
 ADR 0021, point 7 covers the counter latch, which moved into the PPU with this issue.

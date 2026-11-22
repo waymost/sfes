@@ -22,6 +22,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+mod background;
 mod counters;
 mod line;
 mod memory;

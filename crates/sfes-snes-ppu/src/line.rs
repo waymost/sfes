@@ -88,6 +88,12 @@ impl LineOut {
         &self.pixels[..self.width.pixels()]
     }
 
+    /// Its pixels, for the renderer to set.
+    // @source: adr-0030
+    pub(crate) fn pixels_mut(&mut self) -> &mut [Rgb555] {
+        &mut self.pixels[..self.width.pixels()]
+    }
+
     /// Starts `line` with the given shape and every pixel `color`.
     // @source: adr-0028
     pub(crate) fn fill(&mut self, line: u16, width: LineWidth, interlaced: bool, color: Rgb555) {
