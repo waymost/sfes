@@ -92,15 +92,28 @@ pub struct Peek {
     pub latched: bool,
 }
 
-/// One rendered video frame.
+/// One rendered video frame. On the SNES its size follows ADR 0028's frame geometry.
 #[derive(Clone, Copy, Debug)]
 pub struct VideoFrame<'frame> {
     /// Width in pixels.
     pub width: u16,
     /// Height in pixels.
     pub height: u16,
-    /// RGB555 pixels, row-major.
+    /// RGB555 pixels, row-major: red in bits 4–0, green in bits 9–5, blue in bits 14–10, and
+    /// bit 15 clear.
     pub pixels: &'frame [u16],
+    /// For an interlaced frame, the field it shows; `None` otherwise (API-03).
+    pub field: Option<Field>,
+}
+
+/// One of the two fields of an interlaced picture, as the SNES's `$213F` bit 7 numbers them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum Field {
+    /// Bit 7 clear: the first field.
+    First = 0,
+    /// Bit 7 set: the second field.
+    Second = 1,
 }
 
 /// Audio produced since the last call to [`System::take_audio`].

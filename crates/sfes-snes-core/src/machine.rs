@@ -4,7 +4,7 @@
 //! The `Snes` machine: its state, its builder and the inherent API shaped like `System`
 //! (FND-01, FND-06, FND-08; technical design section 3).
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::sync::Arc;
 use core::{fmt, marker::PhantomData};
 
 use sfes_api::{
@@ -43,14 +43,6 @@ struct State {
     meta: Meta,
 }
 
-/// What the machine produces that is not state: the frame buffer. A clone starts empty.
-#[derive(Debug, Default)]
-struct Outputs {
-    frame: Vec<u16>,
-    width: u16,
-    height: u16,
-}
-
 /// What a step is about to do, worked out from ADR 0004's cases before it runs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StepKind {
@@ -67,18 +59,17 @@ enum StepKind {
 pub struct Snes<A: Accuracy = Fast, O: Observer = NoopObserver> {
     state: State,
     observer: O,
-    outputs: Outputs,
     profile: PhantomData<A>,
 }
 
 impl<A: Accuracy, O: Observer> Clone for Snes<A, O> {
-    /// Copies the state and the observer. The copy's outputs start empty, so snapshots that
-    /// never render never pay for frame buffers (technical design section 5).
+    /// Copies the state and the observer. The copy's video outputs start empty, so
+    /// snapshots that never render never pay for frame buffers (technical design section 5;
+    /// ADR 0028, point 10).
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
             observer: self.observer.clone(),
-            outputs: Outputs::default(),
             profile: PhantomData,
         }
     }
@@ -184,7 +175,6 @@ impl<A: Accuracy, O: Observer> SnesBuilder<A, O> {
                 meta,
             },
             observer: self.observer,
-            outputs: Outputs::default(),
             profile: PhantomData,
         };
         snes.reset_cpu();
@@ -326,27 +316,36 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         }
     }
 
-    /// Reads a memory region: WRAM, the ROM and cartridge RAM. The PPU's and APU's regions
-    /// are empty until those chips exist (FND-06).
+    /// Reads a memory region: WRAM, the ROM, cartridge RAM, VRAM, CGRAM and OAM. Audio RAM
+    /// is empty until the APU exists (FND-06).
     // @source: adr-0017
     // @source: adr-0018
+    // @source: adr-0028
     #[must_use]
     pub fn region(&self, id: RegionId) -> &[u8] {
         match id {
             RegionId::Wram => &self.state.bus.wram,
             RegionId::Rom | RegionId::CartRam => self.state.bus.cartridge.region(id),
-            RegionId::Vram | RegionId::Cgram | RegionId::Oam | RegionId::Aram => &[],
+            RegionId::Vram => self.state.bus.ppu.vram(),
+            RegionId::Cgram => self.state.bus.ppu.cgram(),
+            RegionId::Oam => self.state.bus.ppu.oam(),
+            RegionId::Aram => &[],
         }
     }
 
-    /// Writes a memory region between steps: WRAM and cartridge RAM (FND-06).
+    /// Writes a memory region between steps: WRAM, cartridge RAM, VRAM, CGRAM and OAM
+    /// (FND-06).
     // @source: adr-0017
     // @source: adr-0018
+    // @source: adr-0028
     pub fn region_mut(&mut self, id: RegionId) -> &mut [u8] {
         match id {
             RegionId::Wram => &mut self.state.bus.wram,
             RegionId::CartRam | RegionId::Rom => self.state.bus.cartridge.region_mut(id),
-            RegionId::Vram | RegionId::Cgram | RegionId::Oam | RegionId::Aram => &mut [],
+            RegionId::Vram => self.state.bus.ppu.vram_mut(),
+            RegionId::Cgram => self.state.bus.ppu.cgram_mut(),
+            RegionId::Oam => self.state.bus.ppu.oam_mut(),
+            RegionId::Aram => &mut [],
         }
     }
 
@@ -362,15 +361,13 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
         Peek { value, latched }
     }
 
-    /// The most recently rendered frame; 0 × 0 until the PPU renders one.
+    /// The last presented frame, sized by ADR 0028's frame geometry; 0 × 0 until the first
+    /// whole frame (ADR 0028, points 8 and 10).
     // @source: adr-0018
+    // @source: adr-0028
     #[must_use]
     pub fn video(&self) -> VideoFrame<'_> {
-        VideoFrame {
-            width: self.outputs.width,
-            height: self.outputs.height,
-            pixels: &self.outputs.frame,
-        }
+        self.state.bus.video.frame()
     }
 
     /// The video standard the machine runs.
@@ -457,8 +454,12 @@ mod tests {
     use alloc::{vec, vec::Vec};
 
     use sfes_api::SplitMix64;
-    use sfes_snes_cart::test_support::{TestHeader, image_with_code};
+    use sfes_snes_cart::{
+        WRAM_SIZE,
+        test_support::{TestHeader, image_with_code},
+    };
     use sfes_snes_cpu::Flags;
+    use sfes_snes_ppu::{CGRAM_SIZE, OAM_SIZE, VRAM_SIZE};
 
     use super::*;
 
@@ -823,6 +824,7 @@ mod tests {
     // @source: anomie-memmap#hardware/data-bus
     // @source: anomie-memmap#memory-map
     // @source: adr-0017
+    // @source: adr-0028
     #[test]
     fn regions_and_peek_see_the_same_memory() {
         let mut snes = machine(&PROGRAM);
@@ -832,7 +834,18 @@ mod tests {
         assert_eq!(snes.peek_bus(0x00_8000).value, 0xA9);
         assert_eq!(snes.region(RegionId::Rom).len(), 0x8000);
         assert_eq!(snes.region_mut(RegionId::Rom).len(), 0);
-        assert_eq!(snes.region(RegionId::Vram).len(), 0);
+        assert_eq!(snes.region(RegionId::Vram).len(), VRAM_SIZE);
+        assert_eq!(snes.region(RegionId::Cgram).len(), CGRAM_SIZE);
+        assert_eq!(snes.region_mut(RegionId::Oam).len(), OAM_SIZE);
+        assert_eq!(snes.region(RegionId::Aram).len(), 0);
+        // VRAM, CGRAM and OAM continue the power-on stream after WRAM (ADR 0028, point 1).
+        let mut expected = vec![0; WRAM_SIZE as usize + VRAM_SIZE + CGRAM_SIZE + OAM_SIZE];
+        SplitMix64::new(0).fill(&mut expected);
+        let ppu = [RegionId::Vram, RegionId::Cgram, RegionId::Oam]
+            .into_iter()
+            .flat_map(|id| snes.region(id).iter().copied())
+            .collect::<Vec<_>>();
+        assert_eq!(ppu, expected[WRAM_SIZE as usize..]);
         // Unanswered I/O addresses show the last value on the data bus: the vector's high
         // byte.
         assert_eq!(snes.peek_bus(0x00_2000).value, 0x80);
@@ -939,16 +952,37 @@ mod tests {
         assert_eq!(snes.state.bus.wram_port_address, 0);
     }
 
+    // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0018
+    // @source: adr-0028
     #[test]
     fn a_clone_runs_the_same_and_starts_without_outputs() {
         let mut snes = machine(&PROGRAM);
+        assert_eq!(snes.video().pixels.len(), 0);
         let mut copy = snes.clone();
         snes.run(Stop::Frames(1));
         copy.run(Stop::Frames(1));
         assert_eq!(copy.cycles(), snes.cycles());
         assert_eq!(copy.region(RegionId::Wram), snes.region(RegionId::Wram));
+        // Taken before line 1, the clone draws the whole first frame: 256 × 224 of the
+        // backdrop, CGRAM entry 0 (ADR 0028, points 7 and 8).
+        let backdrop = u16::from_le_bytes([
+            snes.region(RegionId::Cgram)[0],
+            snes.region(RegionId::Cgram)[1] & 0x7F,
+        ]);
+        let frame = snes.video();
+        assert_eq!((frame.width, frame.height), (256, 224));
+        assert!(frame.pixels.iter().all(|&pixel| pixel == backdrop));
+        assert_eq!(copy.video().pixels, frame.pixels);
+        // Lines are drawn only when the PPU is synced or the frame ends. This program has
+        // stopped, so a clone taken part-way through a frame has nothing drawn yet, and draws
+        // and presents the whole frame as its original does (ADR 0028, points 6 and 10).
+        snes.run(Stop::Scanlines(100));
+        let mut copy = snes.clone();
         assert_eq!(copy.video().pixels.len(), 0);
+        snes.run(Stop::Frames(1));
+        copy.run(Stop::Frames(1));
+        assert_eq!(copy.video().pixels, snes.video().pixels);
         snes.set_input(1, Buttons::START);
         snes.set_input(9, Buttons::A);
         assert_eq!(

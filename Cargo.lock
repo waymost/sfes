@@ -445,6 +445,7 @@ dependencies = [
  "sfes-api",
  "sfes-snes-cart",
  "sfes-snes-cpu",
+ "sfes-snes-ppu",
  "thiserror",
 ]
 
@@ -460,6 +461,9 @@ dependencies = [
 [[package]]
 name = "sfes-snes-ppu"
 version = "0.0.0"
+dependencies = [
+ "sfes-api",
+]
 
 [[package]]
 name = "sfes-snes-spc"

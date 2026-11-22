@@ -10,42 +10,45 @@
 // @source: adr-0025
 // @source: adr-0026
 // @source: adr-0027
+// @source: adr-0028
 //! The bus state and the main CPU's view of it (ADR 0019).
 //!
 //! [`Bus`] owns WRAM, the cartridge, the data bus value, the WRAM port, `$420D`, the
-//! interrupt state, `$4201`, the counter latch, the multiply and divide unit (ADR 0023), the
-//! controller ports (ADR 0024), the DMA channels and HDMA (ADR 0025, ADR 0026), the APU
-//! ports' placeholder (ADR 0027), the clock and the scheduler. [`BusView`]
+//! interrupt state, `$4201`, the PPU and its video outputs (ADR 0028), the multiply and
+//! divide unit (ADR 0023), the controller ports (ADR 0024), the DMA channels and HDMA
+//! (ADR 0025, ADR 0026), the APU ports' placeholder (ADR 0027), the clock and the
+//! scheduler. [`BusView`]
 //! implements `Bus65816` over it: it records the interrupt lines (ADR 0021), decodes each
 //! address, syncs the register's owner, performs the access, charges its time, services the
 //! deadlines that fell due (ADR 0020) and tells the observer.
 
 mod apu;
-mod counters;
 mod decode;
 mod dma;
 mod interrupts;
 mod math;
 mod ports;
+mod ppu;
 
 use alloc::{boxed::Box, vec};
 use core::fmt;
 
-use sfes_api::{Addr24, BusId, Cycles, Observer, SplitMix64};
+use sfes_api::{Addr24, BusId, Cycles, Field, Observer, SplitMix64};
 use sfes_snes_cart::{Cartridge, WRAM_SIZE};
 use sfes_snes_cpu::{Bus65816, Pending, Pins};
+use sfes_snes_ppu::{Ppu, Register};
 
 use crate::{
     bus::{
         apu::Apu,
-        counters::CounterLatch,
-        decode::{BBus, CpuRegister, PpuRegister, Speed, Target, access_speed, decode},
+        decode::{BBus, CpuRegister, Speed, Target, access_speed, decode},
         dma::Dma,
         interrupts::Interrupts,
         math::Math,
         ports::{Port, PortRegister, Ports},
     },
     timing::{Event, REFRESH_LENGTH, Timing, WRIO_LATCH_DELAY},
+    video::Video,
 };
 
 /// The WRAM port's address is 17 bits (ADR 0019, point 5).
@@ -135,8 +138,12 @@ pub(crate) struct Bus {
     pub(crate) interrupts: Interrupts,
     /// $4201 WRIO: the programmable I/O port, whose bit 7 drives the PPU latch line.
     pub(crate) io_port: u8,
-    /// $213C OPHCT and $213D OPVCT: the latched H/V counters (ADR 0021, point 7).
-    pub(crate) counters: CounterLatch,
+    /// PPU1 and PPU2: VRAM, CGRAM, OAM, the registers at `$2100–$213F` and the H/V counter
+    /// latch (ADR 0021, point 7; ADR 0028).
+    pub(crate) ppu: Ppu,
+    /// The frame being drawn and the last presented frame: outputs, not state, so a clone
+    /// of the bus starts without them (ADR 0028, point 10).
+    pub(crate) video: Video,
     /// $4202–$4206 and $4214–$4217: the multiply and divide unit (ADR 0023).
     pub(crate) math: Math,
     /// The pads, $4016 JOYSER0, the auto-joypad read into $4218–$421F and the polled flag
@@ -163,7 +170,7 @@ impl fmt::Debug for Bus {
             .field("fast_rom", &self.fast_rom)
             .field("interrupts", &self.interrupts)
             .field("io_port", &self.io_port)
-            .field("counters", &self.counters)
+            .field("ppu", &self.ppu)
             .field("math", &self.math)
             .field("ports", &self.ports)
             .field("dma", &self.dma)
@@ -175,8 +182,9 @@ impl fmt::Debug for Bus {
 }
 
 impl Bus {
-    /// The bus at power-on: WRAM filled from `seed` (ADR 0018), the clock at 0 and the
-    /// registers at their reset values (ADR 0019).
+    /// The bus at power-on: WRAM, then VRAM, CGRAM and OAM, filled from one stream seeded
+    /// with `seed` (ADR 0018; ADR 0028, point 1), the clock at 0 and the registers at their
+    /// reset values (ADR 0019).
     // @source: fullsnes#snesiomap
     // @source: vigna-splitmix
     // @source: adr-0018
@@ -185,9 +193,12 @@ impl Bus {
     // @source: adr-0023
     // @source: adr-0024
     // @source: adr-0025
+    // @source: adr-0028
     pub(crate) fn power_on(cartridge: Cartridge, timing: Timing, seed: u64) -> Self {
         let mut wram = vec![0; WRAM_SIZE as usize].into_boxed_slice();
-        SplitMix64::new(seed).fill(&mut wram);
+        let mut random = SplitMix64::new(seed);
+        random.fill(&mut wram);
+        let ppu = Ppu::power_on(&mut random);
         Self {
             wram,
             cartridge,
@@ -196,7 +207,8 @@ impl Bus {
             fast_rom: false,
             interrupts: Interrupts::power_on(),
             io_port: IO_PORT_RESET,
-            counters: CounterLatch::power_on(),
+            ppu,
+            video: Video::default(),
             math: Math::power_on(),
             ports: Ports::power_on(),
             dma: Dma::power_on(),
@@ -215,11 +227,12 @@ impl Bus {
     ///   (ADR 0024, points 3, 5 and 7);
     /// - `$420B` is 0 and a transfer not yet started is dropped (ADR 0025, point 2), and
     ///   `$420C` is 0 with HDMA's flags clear (ADR 0026, point 1);
-    /// - the APU ports are `$00` (ADR 0027, point 6).
+    /// - the APU ports are `$00` (ADR 0027, point 6);
+    /// - `$2133` is 0 and the frame being drawn is abandoned (ADR 0028, points 5 and 10).
     ///
-    /// WRAM, the data bus, the counter latch, the multiply and divide unit, `$4218–$421F`
-    /// and the DMA channels' registers are kept (ADR 0018, ADR 0021, ADR 0023, ADR 0024,
-    /// ADR 0025).
+    /// WRAM, the data bus, the PPU's memories and the counter latch, the multiply and divide
+    /// unit, `$4218–$421F` and the DMA channels' registers are kept (ADR 0018, ADR 0021,
+    /// ADR 0023, ADR 0024, ADR 0025, ADR 0028).
     // @source: anomie-regs#4202
     // @source: anomie-regs#4204
     // @source: anomie-regs#420b
@@ -238,6 +251,7 @@ impl Bus {
     // @source: adr-0025
     // @source: adr-0026
     // @source: adr-0027
+    // @source: adr-0028
     pub(crate) fn reset(&mut self) {
         self.timing.restart(self.now);
         self.wram_port_address = 0;
@@ -247,6 +261,8 @@ impl Bus {
         self.ports.reset();
         self.dma.reset();
         self.apu.reset();
+        self.ppu.reset();
+        self.video.abandon();
     }
 
     /// The interrupt requests as the CPU sees them at an instruction boundary: those
@@ -273,8 +289,6 @@ impl Bus {
     // @source: anomie-memmap#hardware/data-bus
     // @source: anomie-memmap#memory-map
     // @source: anomie-regs#2137
-    // @source: anomie-regs#213c
-    // @source: anomie-regs#213d
     // @source: anomie-regs#2140
     // @source: anomie-regs#2180
     // @source: anomie-regs#2181
@@ -288,6 +302,7 @@ impl Bus {
     // @source: anomie-regs#4216
     // @source: anomie-regs#4218
     // @source: anomie-regs#43x0
+    // @source: anomie-regs#registers
     // @source: fullsnes#snesdmaandhdmachannel07registers
     // @source: fullsnes#snesiomap
     // @source: adr-0019
@@ -296,21 +311,24 @@ impl Bus {
     // @source: adr-0024
     // @source: adr-0025
     // @source: adr-0027
+    // @source: adr-0028
     fn peek_target(&self, target: Target) -> (Option<u8>, bool) {
         match target {
             Target::Wram(offset) => (self.wram.get(offset as usize).copied(), false),
             Target::Rom(offset) => (self.cartridge.rom().get(offset as usize).copied(), false),
             Target::CartRam(offset) => (self.cartridge.ram().get(offset as usize).copied(), false),
             Target::BBus(device) => match device {
-                BBus::Ppu(PpuRegister::SoftwareLatch) => (None, true),
-                BBus::Ppu(PpuRegister::Counter(register)) => (self.counters.peek(register), true),
+                BBus::Ppu(Register::SoftwareLatch) => (None, true),
+                BBus::Ppu(register) => (
+                    self.ppu.peek(register),
+                    Ppu::read_has_side_effects(register),
+                ),
                 BBus::Apu(port) => (self.apu.peek(port), false),
                 BBus::WramData => (
                     self.wram.get(self.wram_port_address as usize).copied(),
                     true,
                 ),
-                BBus::Ppu(PpuRegister::ScreenMode | PpuRegister::Other(_))
-                | BBus::WramAddressLow
+                BBus::WramAddressLow
                 | BBus::WramAddressMiddle
                 | BBus::WramAddressHigh
                 | BBus::Unanswered => (None, false),
@@ -339,8 +357,8 @@ impl Bus {
     }
 
     /// The side effects of a read of `target`, after [`Bus::peek_target`] has given its
-    /// value: `$2137` latches the counters while `$4201` bit 7 is set, `$213C/D` flip their
-    /// flip-flops, `$2180` moves the WRAM port's address on, `$4210` and `$4211` clear their
+    /// value: `$2137` latches the counters while `$4201` bit 7 is set, the PPU's registers
+    /// carry out theirs (ADR 0028, point 4), `$2180` moves the WRAM port's address on, `$4210` and `$4211` clear their
     /// flags, and the controller registers poll and clock the pads.
     // @source: anomie-regs#2137
     // @source: anomie-regs#213c
@@ -353,17 +371,16 @@ impl Bus {
     // @source: adr-0019
     // @source: adr-0021
     // @source: adr-0024
+    // @source: adr-0028
     fn after_read(&mut self, target: Target) {
         match target {
-            Target::BBus(BBus::Ppu(PpuRegister::SoftwareLatch)) => {
+            Target::BBus(BBus::Ppu(Register::SoftwareLatch)) => {
                 if self.io_port & PPU_LATCH != 0 {
                     let (line, dot) = self.timing.position(self.now);
-                    self.counters.latch(line, dot);
+                    self.ppu.latch_counters(line, dot);
                 }
             }
-            Target::BBus(BBus::Ppu(PpuRegister::Counter(register))) => {
-                self.counters.after_read(register);
-            }
+            Target::BBus(BBus::Ppu(register)) => self.ppu.after_read(register),
             Target::BBus(BBus::Apu(port)) => self.apu.after_read(port),
             Target::BBus(BBus::WramData) => self.advance_wram_port(),
             Target::Cpu(CpuRegister::NmiFlag) => self.interrupts.clear_nmi_flag(),
@@ -540,11 +557,17 @@ impl Bus {
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0027
+    // @source: adr-0028
     pub(crate) fn write_b_bus(&mut self, device: BBus, value: u8) {
         self.sync_owner(Target::BBus(device));
         let [low, middle, high, _] = self.wram_port_address.to_le_bytes();
         match device {
-            BBus::Ppu(PpuRegister::ScreenMode) => self.timing.write_screen_mode(value, self.now),
+            BBus::Ppu(register) => {
+                if register == Register::ScreenMode {
+                    self.timing.write_screen_mode(value, self.now);
+                }
+                self.ppu.write(register, value);
+            }
             BBus::Apu(port) => self.apu.write(port, value),
             BBus::WramData => {
                 if let Some(byte) = self.wram.get_mut(self.wram_port_address as usize) {
@@ -561,10 +584,7 @@ impl Bus {
             BBus::WramAddressHigh => {
                 self.wram_port_address = u32::from_le_bytes([low, middle, value & 0x01, 0]);
             }
-            BBus::Ppu(
-                PpuRegister::SoftwareLatch | PpuRegister::Counter(_) | PpuRegister::Other(_),
-            )
-            | BBus::Unanswered => {}
+            BBus::Unanswered => {}
         }
     }
 
@@ -573,7 +593,8 @@ impl Bus {
     /// catch-up rule 1; ADR 0019, point 2).
     // @source: adr-0019
     // @source: adr-0027
-    const fn sync_owner(&mut self, target: Target) {
+    // @source: adr-0028
+    fn sync_owner(&mut self, target: Target) {
         match target {
             Target::BBus(BBus::Ppu(_)) => self.sync_ppu(),
             Target::BBus(BBus::Apu(_)) => self.apu.run_until(self.now),
@@ -581,14 +602,46 @@ impl Bus {
         }
     }
 
-    /// Runs the PPU up to `now` before an access to its registers. There is no PPU to run
-    /// until the PPU issues land.
+    /// Runs the PPU up to `now` before an access to its registers: renders every output
+    /// line that has started and not been drawn (technical design section 4, catch-up rule
+    /// 2; ADR 0028, point 6). Vertical blank outputs nothing.
+    // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0019
-    #[expect(
-        clippy::unused_self,
-        reason = "the hook the PPU's catch-up fills in (ADR 0019, point 2)"
-    )]
-    const fn sync_ppu(&mut self) {}
+    // @source: adr-0028
+    fn sync_ppu(&mut self) {
+        if !self.timing.in_vertical_blank() {
+            self.render_through(self.timing.line());
+        }
+    }
+
+    /// Renders the lines from the PPU's next line through `last` (ADR 0028, point 6).
+    // @source: anomie-timing#s-ppu/rendering
+    // @source: adr-0028
+    fn render_through(&mut self, last: u16) {
+        while self.ppu.next_line() <= last {
+            let line = self.ppu.next_line();
+            self.video.render(&mut self.ppu, line);
+        }
+    }
+
+    /// Vertical blank has begun on `line`: the PPU renders the lines left before it, the
+    /// frame is presented with the field it shows and the next frame starts from line 1
+    /// (ADR 0028, points 6 and 8).
+    // @source: anomie-regs#213f
+    // @source: anomie-timing#s-ppu/blanking-periods
+    // @source: anomie-timing#s-ppu/rendering
+    // @source: adr-0028
+    fn end_frame_video(&mut self, line: u16) {
+        let last = line.saturating_sub(1);
+        self.render_through(last);
+        let field = if self.timing.field(self.now) {
+            Field::Second
+        } else {
+            Field::First
+        };
+        self.video.present(last, field);
+        self.ppu.start_frame();
+    }
 
     /// Ends a CPU cycle at `speed`: the multiply and divide unit counts it (ADR 0023,
     /// point 2), and so does a requested DMA transfer's countdown to its pause (ADR 0025,
@@ -610,8 +663,8 @@ impl Bus {
     ///
     /// - a refresh pauses the CPU (ADR 0019, point 6);
     /// - a line start is reported to `observer`, after the frame end it may bring
-    ///   (ADR 0020, point 8); line 0 clears the NMI flag, and a frame end closes the
-    ///   frame's polled flag (ADR 0024, point 8);
+    ///   (ADR 0020, point 8); line 0 clears the NMI flag, and a frame end presents the
+    ///   frame (ADR 0028, point 8) and closes its polled flag (ADR 0024, point 8);
     /// - the NMI flag, a trigger point and a `$4201` latch change the interrupt state and
     ///   the counters (ADR 0021);
     /// - the auto-read takes its next step (ADR 0024, points 6 and 9);
@@ -626,6 +679,7 @@ impl Bus {
     // @source: adr-0024
     // @source: adr-0025
     // @source: adr-0026
+    // @source: adr-0028
     fn advance<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
         self.now += cycles;
         while self.now >= self.timing.next_deadline() {
@@ -640,6 +694,7 @@ impl Bus {
                         self.interrupts.end_vertical_blank();
                     }
                     if frame_ended {
+                        self.end_frame_video(line);
                         self.ports.end_frame();
                     }
                     if O::ACTIVE {
@@ -651,7 +706,7 @@ impl Bus {
                 }
                 Some(Event::Nmi) => self.interrupts.set_nmi_flag(),
                 Some(Event::Irq) => self.interrupts.set_irq_flag(),
-                Some(Event::Latch { line, dot }) => self.counters.latch(line, dot),
+                Some(Event::Latch { line, dot }) => self.ppu.latch_counters(line, dot),
                 Some(Event::Joypad { at }) => {
                     let next = self.ports.auto_read_event(at);
                     self.timing.schedule_joypad(next);

@@ -117,7 +117,7 @@ fn write_only_and_unanswered_addresses_read_open_bus() {
         0x00_420D, // MEMSEL, write-only
         0x00_4202, 0x00_4203, 0x00_4204, 0x00_4205, 0x00_4206, // the math operands
         0x00_2000, 0x00_2184, 0x00_21FF, 0x00_2200, 0x00_4400, 0x00_5FFF, // unused
-        0x00_2100, // the PPU, until it exists
+        0x00_2100, 0x00_2137, 0x00_213F, // INIDISP, SLHV, STAT78 until #90 (ADR 0028)
         0x00_4000, 0x00_4015, 0x00_4018, 0x00_41FF, 0x00_4220, // unused CPU registers
     ] {
         assert_eq!(read(&mut bus, address), 0x5C, "{address:06X}");
@@ -357,8 +357,8 @@ fn reset_clears_the_interrupts_and_sets_wrio() {
     bus.reset();
     assert_eq!(bus.interrupts, Interrupts::power_on());
     assert_eq!(bus.io_port, 0xFF);
-    // The latch from the $4201 write is kept.
-    assert_ne!(bus.counters, CounterLatch::power_on());
+    // The latch from the $4201 write is kept: V is no longer $1FF.
+    assert_eq!(bus.ppu.peek(Register::VerticalCounter), Some(0x00));
 }
 
 // @source: anomie-regs#4202
@@ -1231,4 +1231,97 @@ fn dma_reaches_the_apu_ports_as_the_cpu_does() {
         [0x00]
     );
     assert_eq!(read(&mut bus, 0x00_0100), 0x00);
+}
+
+/// Idles until the clock reaches line `line` of the current frame.
+// @source: adr-0020
+fn idle_to_line(bus: &mut Bus, line: u16) {
+    while bus.timing.line() != line {
+        idle(bus);
+    }
+}
+
+// @source: anomie-regs#registers
+// @source: fullsnes#snesunpredictablethings
+// @source: adr-0028
+#[test]
+fn ppu1_open_bus_answers_its_write_only_registers_and_ppu2_follows_the_counters() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_4200, 0x5C);
+    // PPU1 open bus is 0 at power-on; $2104 and $212A read it, not the data bus.
+    assert_eq!(read(&mut bus, 0x00_2104), 0x00);
+    assert_eq!(read(&mut bus, 0x00_212A), 0x00);
+    assert_eq!(bus.peek(0x00_2118), (0x00, false));
+    // $2134 is CPU open bus until #90; the read above placed $00 on the data bus.
+    assert_eq!(read(&mut bus, 0x00_2134), 0x00);
+    write(&mut bus, 0x00_4200, 0x5C);
+    assert_eq!(read(&mut bus, 0x00_2134), 0x5C);
+    // A $213C read becomes PPU2 open bus: OPVCT's high byte shows it in bits 7-1.
+    assert_eq!(read(&mut bus, 0x00_213D), 0xFF);
+    assert_eq!(read(&mut bus, 0x00_213C), 0xFF);
+    assert_eq!(read(&mut bus, 0x00_213C), 0xFF);
+    // Latching on line 0: OPVCT's flip-flop is on the high byte, so it reads bit 8 of V,
+    // 0, under the last PPU2 value read, $FF.
+    write(&mut bus, 0x00_4201, 0x80);
+    read(&mut bus, 0x00_2137);
+    assert_eq!(read(&mut bus, 0x00_213D), 0xFE);
+}
+
+// @source: anomie-timing#s-ppu/rendering
+// @source: adr-0028
+#[test]
+fn a_line_is_drawn_when_the_ppu_is_synced_after_it_starts_or_when_the_frame_ends() {
+    let mut bus = bus();
+    bus.ppu.cgram_mut()[..2].copy_from_slice(&[0x11, 0x00]);
+    idle_to_line(&mut bus, 10);
+    // A write to any PPU register syncs it: lines 1 to 10 are drawn with colour $0011.
+    write(&mut bus, 0x00_2100, 0x00);
+    assert_eq!(bus.ppu.next_line(), 11);
+    // A CGRAM change that does not pass through the bus reaches only later lines.
+    bus.ppu.cgram_mut()[..2].copy_from_slice(&[0x22, 0x00]);
+    idle_to_line(&mut bus, 225);
+    let frame = bus.video.frame();
+    let pixels = frame.pixels;
+    assert_eq!((frame.width, frame.height, frame.field), (256, 224, None));
+    assert!(pixels[..10 * 256].iter().all(|&pixel| pixel == 0x0011));
+    assert!(pixels[10 * 256..].iter().all(|&pixel| pixel == 0x0022));
+    // Vertical blank draws nothing, and the next frame starts from line 1.
+    assert_eq!(bus.ppu.next_line(), 1);
+    write(&mut bus, 0x00_2100, 0x00);
+    assert_eq!(bus.ppu.next_line(), 1);
+}
+
+// @source: anomie-regs#2133
+// @source: anomie-timing#s-ppu/blanking-periods
+// @source: adr-0028
+#[test]
+fn overscan_frames_have_239_lines_and_a_reset_abandons_the_frame() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_2133, 0x04);
+    idle_to_line(&mut bus, 241);
+    assert_eq!(bus.video.frame().height, 239);
+    idle_to_line(&mut bus, 100);
+    write(&mut bus, 0x00_2133, 0x00);
+    bus.reset();
+    assert_eq!(bus.ppu.next_line(), 1);
+    // The frame after the reset starts again from line 1, without overscan.
+    idle_to_line(&mut bus, 226);
+    assert_eq!(bus.video.frame().height, 224);
+}
+
+// @source: anomie-regs#2133
+// @source: anomie-regs#213f
+// @source: adr-0020
+// @source: adr-0028
+#[test]
+fn an_interlaced_frame_is_448_rows_and_names_its_field() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_2133, 0x01);
+    idle_to_line(&mut bus, 225);
+    let frame = bus.video.frame();
+    // The first frame after power-on is field 1 (ADR 0020, point 4).
+    assert_eq!(
+        (frame.width, frame.height, frame.field),
+        (256, 448, Some(Field::Second))
+    );
 }

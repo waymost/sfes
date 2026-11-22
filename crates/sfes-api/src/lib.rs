@@ -25,8 +25,8 @@ pub use crate::{
     random::SplitMix64,
     state::{StateError, StateHash},
     system::{
-        AudioChunk, Peek, RegionDescriptor, RegionId, Stop, StopReason, System, SystemDescriptor,
-        VideoFrame,
+        AudioChunk, Field, Peek, RegionDescriptor, RegionId, Stop, StopReason, System,
+        SystemDescriptor, VideoFrame,
     },
     units::{Addr24, Cycles},
 };
