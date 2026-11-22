@@ -1,5 +1,7 @@
 //! Newtypes for time and addresses, so units cannot be mixed by accident.
 
+use core::ops::{Add, AddAssign, Sub};
+
 /// Master-clock cycles since power-on (21.477 MHz NTSC, 21.281 MHz PAL).
 #[derive(
     Clone,
@@ -15,6 +17,46 @@
     serde::Serialize,
 )]
 pub struct Cycles(pub u64);
+
+impl Cycles {
+    /// The time `cycles` master cycles later. Usable in `const` code, where `+` is not.
+    #[must_use]
+    pub const fn after(self, cycles: u64) -> Self {
+        Self(self.0 + cycles)
+    }
+
+    /// The master cycles from `earlier` to `self`, which is no earlier. Usable in `const`
+    /// code, where `-` is not.
+    #[must_use]
+    pub const fn since(self, earlier: Self) -> u64 {
+        self.0 - earlier.0
+    }
+}
+
+/// `time + cycles`: the time `cycles` master cycles later.
+impl Add<u64> for Cycles {
+    type Output = Self;
+
+    fn add(self, cycles: u64) -> Self {
+        self.after(cycles)
+    }
+}
+
+/// `time += cycles`: moves the time on by `cycles` master cycles.
+impl AddAssign<u64> for Cycles {
+    fn add_assign(&mut self, cycles: u64) {
+        *self = self.after(cycles);
+    }
+}
+
+/// `later - earlier`: the master cycles between two times.
+impl Sub for Cycles {
+    type Output = u64;
+
+    fn sub(self, earlier: Self) -> u64 {
+        self.since(earlier)
+    }
+}
 
 /// A 24-bit CPU address. The constructor masks to 24 bits, so every value is in range.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -66,6 +108,17 @@ impl From<Addr24> for u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cycles_add_and_subtract_master_cycles() {
+        let mut time = Cycles(100) + 24;
+        assert_eq!(time, Cycles(124));
+        time += 6;
+        assert_eq!(time, Cycles(130));
+        assert_eq!(time - Cycles(100), 30);
+        assert_eq!(Cycles(7).after(3), Cycles(10));
+        assert_eq!(Cycles(10).since(Cycles(7)), 3);
+    }
 
     #[test]
     fn new_masks_to_24_bits() {

@@ -1,8 +1,8 @@
-// @source: anomie-regs#controllers/generic
-// @source: anomie-regs#controllers/joypads
 // @source: anomie-regs#4016
 // @source: anomie-regs#4017
 // @source: anomie-regs#4218
+// @source: anomie-regs#controllers/generic
+// @source: anomie-regs#controllers/joypads
 // @source: anomie-timing#s-cpu/auto-joypad-read
 // @source: fullsnes#snescontrollersioportsautomaticreading
 // @source: fullsnes#snescontrollersioportsmanualreading
@@ -14,7 +14,10 @@
 
 use sfes_api::{Buttons, Cycles};
 
-use crate::bus::PORTS;
+use crate::bus::Registers;
+
+/// The number of controller ports.
+const PORTS: usize = 2;
 
 /// The buttons' bits of a pad's 16, in serial order from bit 0: B first, R twelfth.
 const BUTTON_BITS: u32 = 0x0FFF;
@@ -24,7 +27,7 @@ const AFTER_SIXTEEN: u32 = 0xFFFF_0000;
 const TOP_BIT: u32 = 0x8000_0000;
 /// `$4016` write bit 0: the latch line of both ports.
 const LATCH: u8 = 0x01;
-/// `$4200` NMITIMEN bit 0: the auto-joypad read enable.
+/// $4200 NMITIMEN bit 0: the auto-joypad read enable.
 const AUTO_READ_ENABLE: u8 = 0x01;
 /// The bits the auto-read takes from each data line.
 const AUTO_READ_BITS: u8 = 16;
@@ -32,6 +35,42 @@ const AUTO_READ_BITS: u8 = 16;
 const AUTO_READ_BIT_INTERVAL: u64 = 256;
 /// Master cycles from the auto-read's start to its end (`anomie-timing`).
 const AUTO_READ_LENGTH: u64 = 4224;
+
+/// One of the two controller ports.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Port {
+    /// Port 1, read at `$4016`.
+    One,
+    /// Port 2, read at `$4017`.
+    Two,
+}
+
+impl Port {
+    /// Both ports, in order.
+    const ALL: [Self; PORTS] = [Self::One, Self::Two];
+}
+
+/// One of `$4218–$421F` JOY1L–JOY4H, by its offset from `$4218`, 0–7.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct JoypadByte(u8);
+
+impl JoypadByte {
+    /// The register at `offset` from `$4218`; only the low three bits count.
+    // @source: anomie-regs#4218
+    pub(crate) const fn new(offset: u8) -> Self {
+        Self(offset & 0x07)
+    }
+}
+
+/// The ports' registers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PortRegister {
+    /// $4016 JOYSER0 (port 1) or $4017 JOYSER1 (port 2): the port's data lines, and at
+    /// `$4016` the latch.
+    Serial(Port),
+    /// $4218–$421F JOY1L–JOY4H: the auto-joypad read's results.
+    Joypad(JoypadByte),
+}
 
 /// A standard pad: its bits still to shift out, the next in bit 0 (ADR 0024, point 2).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,10 +88,10 @@ impl Pad {
 
     /// A pad just latched with `buttons`: the 12 buttons, a pressed one as 1, then four 0
     /// ID bits, then ones.
-    // @source: anomie-regs#controllers/joypads
     // @source: anomie-regs#4016
-    // @source: fullsnes#snescontrollersjoypad
+    // @source: anomie-regs#controllers/joypads
     // @source: fullsnes#snescontrollershardwareidcodes
+    // @source: fullsnes#snescontrollersjoypad
     // @source: adr-0024
     const fn loaded(buttons: Buttons) -> Self {
         Self {
@@ -109,8 +148,8 @@ pub(crate) struct Ports {
 impl Ports {
     /// The ports at power-on: no buttons, the latch low, the auto-read off and
     /// `$4218–$421F` 0 (`fullsnes#snesiomap`; ADR 0024, points 2, 3 and 7).
-    // @source: fullsnes#snesiomap
     // @source: anomie-regs#4200
+    // @source: fullsnes#snesiomap
     // @source: adr-0024
     pub(crate) const fn power_on() -> Self {
         Self {
@@ -130,8 +169,8 @@ impl Ports {
     /// Reset: the latch low and the auto-read off, with a read in progress abandoned. The
     /// pads, the held buttons, `$4218–$421F` and the polled flags are kept (ADR 0024,
     /// points 3, 5 and 7).
-    // @source: fullsnes#snesiomap
     // @source: anomie-regs#4200
+    // @source: fullsnes#snesiomap
     // @source: adr-0024
     pub(crate) const fn reset(&mut self) {
         self.latch = false;
@@ -144,7 +183,7 @@ impl Ports {
     // @source: anomie-regs#4016
     // @source: fullsnes#snescontrollersioportsmanualreading
     // @source: adr-0024
-    pub(crate) const fn write_latch(&mut self, value: u8) {
+    fn write_latch(&mut self, value: u8) {
         let latch = value & LATCH != 0;
         if latch || self.latch {
             self.load();
@@ -162,8 +201,8 @@ impl Ports {
     /// Loads both pads with the buttons held now.
     // @source: anomie-regs#controllers/generic
     // @source: adr-0024
-    const fn load(&mut self) {
-        self.pads = [Pad::loaded(self.input[0]), Pad::loaded(self.input[1])];
+    fn load(&mut self) {
+        self.pads = self.input.map(Pad::loaded);
     }
 
     /// Clocks the pad on `port`: Data1 in bit 0 and Data2, never connected, 0 in bit 1. With
@@ -172,66 +211,41 @@ impl Ports {
     // @source: anomie-regs#controllers/joypads
     // @source: fullsnes#snescontrollersioportsautomaticreading
     // @source: adr-0024
-    fn clock(&mut self, port: usize) -> u8 {
-        let (Some(pad), Some(buttons)) = (self.pads.get_mut(port), self.input.get(port)) else {
-            return 0;
-        };
+    fn clock(&mut self, port: Port) -> u8 {
+        let buttons = self.input[port as usize];
+        let pad = &mut self.pads[port as usize];
         if self.latch {
-            *pad = Pad::loaded(*buttons);
+            *pad = Pad::loaded(buttons);
             pad.data()
         } else {
             pad.shift()
         }
     }
 
-    /// A CPU read of `$4016` (port 0) or `$4017` (port 1): the port's data bits, after
-    /// which its pad moves on. It polls the controllers (ADR 0024, points 4 and 8).
-    // @source: anomie-regs#4016
-    // @source: anomie-regs#4017
-    // @source: fullsnes#snescontrollersioportsmanualreading
-    // @source: adr-0024
-    pub(crate) fn read_data(&mut self, port: usize) -> u8 {
-        self.polled.frame = true;
-        self.clock(port)
-    }
-
-    /// The data bits a read of `$4016` (port 0) or `$4017` (port 1) would return, without
-    /// clocking the pad (ADR 0024, point 4).
+    /// The data bits a read of `port` would return, without clocking the pad (ADR 0024,
+    /// point 4).
     // @source: anomie-regs#4016
     // @source: anomie-regs#4017
     // @source: adr-0024
-    pub(crate) fn peek_data(&self, port: usize) -> u8 {
-        match (self.pads.get(port), self.input.get(port)) {
-            (Some(_), Some(buttons)) if self.latch => Pad::loaded(*buttons).data(),
-            (Some(pad), _) => pad.data(),
-            (None, _) => 0,
+    const fn data(&self, port: Port) -> u8 {
+        if self.latch {
+            Pad::loaded(self.input[port as usize]).data()
+        } else {
+            self.pads[port as usize].data()
         }
     }
 
-    /// One of `$4218–$421F` (`index` 0–7), without side effects.
+    /// One of `$4218–$421F`.
     // @source: anomie-regs#4218
     // @source: fullsnes#snescontrollersioportsautomaticreading
     // @source: adr-0024
-    pub(crate) fn joypad(&self, index: u16) -> u8 {
-        let [low, high] = self
-            .joypads
-            .get(usize::from(index / 2))
-            .copied()
-            .unwrap_or(0)
-            .to_le_bytes();
-        if index.is_multiple_of(2) { low } else { high }
+    const fn joypad(&self, byte: JoypadByte) -> u8 {
+        let JoypadByte(offset) = byte;
+        let [low, high] = self.joypads[(offset / 2) as usize].to_le_bytes();
+        if offset.is_multiple_of(2) { low } else { high }
     }
 
-    /// A CPU read of one of `$4218–$421F` (`index` 0–7), which polls the controllers
-    /// (ADR 0024, point 8).
-    // @source: anomie-regs#4218
-    // @source: adr-0024
-    pub(crate) fn read_joypad(&mut self, index: u16) -> u8 {
-        self.polled.frame = true;
-        self.joypad(index)
-    }
-
-    /// `$4212` HVBJOY bit 0: whether an auto-read is running.
+    /// $4212 HVBJOY bit 0: whether an auto-read is running.
     // @source: anomie-regs#4212
     // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: adr-0024
@@ -243,8 +257,8 @@ impl Ports {
     /// bit 0 is set: Latch pulses and the busy flag sets. A running read clocks both ports
     /// and rotates each data line's bit into its register, or, after the 16th bit, ends.
     /// Returns when its next event is due (ADR 0024, points 5 and 6).
-    // @source: anomie-regs#controllers/generic
     // @source: anomie-regs#4218
+    // @source: anomie-regs#controllers/generic
     // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: fullsnes#snescontrollersioportsautomaticreading
     // @source: adr-0024
@@ -253,7 +267,7 @@ impl Ports {
             None if self.auto_read_enabled => {
                 self.load();
                 self.auto_read = Some(0);
-                Some(Cycles(at.0 + AUTO_READ_BIT_INTERVAL))
+                Some(at + AUTO_READ_BIT_INTERVAL)
             }
             None => None,
             Some(AUTO_READ_BITS) => {
@@ -261,14 +275,12 @@ impl Ports {
                 None
             }
             Some(bits) => {
-                for port in 0..PORTS {
+                for port in Port::ALL {
                     let data = self.clock(port);
-                    if let Some(data1) = self.joypads.get_mut(port) {
-                        *data1 = (*data1 << 1) | u16::from(data & 1);
-                    }
-                    if let Some(data2) = self.joypads.get_mut(port + PORTS) {
-                        *data2 = (*data2 << 1) | u16::from(data >> 1);
-                    }
+                    let data1 = &mut self.joypads[port as usize];
+                    *data1 = (*data1 << 1) | u16::from(data & 1);
+                    let data2 = &mut self.joypads[port as usize + PORTS];
+                    *data2 = (*data2 << 1) | u16::from(data >> 1);
                 }
                 let taken = bits + 1;
                 self.auto_read = Some(taken);
@@ -277,7 +289,7 @@ impl Ports {
                 } else {
                     AUTO_READ_BIT_INTERVAL
                 };
-                Some(Cycles(at.0 + next))
+                Some(at + next)
             }
         }
     }
@@ -300,20 +312,66 @@ impl Ports {
     }
 }
 
+impl Registers for Ports {
+    type Register = PortRegister;
+
+    /// $4016 or $4017: the port's data bits, which the bus puts under open bus and, at
+    /// `$4017`, the grounded lines (ADR 0024, point 4); or one of `$4218–$421F`.
+    // @source: anomie-regs#4016
+    // @source: anomie-regs#4017
+    // @source: anomie-regs#4218
+    // @source: adr-0024
+    fn peek(&self, register: PortRegister) -> Option<u8> {
+        match register {
+            PortRegister::Serial(port) => Some(self.data(port)),
+            PortRegister::Joypad(byte) => Some(self.joypad(byte)),
+        }
+    }
+
+    /// A read polls the controllers, and a read of `$4016` or `$4017` then moves the port's
+    /// pad on (ADR 0024, points 4 and 8).
+    // @source: anomie-regs#4016
+    // @source: anomie-regs#4017
+    // @source: fullsnes#snescontrollersioportsmanualreading
+    // @source: adr-0024
+    fn after_read(&mut self, register: PortRegister) {
+        self.polled.frame = true;
+        if let PortRegister::Serial(port) = register {
+            self.clock(port);
+        }
+    }
+
+    /// $4016 JOYSER0 drives Latch; `$4017` and `$4218–$421F` are read-only.
+    // @source: anomie-regs#4016
+    // @source: adr-0024
+    fn write(&mut self, register: PortRegister, value: u8) {
+        if register == PortRegister::Serial(Port::One) {
+            self.write_latch(value);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
     use super::*;
 
+    /// A read of `$4016` (port 1) or `$4017` (port 2): the data bits.
+    // @source: anomie-regs#4016
+    // @source: anomie-regs#4017
+    fn read_data(ports: &mut Ports, port: Port) -> u8 {
+        ports.read(PortRegister::Serial(port)).unwrap_or_default()
+    }
+
     /// The 16 Data1 bits of `port` read by hand after a latch, then the 17th.
     // @source: anomie-regs#controllers/generic
     // @source: adr-0024
-    fn read_by_hand(ports: &mut Ports, port: usize) -> (Vec<u8>, u8) {
+    fn read_by_hand(ports: &mut Ports, port: Port) -> (Vec<u8>, u8) {
         ports.write_latch(1);
         ports.write_latch(0);
-        let bits = (0..16).map(|_| ports.read_data(port)).collect::<Vec<_>>();
-        (bits, ports.read_data(port))
+        let bits = (0..16).map(|_| read_data(ports, port)).collect::<Vec<_>>();
+        (bits, read_data(ports, port))
     }
 
     /// Runs a whole auto-read started at `start`.
@@ -337,10 +395,10 @@ mod tests {
             Buttons::LEFT,
         ];
         // B, Y, Select, Start, Up, Down, Left, Right, A, X, L, R, then ID 0000.
-        let (bits, after) = read_by_hand(&mut ports, 0);
+        let (bits, after) = read_by_hand(&mut ports, Port::One);
         assert_eq!(bits, [1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0]);
         assert_eq!(after, 1);
-        let (bits, after) = read_by_hand(&mut ports, 1);
+        let (bits, after) = read_by_hand(&mut ports, Port::Two);
         assert_eq!(bits, [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(after, 1);
         assert!(ports.polled.frame);
@@ -352,8 +410,8 @@ mod tests {
     fn a_pad_returns_ones_until_first_latched() {
         let mut ports = Ports::power_on();
         ports.input[0] = Buttons::empty();
-        assert_eq!(ports.read_data(0), 1);
-        assert_eq!(ports.peek_data(0), 1);
+        assert_eq!(read_data(&mut ports, Port::One), 1);
+        assert_eq!(ports.data(Port::One), 1);
     }
 
     // @source: fullsnes#snescontrollersioportsautomaticreading
@@ -363,16 +421,16 @@ mod tests {
         let mut ports = Ports::power_on();
         ports.input[0] = Buttons::B | Buttons::Y;
         ports.write_latch(1);
-        assert_eq!(ports.peek_data(0), 1);
+        assert_eq!(ports.data(Port::One), 1);
         for _ in 0..20 {
-            assert_eq!(ports.read_data(0), 1);
+            assert_eq!(read_data(&mut ports, Port::One), 1);
         }
         ports.input[0] = Buttons::Y;
-        assert_eq!(ports.read_data(0), 0);
+        assert_eq!(read_data(&mut ports, Port::One), 0);
         // Latch falls with Y held: the first bit is B, released.
         ports.write_latch(0);
-        assert_eq!(ports.read_data(0), 0);
-        assert_eq!(ports.read_data(0), 1);
+        assert_eq!(read_data(&mut ports, Port::One), 0);
+        assert_eq!(read_data(&mut ports, Port::One), 1);
     }
 
     // @source: anomie-regs#4218
@@ -388,16 +446,18 @@ mod tests {
         auto_read(&mut ports, Cycles(1000));
         assert_eq!(ports.joypads, [0x8010, 0x0840, 0, 0]);
         assert_eq!(
-            (0..8).map(|index| ports.joypad(index)).collect::<Vec<_>>(),
+            (0..8)
+                .map(|offset| ports.joypad(JoypadByte::new(offset)))
+                .collect::<Vec<_>>(),
             [0x10, 0x80, 0x40, 0x08, 0, 0, 0, 0]
         );
         // The auto-read's own clocks do not poll; the pads are left returning ones.
         assert!(!ports.polled.frame);
-        assert_eq!(ports.read_data(0), 1);
+        assert_eq!(read_data(&mut ports, Port::One), 1);
     }
 
-    // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: anomie-regs#4212
+    // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: adr-0024
     #[test]
     fn the_auto_read_takes_a_bit_every_256_cycles_and_ends_after_4224() {
@@ -441,7 +501,7 @@ mod tests {
         ports.write_auto_read_enable(0x01);
         let mut next = ports.auto_read_event(Cycles(0));
         // The CPU takes the B bit before the auto-read does.
-        assert_eq!(ports.read_data(0), 1);
+        assert_eq!(read_data(&mut ports, Port::One), 1);
         while let Some(at) = next {
             next = ports.auto_read_event(at);
         }
@@ -470,12 +530,12 @@ mod tests {
     #[test]
     fn a_frame_end_keeps_the_polled_flag_as_the_last_frames() {
         let mut ports = Ports::power_on();
-        ports.read_joypad(0);
+        ports.read(PortRegister::Joypad(JoypadByte::new(0)));
         ports.end_frame();
         assert!(ports.last_frame_polled());
         ports.end_frame();
         assert!(!ports.last_frame_polled());
-        ports.read_data(1);
+        read_data(&mut ports, Port::Two);
         ports.end_frame();
         assert!(ports.last_frame_polled());
     }

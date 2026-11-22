@@ -18,3 +18,5 @@ thiserror.workspace = true
 [features]
 default = ["std"]
 std = ["sfes-api/std", "thiserror/std"]
+# ROM images with a plausible header, for other crates' tests.
+test-support = []

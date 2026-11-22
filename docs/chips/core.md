@@ -15,8 +15,8 @@ This page explains the SNES machine and how the crate models it (QA-08). It grow
 | Part | What | Cloned? |
 | --- | --- | --- |
 | `State::cpu` | The 65C816's registers and run state | yes |
-| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the multiply and divide unit, the controller ports (the held buttons, the pads, `$4016`, the auto-read and `$4218–$421F`, and the polled flags), the DMA channels and a requested transfer, the clock, and the scheduler (line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table) | yes |
-| `State::meta` | The seed and the video standard | yes |
+| `State::bus` | WRAM, the cartridge, the data bus value, the WRAM port address, `$420D`, the interrupt state (`$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines), `$4201`, the H/V counter latch, the multiply and divide unit, the controller ports (the held buttons, the pads, `$4016`, the auto-read and `$4218–$421F`, and the polled flags), the DMA channels, a requested transfer and HDMA's flags, the APU ports' placeholder, the clock, and the scheduler (the video standard, line, field, vertical blank, line and frame counts, refresh, the H/V timer and the deadline table) | yes |
+| `State::meta` | The seed of the last power-on | yes |
 | `observer` | The observer | yes |
 | `outputs` | The frame buffer | no: a clone starts empty (technical design section 5) |
 
@@ -58,6 +58,8 @@ The bus reports line and frame boundaries from the cycle in which they pass, aft
 
 [`BusView`](../../crates/sfes-snes-core/src/bus/mod.rs) implements `Bus65816` for the main CPU (ADR 0019). For each cycle it decodes the address, syncs the register's owner, performs the access, charges the access time and any refresh that fell due, and tells the observer.
 
+Decode names the register as well as the device: `Target::Cpu(CpuRegister)` and `BBus::Ppu(PpuRegister)` are enums, and a register that belongs to a unit carries that unit's own register type (`MathRegister`, `PortRegister`, `DmaRegister`, `CounterRegister`, `ApuPort`). Each unit implements the bus's `Registers` trait (`peek`, `after_read`, `write`), and the bus forwards to it. A read is written once: the bus syncs the owner, takes the value `peek` gives, then carries out the read's side effects, so `peek_bus` and a real read cannot disagree.
+
 ### Decode
 
 The cartridge's memory map (ADR 0017) says what answers each 8 KiB page: WRAM, ROM, cartridge RAM, nothing, or the console's I/O pages at `$2000–$5FFF` of banks `$00–$3F` and `$80–$BF`. [`decode.rs`](../../crates/sfes-snes-core/src/bus/decode.rs) splits the I/O pages by anomie-memmap's table (`anomie-memmap#memory-map`, `fullsnes#snesiomap`):
@@ -72,6 +74,17 @@ The cartridge's memory map (ADR 0017) says what answers each 8 KiB page: WRAM, R
 | `$2000–$20FF`, `$2200–$3FFF`, `$4400–$5FFF` | A | Nothing on the console; only a cartridge could answer |
 
 Before an access to the PPU's or the APU's registers the bus calls that chip's sync hook, so the chip runs up to `now` (technical design, section 4, catch-up rule 1). The PPU's hook does nothing until the PPU exists, and until then its registers read as open bus. The APU's ports answer from a placeholder (below; ADR 0027).
+
+### Adding a register
+
+1. Add a variant for it to the owning unit's register enum, or a new enum for a new unit, with the doc line `$XXXX MNEMONIC: what it does` (AGENTS.md section 4).
+2. Decode its address to that variant in `decode.rs`, under `Target::Cpu` or `BBus`. Decode is the only place that matches on the address.
+3. Handle it in the unit's `Registers` impl:
+   - `peek` gives the value with no side effects. It returns `None` where open bus answers the whole register, as for a write-only one. Where only some bits come from open bus, the bus merges them in `peek_target`.
+   - `after_read` carries out what a read changes (a flip-flop, a cleared flag).
+   - `write` takes a CPU write; a read-only register ignores it.
+4. Wire the variant into the bus's `peek_target`, `after_read` and `write_target` matches. Do not add a `read_x` or `write_x` method to the unit, and do not read the register outside `read_target`.
+5. Test the unit through `Registers::read` (test-only) and the bus through a real read, and cite both (AGENTS.md section 1).
 
 ### Access time
 

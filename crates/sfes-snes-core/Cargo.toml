@@ -12,10 +12,14 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+bitflags.workspace = true
 sfes-api.workspace = true
 sfes-snes-cart.workspace = true
 sfes-snes-cpu.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+sfes-snes-cart = { workspace = true, features = ["test-support"] }
 
 [features]
 default = ["std"]

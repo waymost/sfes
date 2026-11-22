@@ -37,17 +37,17 @@ impl Observer for Interrupts {
 }
 
 // @source: anomie-memmap#memory-map
-// @source: anomie-timing#s-cpu/instructions
-// @source: anomie-timing#s-cpu/clocks-and-refresh
 // @source: anomie-regs#2180
 // @source: anomie-regs#2181
 // @source: anomie-regs#420d
+// @source: anomie-timing#s-cpu/clocks-and-refresh
+// @source: anomie-timing#s-cpu/instructions
 // @source: fullsnes#snesmemorycontrol
+// @source: wdc-w65c816s#table-5-7-18
 // @source: wdc-w65c816s#table-5-7-1a
 // @source: wdc-w65c816s#table-5-7-1d
 // @source: wdc-w65c816s#table-5-7-4a
 // @source: wdc-w65c816s#table-5-7-4b
-// @source: wdc-w65c816s#table-5-7-18
 // @source: adr-0006
 // @source: adr-0019
 #[test]
@@ -109,18 +109,18 @@ fn bus_timing_cart_runs_fast_rom_the_wram_port_and_a_refresh() {
     assert_eq!(wram[0x1_0200..0x1_0203], [0x40, 0x40, 0x41]);
 }
 
-// @source: anomie-timing#s-cpu/interrupts
-// @source: anomie-timing#s-cpu/clocks-and-refresh
-// @source: anomie-timing#s-cpu/registers
-// @source: anomie-regs#4210
-// @source: anomie-regs#4211
-// @source: anomie-regs#4212
 // @source: anomie-regs#2137
 // @source: anomie-regs#213c
 // @source: anomie-regs#213d
+// @source: anomie-regs#4210
+// @source: anomie-regs#4211
+// @source: anomie-regs#4212
+// @source: anomie-timing#s-cpu/clocks-and-refresh
+// @source: anomie-timing#s-cpu/interrupts
+// @source: anomie-timing#s-cpu/registers
 // @source: fullsnes#snestiminghvevents
-// @source: wdc-w65c816s#table-5-7-22a
 // @source: wdc-w65c816s#table-5-7-19d
+// @source: wdc-w65c816s#table-5-7-22a
 // @source: adr-0004
 // @source: adr-0019
 // @source: adr-0020
@@ -170,19 +170,19 @@ fn interrupts_cart_takes_the_hv_irq_and_the_nmi_on_time() {
     assert_eq!(wram[..8], [0xC2, 153, 152, 5, 4, 0xC2, 0x82, 0x42]);
 }
 
+// @source: anomie-regs#4201
 // @source: anomie-regs#4202
 // @source: anomie-regs#4203
 // @source: anomie-regs#4204
 // @source: anomie-regs#4206
+// @source: anomie-regs#4213
 // @source: anomie-regs#4214
 // @source: anomie-regs#4216
-// @source: anomie-regs#4201
-// @source: anomie-regs#4213
-// @source: fullsnes#snesmathsmultiplydivide
 // @source: fullsnes#snescontrollersioportsmanualreading
-// @source: wdc-w65c816s#table-5-7-1a
+// @source: fullsnes#snesmathsmultiplydivide
 // @source: wdc-w65c816s#table-5-7-19a
 // @source: wdc-w65c816s#table-5-7-19b
+// @source: wdc-w65c816s#table-5-7-1a
 // @source: adr-0023
 #[test]
 fn math_cart_reads_results_when_they_appear() {
@@ -207,17 +207,17 @@ fn math_cart_reads_results_when_they_appear() {
     assert_eq!(wram[..expected.len()], expected);
 }
 
-// @source: anomie-regs#controllers/generic
-// @source: anomie-regs#controllers/joypads
+// @source: anomie-memmap#hardware/data-bus
 // @source: anomie-regs#4016
 // @source: anomie-regs#4017
 // @source: anomie-regs#4200
 // @source: anomie-regs#4212
 // @source: anomie-regs#4218
-// @source: anomie-memmap#hardware/data-bus
+// @source: anomie-regs#controllers/generic
+// @source: anomie-regs#controllers/joypads
 // @source: anomie-timing#s-cpu/auto-joypad-read
-// @source: fullsnes#snescontrollersioportsmanualreading
 // @source: fullsnes#snescontrollersioportsautomaticreading
+// @source: fullsnes#snescontrollersioportsmanualreading
 // @source: wdc-w65c816s#table-5-7-1a
 // @source: adr-0024
 #[test]
@@ -256,13 +256,13 @@ fn joypad_cart_reads_the_pads_by_hand_and_by_the_auto_read() {
     assert_eq!(wram[0x16..0x1E], [0x40, 0xA1, 0x20, 0x48, 0, 0, 0, 0]);
 }
 
+// @source: anomie-regs#2180
 // @source: anomie-regs#420b
 // @source: anomie-regs#43x0
 // @source: anomie-regs#43x2
 // @source: anomie-regs#43x5
 // @source: anomie-regs#43xb
 // @source: anomie-regs#dma-and-hdma/dma
-// @source: anomie-regs#2180
 // @source: anomie-timing#s-cpu/dma
 // @source: fullsnes#snesunpredictablethings
 // @source: adr-0013
@@ -300,12 +300,12 @@ fn dma_cart_moves_bytes_through_the_wram_port_and_leaves_the_registers_stepped()
     assert_eq!(wram[0x135..0x138], [back_low, back_high, 0xFF]);
 }
 
+// @source: anomie-regs#2180
 // @source: anomie-regs#420c
 // @source: anomie-regs#43x5
 // @source: anomie-regs#43x8
 // @source: anomie-regs#43xa
 // @source: anomie-regs#dma-and-hdma/hdma
-// @source: anomie-regs#2180
 // @source: anomie-timing#s-cpu/hdma
 // @source: fullsnes#snesdmaandhdmachannel07registers
 // @source: adr-0013

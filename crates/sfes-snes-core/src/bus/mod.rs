@@ -1,5 +1,5 @@
-// @source: anomie-memmap#memory-map
 // @source: anomie-memmap#hardware/data-bus
+// @source: anomie-memmap#memory-map
 // @source: adr-0004
 // @source: adr-0018
 // @source: adr-0019
@@ -32,44 +32,31 @@ use alloc::{boxed::Box, vec};
 use core::fmt;
 
 use sfes_api::{Addr24, BusId, Cycles, Observer, SplitMix64};
-use sfes_snes_cart::Cartridge;
+use sfes_snes_cart::{Cartridge, WRAM_SIZE};
 use sfes_snes_cpu::{Bus65816, Pending, Pins};
 
 use crate::{
     bus::{
         apu::Apu,
         counters::CounterLatch,
-        decode::{BBus, FAST, Target, access_cycles, decode},
+        decode::{BBus, CpuRegister, PpuRegister, Speed, Target, access_speed, decode},
         dma::Dma,
         interrupts::Interrupts,
         math::Math,
-        ports::Ports,
+        ports::{Port, PortRegister, Ports},
     },
     timing::{Event, REFRESH_LENGTH, Timing, WRIO_LATCH_DELAY},
 };
 
-/// The size of WRAM, banks `$7E–$7F`.
-pub(crate) const WRAM_SIZE: usize = 0x2_0000;
-/// The number of controller ports.
-pub(crate) const PORTS: usize = 2;
-
 /// The WRAM port's address is 17 bits (ADR 0019, point 5).
 const WRAM_PORT_MASK: u32 = 0x1_FFFF;
-/// `$2133` SETINI on the B bus, whose interlace and overscan bits the scheduler keeps.
-const SCREEN_MODE: u8 = 0x33;
-/// `$420D` MEMSEL's one bit, FastROM select.
+/// $420D MEMSEL's one bit, FastROM select.
 const FAST_ROM: u8 = 0x01;
-/// `$2137` SLHV on the B bus.
-const SOFTWARE_LATCH: u8 = 0x37;
-/// `$213C` OPHCT on the B bus.
-const HORIZONTAL_COUNTER: u8 = 0x3C;
-/// `$213D` OPVCT on the B bus.
-const VERTICAL_COUNTER: u8 = 0x3D;
-/// `$4201` WRIO bit 7, the PPU latch line.
+/// $4201 WRIO bit 7, the PPU latch line.
 const PPU_LATCH: u8 = 0x80;
 /// `$4201` at power-on and reset (ADR 0021, point 8).
 const IO_PORT_RESET: u8 = 0xFF;
-/// `$4210` bits 3-0: the 5A22 version (ADR 0021, point 4).
+/// `$4210` bits 3–0: the 5A22 version (ADR 0021, point 4).
 const CPU_VERSION: u8 = 0x02;
 /// Bit 7 of `$4210`, `$4211` and `$4212`: a flag.
 const FLAG: u8 = 0x80;
@@ -95,6 +82,41 @@ const NMI_VECTOR_NATIVE: u32 = 0x00_FFEA;
 /// The NMI vector's low byte in emulation mode, read with VPB.
 const NMI_VECTOR_EMULATION: u32 = 0x00_FFFA;
 
+/// A unit's registers as the bus reaches them: the bus decodes an address to one of the
+/// unit's registers and forwards the access (ADR 0019, point 1).
+pub(crate) trait Registers {
+    /// Which of the unit's registers an access names.
+    type Register: Copy;
+
+    /// What a read of `register` returns, without its side effects; `None` where open bus
+    /// answers, as for a write-only register.
+    // @source: anomie-memmap#hardware/data-bus
+    // @source: adr-0019
+    fn peek(&self, register: Self::Register) -> Option<u8>;
+
+    /// The side effects of a read of `register`, once [`Registers::peek`] has given its
+    /// value. Most registers have none.
+    // @source: adr-0019
+    fn after_read(&mut self, register: Self::Register) {
+        let _ = register;
+    }
+
+    /// A read of `register`: its value, then its side effects. The bus itself peeks and
+    /// carries out the side effects in two steps, since some registers' bytes take bits from
+    /// outside the unit (see `Bus::read_target`); tests read a unit directly.
+    // @source: adr-0019
+    #[cfg(test)]
+    fn read(&mut self, register: Self::Register) -> Option<u8> {
+        let value = self.peek(register);
+        self.after_read(register);
+        value
+    }
+
+    /// A write of `value` to `register`; a write to a read-only register is lost.
+    // @source: adr-0019
+    fn write(&mut self, register: Self::Register, value: u8);
+}
+
 /// Everything on the CPU's side of the machine except the CPU itself.
 #[derive(Clone)]
 pub(crate) struct Bus {
@@ -108,22 +130,22 @@ pub(crate) struct Bus {
     pub(crate) wram_port_address: u32,
     /// $420D MEMSEL bit 0: Memory-2 is Fast when set.
     pub(crate) fast_rom: bool,
-    /// `$4200` bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded lines
-    /// (ADR 0004, ADR 0021).
+    /// $4200 NMITIMEN bit 7, the NMI and IRQ flags, the NMI edge latch and the recorded
+    /// lines (ADR 0004, ADR 0021).
     pub(crate) interrupts: Interrupts,
     /// $4201 WRIO: the programmable I/O port, whose bit 7 drives the PPU latch line.
     pub(crate) io_port: u8,
-    /// $213C–$213D OPHCT, OPVCT: the latched H/V counters (ADR 0021, point 7).
+    /// $213C OPHCT and $213D OPVCT: the latched H/V counters (ADR 0021, point 7).
     pub(crate) counters: CounterLatch,
     /// $4202–$4206 and $4214–$4217: the multiply and divide unit (ADR 0023).
     pub(crate) math: Math,
-    /// The pads, $4016, the auto-joypad read into $4218–$421F and the polled flag
+    /// The pads, $4016 JOYSER0, the auto-joypad read into $4218–$421F and the polled flag
     /// (ADR 0024).
     pub(crate) ports: Ports,
-    /// $420B, $420C and $4300–$437F: the DMA channels, a requested transfer and HDMA's
-    /// state (ADR 0025, ADR 0026).
+    /// $420B MDMAEN, $420C HDMAEN and $4300–$437F: the DMA channels, a requested transfer
+    /// and HDMA's state (ADR 0025, ADR 0026).
     pub(crate) dma: Dma,
-    /// $2140–$2143: the APU ports, a placeholder until M3 (ADR 0027).
+    /// $2140–$2143 APUIO0–APUIO3: the APU ports, a placeholder until M3 (ADR 0027).
     pub(crate) apu: Apu,
     /// Master cycles since power-on.
     pub(crate) now: Cycles,
@@ -155,8 +177,8 @@ impl fmt::Debug for Bus {
 impl Bus {
     /// The bus at power-on: WRAM filled from `seed` (ADR 0018), the clock at 0 and the
     /// registers at their reset values (ADR 0019).
-    // @source: vigna-splitmix
     // @source: fullsnes#snesiomap
+    // @source: vigna-splitmix
     // @source: adr-0018
     // @source: adr-0019
     // @source: adr-0021
@@ -164,7 +186,7 @@ impl Bus {
     // @source: adr-0024
     // @source: adr-0025
     pub(crate) fn power_on(cartridge: Cartridge, timing: Timing, seed: u64) -> Self {
-        let mut wram = vec![0; WRAM_SIZE].into_boxed_slice();
+        let mut wram = vec![0; WRAM_SIZE as usize].into_boxed_slice();
         SplitMix64::new(seed).fill(&mut wram);
         Self {
             wram,
@@ -184,29 +206,40 @@ impl Bus {
         }
     }
 
-    /// Sets the registers reset changes to their reset values: `$2181–$2183` and `$420D`
-    /// are 0 (`fullsnes#snesiomap`, ADR 0019), `$4200` and the interrupt flags are clear and
-    /// `$4201` is `$FF` (ADR 0021, point 8), and `$4016` bit 0 and the auto-read are off with
-    /// a read in progress abandoned (ADR 0024, points 3, 5 and 7), and `$420B` is 0 with a
-    /// transfer not yet started dropped (ADR 0025, point 2), and `$420C` is 0 with HDMA's
-    /// flags clear (ADR 0026, point 1). WRAM, the data bus, the
-    /// counter latch, the multiply and divide unit, `$4218–$421F` and the DMA channels'
-    /// registers are kept (ADR 0018, ADR 0021, ADR 0023, ADR 0024, ADR 0025).
-    // @source: fullsnes#snesiomap
-    // @source: fullsnes#snesmemorycontrol
+    /// The reset button. The timing position returns to the start of a frame (ADR 0018,
+    /// ADR 0020), and the registers reset changes take their reset values:
+    ///
+    /// - `$2181–$2183` and `$420D` are 0 (`fullsnes#snesiomap`, ADR 0019);
+    /// - `$4200` and the interrupt flags are clear and `$4201` is `$FF` (ADR 0021, point 8);
+    /// - `$4016` bit 0 and the auto-read are off, and a read in progress is abandoned
+    ///   (ADR 0024, points 3, 5 and 7);
+    /// - `$420B` is 0 and a transfer not yet started is dropped (ADR 0025, point 2), and
+    ///   `$420C` is 0 with HDMA's flags clear (ADR 0026, point 1);
+    /// - the APU ports are `$00` (ADR 0027, point 6).
+    ///
+    /// WRAM, the data bus, the counter latch, the multiply and divide unit, `$4218–$421F`
+    /// and the DMA channels' registers are kept (ADR 0018, ADR 0021, ADR 0023, ADR 0024,
+    /// ADR 0025).
     // @source: anomie-regs#4202
     // @source: anomie-regs#4204
+    // @source: anomie-regs#420b
+    // @source: anomie-regs#420c
+    // @source: anomie-regs#420d
+    // @source: anomie-regs#43x0
+    // @source: anomie-timing
+    // @source: fullsnes#snesiomap
+    // @source: fullsnes#snesmemorycontrol
+    // @source: adr-0018
     // @source: adr-0019
+    // @source: adr-0020
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
-    // @source: anomie-regs#420b
-    // @source: anomie-regs#43x0
     // @source: adr-0025
-    // @source: anomie-regs#420c
     // @source: adr-0026
     // @source: adr-0027
     pub(crate) fn reset(&mut self) {
+        self.timing.restart(self.now);
         self.wram_port_address = 0;
         self.fast_rom = false;
         self.interrupts = Interrupts::power_on();
@@ -226,76 +259,142 @@ impl Bus {
 
     /// The byte at `address` as a read would see it, without the read's side effects or
     /// cost, and whether the read would have side effects.
-    // @source: anomie-memmap#memory-map
     // @source: anomie-memmap#hardware/data-bus
-    // @source: anomie-regs#2180
+    // @source: anomie-memmap#memory-map
+    // @source: adr-0019
+    pub(crate) fn peek(&self, address: u32) -> (u8, bool) {
+        let (value, side_effects) = self.peek_target(decode(self.cartridge.map(), address));
+        (value.unwrap_or(self.open_bus_value), side_effects)
+    }
+
+    /// What a read of `target` returns without its side effects, `None` where nothing
+    /// answers or the register is write-only (ADR 0019, point 4), and whether the read has
+    /// side effects, which [`Bus::after_read`] carries out.
+    // @source: anomie-memmap#hardware/data-bus
+    // @source: anomie-memmap#memory-map
     // @source: anomie-regs#2137
     // @source: anomie-regs#213c
+    // @source: anomie-regs#213d
+    // @source: anomie-regs#2140
+    // @source: anomie-regs#2180
+    // @source: anomie-regs#2181
+    // @source: anomie-regs#4016
+    // @source: anomie-regs#4017
     // @source: anomie-regs#4210
     // @source: anomie-regs#4211
     // @source: anomie-regs#4212
     // @source: anomie-regs#4213
     // @source: anomie-regs#4214
     // @source: anomie-regs#4216
-    // @source: anomie-regs#4016
-    // @source: anomie-regs#4017
     // @source: anomie-regs#4218
+    // @source: anomie-regs#43x0
+    // @source: fullsnes#snesdmaandhdmachannel07registers
+    // @source: fullsnes#snesiomap
     // @source: adr-0019
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
-    // @source: anomie-regs#43x0
-    // @source: fullsnes#snesdmaandhdmachannel07registers
-    // @source: anomie-regs#2140
     // @source: adr-0025
     // @source: adr-0027
-    pub(crate) fn peek(&self, address: u32) -> (u8, bool) {
-        match decode(self.cartridge.map(), address) {
-            Target::BBus(BBus::WramData) => (self.wram_port_byte(), true),
-            Target::BBus(BBus::Ppu(SOFTWARE_LATCH)) => (self.open_bus_value, true),
-            Target::BBus(BBus::Ppu(HORIZONTAL_COUNTER)) => (self.counters.peek_horizontal(), true),
-            Target::BBus(BBus::Ppu(VERTICAL_COUNTER)) => (self.counters.peek_vertical(), true),
-            Target::BBus(BBus::Apu(port)) => (self.apu.peek_port(port), false),
-            Target::Cpu(0x4210) => (self.nmi_flag_byte(self.interrupts.nmi_flag()), true),
-            Target::Cpu(0x4211) => (self.irq_flag_byte(self.interrupts.irq_flag()), true),
-            Target::Cpu(0x4212) => (self.status_byte(), false),
-            Target::Cpu(register @ 0x4213..=0x4217) => (self.port_or_result(register), false),
-            Target::Cpu(0x4016) => (self.port_1_byte(self.ports.peek_data(0)), true),
-            Target::Cpu(0x4017) => (self.port_2_byte(self.ports.peek_data(1)), true),
-            Target::Cpu(register @ 0x4218..=0x421F) => {
-                (self.ports.joypad(register - 0x4218), false)
-            }
-            Target::Cpu(register @ 0x4300..=0x43FF) => (
-                self.dma.read(register).unwrap_or(self.open_bus_value),
-                false,
-            ),
-            target => (self.memory(target).unwrap_or(self.open_bus_value), false),
+    fn peek_target(&self, target: Target) -> (Option<u8>, bool) {
+        match target {
+            Target::Wram(offset) => (self.wram.get(offset as usize).copied(), false),
+            Target::Rom(offset) => (self.cartridge.rom().get(offset as usize).copied(), false),
+            Target::CartRam(offset) => (self.cartridge.ram().get(offset as usize).copied(), false),
+            Target::BBus(device) => match device {
+                BBus::Ppu(PpuRegister::SoftwareLatch) => (None, true),
+                BBus::Ppu(PpuRegister::Counter(register)) => (self.counters.peek(register), true),
+                BBus::Apu(port) => (self.apu.peek(port), false),
+                BBus::WramData => (
+                    self.wram.get(self.wram_port_address as usize).copied(),
+                    true,
+                ),
+                BBus::Ppu(PpuRegister::ScreenMode | PpuRegister::Other(_))
+                | BBus::WramAddressLow
+                | BBus::WramAddressMiddle
+                | BBus::WramAddressHigh
+                | BBus::Unanswered => (None, false),
+            },
+            Target::Cpu(register) => match register {
+                CpuRegister::NmiFlag => (Some(self.nmi_flag_byte()), true),
+                CpuRegister::IrqFlag => (Some(self.irq_flag_byte()), true),
+                CpuRegister::Status => (Some(self.status_byte()), false),
+                CpuRegister::IoPortInput => (Some(self.io_port_input()), false),
+                CpuRegister::Math(register) => (self.math.peek(register), false),
+                CpuRegister::Ports(register @ PortRegister::Serial(port)) => {
+                    let data = self.ports.peek(register).unwrap_or_default();
+                    (Some(self.serial_byte(port, data)), true)
+                }
+                CpuRegister::Ports(register @ PortRegister::Joypad(_)) => {
+                    (self.ports.peek(register), false)
+                }
+                CpuRegister::Dma(register) => (self.dma.peek(register), false),
+                CpuRegister::InterruptEnable
+                | CpuRegister::IoPort
+                | CpuRegister::Timer(_)
+                | CpuRegister::MemorySelect => (None, false),
+            },
+            Target::Unanswered => (None, false),
         }
     }
 
-    /// `$4210` RDNMI with the NMI flag `flag`: version 2, bits 6–4 open bus (ADR 0021,
-    /// point 4).
+    /// The side effects of a read of `target`, after [`Bus::peek_target`] has given its
+    /// value: `$2137` latches the counters while `$4201` bit 7 is set, `$213C/D` flip their
+    /// flip-flops, `$2180` moves the WRAM port's address on, `$4210` and `$4211` clear their
+    /// flags, and the controller registers poll and clock the pads.
+    // @source: anomie-regs#2137
+    // @source: anomie-regs#213c
+    // @source: anomie-regs#2180
+    // @source: anomie-regs#4016
+    // @source: anomie-regs#4210
+    // @source: anomie-regs#4211
+    // @source: anomie-regs#4218
+    // @source: fullsnes#snespputimersandstatus
+    // @source: adr-0019
+    // @source: adr-0021
+    // @source: adr-0024
+    fn after_read(&mut self, target: Target) {
+        match target {
+            Target::BBus(BBus::Ppu(PpuRegister::SoftwareLatch)) => {
+                if self.io_port & PPU_LATCH != 0 {
+                    let (line, dot) = self.timing.position(self.now);
+                    self.counters.latch(line, dot);
+                }
+            }
+            Target::BBus(BBus::Ppu(PpuRegister::Counter(register))) => {
+                self.counters.after_read(register);
+            }
+            Target::BBus(BBus::Apu(port)) => self.apu.after_read(port),
+            Target::BBus(BBus::WramData) => self.advance_wram_port(),
+            Target::Cpu(CpuRegister::NmiFlag) => self.interrupts.clear_nmi_flag(),
+            Target::Cpu(CpuRegister::IrqFlag) => self.interrupts.clear_irq_flag(),
+            Target::Cpu(CpuRegister::Ports(register)) => self.ports.after_read(register),
+            _ => {}
+        }
+    }
+
+    /// $4210 RDNMI: the NMI flag, version 2, bits 6–4 open bus (ADR 0021, point 4).
     // @source: anomie-regs#4210
     // @source: fullsnes#snesppuinterrupts
     // @source: adr-0021
-    const fn nmi_flag_byte(&self, flag: bool) -> u8 {
-        let flag = if flag { FLAG } else { 0 };
+    const fn nmi_flag_byte(&self) -> u8 {
+        let flag = if self.interrupts.nmi_flag() { FLAG } else { 0 };
         flag | CPU_VERSION | (self.open_bus_value & NMI_FLAG_OPEN_BUS)
     }
 
-    /// `$4211` TIMEUP with the IRQ flag `flag`: bits 6–0 open bus (ADR 0021, point 5).
+    /// $4211 TIMEUP: the IRQ flag, bits 6–0 open bus (ADR 0021, point 5).
     // @source: anomie-regs#4211
     // @source: adr-0021
-    const fn irq_flag_byte(&self, flag: bool) -> u8 {
-        let flag = if flag { FLAG } else { 0 };
+    const fn irq_flag_byte(&self) -> u8 {
+        let flag = if self.interrupts.irq_flag() { FLAG } else { 0 };
         flag | (self.open_bus_value & IRQ_FLAG_OPEN_BUS)
     }
 
-    /// `$4212` HVBJOY at the start of the access: vertical and horizontal blank, bits 5–1
+    /// $4212 HVBJOY at the start of the access: vertical and horizontal blank, bits 5–1
     /// open bus (ADR 0021, point 6), and auto-joypad busy (ADR 0024, point 6).
-    // @source: anomie-timing#s-cpu/registers
-    // @source: anomie-timing#s-cpu/auto-joypad-read
     // @source: anomie-regs#4212
+    // @source: anomie-timing#s-cpu/auto-joypad-read
+    // @source: anomie-timing#s-cpu/registers
     // @source: fullsnes#snesppuinterrupts
     // @source: adr-0021
     // @source: adr-0024
@@ -318,44 +417,21 @@ impl Bus {
         vertical | horizontal | busy | (self.open_bus_value & STATUS_OPEN_BUS)
     }
 
-    /// `$4016` JOYSER0 with port 1's data bits `data`: bits 7–2 open bus (ADR 0024,
-    /// point 4).
+    /// $4016 JOYSER0 or $4017 JOYSER1 with `port`'s data bits `data`: at `$4016` bits 7–2
+    /// open bus, at `$4017` bits 4–2 set and bits 7–5 open bus (ADR 0024, point 4).
     // @source: anomie-regs
     // @source: anomie-regs#4016
-    // @source: fullsnes#snescontrollersioportsmanualreading
-    // @source: adr-0024
-    const fn port_1_byte(&self, data: u8) -> u8 {
-        (self.open_bus_value & PORT_1_OPEN_BUS) | data
-    }
-
-    /// `$4017` JOYSER1 with port 2's data bits `data`: bits 4–2 set and bits 7–5 open bus
-    /// (ADR 0024, point 4).
-    // @source: anomie-regs
     // @source: anomie-regs#4017
     // @source: fullsnes#snescontrollersioportsmanualreading
     // @source: adr-0024
-    const fn port_2_byte(&self, data: u8) -> u8 {
-        (self.open_bus_value & PORT_2_OPEN_BUS) | PORT_2_GROUNDED | data
-    }
-
-    /// `$4213` RDIO or one of the results `$4214–$4217`, none of which a read changes.
-    // @source: anomie-regs#4213
-    // @source: anomie-regs#4214
-    // @source: anomie-regs#4215
-    // @source: anomie-regs#4216
-    // @source: anomie-regs#4217
-    // @source: adr-0023
-    const fn port_or_result(&self, register: u16) -> u8 {
-        match register {
-            0x4213 => self.io_port_input(),
-            0x4214 => self.math.quotient_low(),
-            0x4215 => self.math.quotient_high(),
-            0x4216 => self.math.product_low(),
-            _ => self.math.product_high(),
+    const fn serial_byte(&self, port: Port, data: u8) -> u8 {
+        match port {
+            Port::One => (self.open_bus_value & PORT_1_OPEN_BUS) | data,
+            Port::Two => (self.open_bus_value & PORT_2_OPEN_BUS) | PORT_2_GROUNDED | data,
         }
     }
 
-    /// `$4213` RDIO: each line of the I/O port, low where `$4201` drives it low or a device
+    /// $4213 RDIO: each line of the I/O port, low where `$4201` drives it low or a device
     /// pulls it low. A standard pad leaves `IOBit` unconnected (ADR 0024, point 2), so it
     /// reads back `$4201` (ADR 0023, point 6).
     // @source: anomie-regs#4213
@@ -367,27 +443,6 @@ impl Bus {
         self.io_port
     }
 
-    /// The byte a memory target holds, or `None` for a register or an unanswered address.
-    // @source: anomie-memmap#memory-map
-    fn memory(&self, target: Target) -> Option<u8> {
-        match target {
-            Target::Wram(offset) => self.wram.get(offset as usize).copied(),
-            Target::Rom(offset) => self.cartridge.rom().get(offset as usize).copied(),
-            Target::CartRam(offset) => self.cartridge.ram().get(offset as usize).copied(),
-            Target::BBus(_) | Target::Cpu(_) | Target::Unanswered => None,
-        }
-    }
-
-    /// The WRAM byte at the WRAM port's address.
-    // @source: anomie-regs#2180
-    // @source: fullsnes#snesmemoryworkramaccess
-    fn wram_port_byte(&self) -> u8 {
-        self.wram
-            .get(self.wram_port_address as usize)
-            .copied()
-            .unwrap_or(self.open_bus_value)
-    }
-
     /// Moves the WRAM port's address on by one, wrapping at 17 bits (ADR 0019, point 5).
     // @source: anomie-regs#2180
     // @source: anomie-regs#2181
@@ -396,122 +451,37 @@ impl Bus {
         self.wram_port_address = (self.wram_port_address + 1) & WRAM_PORT_MASK;
     }
 
-    /// Reads `target` with its side effects. `None` is a read nothing answers, or one of a
-    /// write-only register: the data bus keeps its value (ADR 0019, point 4).
-    // @source: anomie-memmap#memory-map
+    /// Reads `target` with its side effects: syncs the register's owner, takes the value
+    /// [`Bus::peek_target`] gives, then carries out [`Bus::after_read`]. `None` is a read
+    /// nothing answers, or one of a write-only register: the data bus keeps its value
+    /// (ADR 0019, point 4).
     // @source: anomie-memmap#hardware/data-bus
-    // @source: anomie-regs#2180
-    // @source: anomie-regs#2181
-    // @source: fullsnes#snesiomap
-    // @source: fullsnes#snespputimersandstatus
-    // @source: anomie-regs#2137
-    // @source: anomie-regs#213c
-    // @source: anomie-regs#213d
-    // @source: anomie-regs#4210
-    // @source: anomie-regs#4211
-    // @source: anomie-regs#4212
-    // @source: anomie-regs#4213
-    // @source: anomie-regs#4214
-    // @source: anomie-regs#4216
-    // @source: anomie-regs#4016
-    // @source: anomie-regs#4017
-    // @source: anomie-regs#4218
     // @source: adr-0019
-    // @source: adr-0021
-    // @source: adr-0023
-    // @source: adr-0024
-    // @source: anomie-regs#43x0
-    // @source: fullsnes#snesdmaandhdmachannel07registers
-    // @source: anomie-regs#2140
-    // @source: adr-0025
-    // @source: adr-0027
     pub(crate) fn read_target(&mut self, target: Target) -> Option<u8> {
-        match target {
-            Target::BBus(device) => match device {
-                BBus::Ppu(register) => {
-                    self.sync_ppu();
-                    match register {
-                        SOFTWARE_LATCH => {
-                            if self.io_port & PPU_LATCH != 0 {
-                                let (line, dot) = self.timing.position(self.now);
-                                self.counters.latch(line, dot);
-                            }
-                            None
-                        }
-                        HORIZONTAL_COUNTER => Some(self.counters.read_horizontal()),
-                        VERTICAL_COUNTER => Some(self.counters.read_vertical()),
-                        _ => None,
-                    }
-                }
-                BBus::Apu(port) => {
-                    self.sync_apu();
-                    Some(self.apu.read_port(port))
-                }
-                BBus::WramData => {
-                    let value = self.wram_port_byte();
-                    self.advance_wram_port();
-                    Some(value)
-                }
-                BBus::WramAddressLow
-                | BBus::WramAddressMiddle
-                | BBus::WramAddressHigh
-                | BBus::Unanswered => None,
-            },
-            Target::Cpu(0x4210) => {
-                let flag = self.interrupts.read_nmi_flag();
-                Some(self.nmi_flag_byte(flag))
-            }
-            Target::Cpu(0x4211) => {
-                let flag = self.interrupts.read_irq_flag();
-                Some(self.irq_flag_byte(flag))
-            }
-            Target::Cpu(0x4212) => Some(self.status_byte()),
-            Target::Cpu(register @ 0x4213..=0x4217) => Some(self.port_or_result(register)),
-            Target::Cpu(0x4016) => {
-                let data = self.ports.read_data(0);
-                Some(self.port_1_byte(data))
-            }
-            Target::Cpu(0x4017) => {
-                let data = self.ports.read_data(1);
-                Some(self.port_2_byte(data))
-            }
-            Target::Cpu(register @ 0x4218..=0x421F) => {
-                Some(self.ports.read_joypad(register - 0x4218))
-            }
-            Target::Cpu(register @ 0x4300..=0x43FF) => self.dma.read(register),
-            // $420D and every other internal register is write-only or not yet modelled.
-            Target::Cpu(_) => None,
-            memory => self.memory(memory),
-        }
+        self.sync_owner(target);
+        let (value, _) = self.peek_target(target);
+        self.after_read(target);
+        value
     }
 
     /// Writes `value` to `target` with its side effects. Writes nothing answers are lost.
     // @source: anomie-memmap#memory-map
-    // @source: anomie-regs#2180
-    // @source: anomie-regs#2181
-    // @source: anomie-regs#420d
-    // @source: fullsnes#snesmemorycontrol
+    // @source: anomie-regs#4016
     // @source: anomie-regs#4200
     // @source: anomie-regs#4201
     // @source: anomie-regs#4202
-    // @source: anomie-regs#4203
-    // @source: anomie-regs#4204
-    // @source: anomie-regs#4205
-    // @source: anomie-regs#4206
     // @source: anomie-regs#4207
-    // @source: anomie-regs#4208
-    // @source: anomie-regs#4209
-    // @source: anomie-regs#420a
-    // @source: anomie-regs#4016
+    // @source: anomie-regs#420b
+    // @source: anomie-regs#420c
+    // @source: anomie-regs#420d
+    // @source: anomie-regs#43x0
+    // @source: fullsnes#snesdmaandhdmachannel07registers
+    // @source: fullsnes#snesmemorycontrol
     // @source: adr-0019
     // @source: adr-0021
     // @source: adr-0023
     // @source: adr-0024
-    // @source: anomie-regs#420b
-    // @source: anomie-regs#43x0
-    // @source: fullsnes#snesdmaandhdmachannel07registers
     // @source: adr-0025
-    // @source: anomie-regs#420c
     // @source: adr-0026
     pub(crate) fn write_target(&mut self, target: Target, value: u8) {
         match target {
@@ -526,67 +496,56 @@ impl Bus {
                 }
             }
             Target::BBus(device) => self.write_b_bus(device, value),
-            Target::Cpu(0x4016) => self.ports.write_latch(value),
-            Target::Cpu(0x4200) => {
-                self.interrupts.write_enable(value);
-                self.timing.write_interrupt_enable(value, self.now);
-                self.ports.write_auto_read_enable(value);
-            }
-            Target::Cpu(0x4201) => self.write_io_port(value),
-            Target::Cpu(0x4202) => self.math.write_multiplicand(value),
-            Target::Cpu(0x4203) => self.math.write_multiplier(value),
-            Target::Cpu(0x4204) => self.math.write_dividend_low(value),
-            Target::Cpu(0x4205) => self.math.write_dividend_high(value),
-            Target::Cpu(0x4206) => self.math.write_divisor(value),
-            Target::Cpu(0x4207) => self.timing.write_horizontal_timer_low(value, self.now),
-            Target::Cpu(0x4208) => self.timing.write_horizontal_timer_high(value, self.now),
-            Target::Cpu(0x4209) => self.timing.write_vertical_timer_low(value, self.now),
-            Target::Cpu(0x420A) => self.timing.write_vertical_timer_high(value, self.now),
-            Target::Cpu(0x420B) => self.dma.write_enable(value),
-            Target::Cpu(0x420C) => self.dma.write_hdma_enable(value),
-            Target::Cpu(0x420D) => self.fast_rom = value & FAST_ROM != 0,
-            Target::Cpu(register @ 0x4300..=0x43FF) => self.dma.write(register, value),
-            Target::Rom(_) | Target::Cpu(_) | Target::Unanswered => {}
+            Target::Cpu(register) => match register {
+                CpuRegister::Ports(register) => self.ports.write(register, value),
+                CpuRegister::InterruptEnable => {
+                    self.interrupts.write_enable(value);
+                    self.timing.write_interrupt_enable(value, self.now);
+                    self.ports.write_auto_read_enable(value);
+                }
+                CpuRegister::IoPort => self.write_io_port(value),
+                CpuRegister::Math(register) => self.math.write(register, value),
+                CpuRegister::Timer(register) => self.timing.write_timer(register, value, self.now),
+                CpuRegister::Dma(register) => self.dma.write(register, value),
+                CpuRegister::MemorySelect => self.fast_rom = value & FAST_ROM != 0,
+                CpuRegister::NmiFlag
+                | CpuRegister::IrqFlag
+                | CpuRegister::Status
+                | CpuRegister::IoPortInput => {}
+            },
+            Target::Rom(_) | Target::Unanswered => {}
         }
     }
 
-    /// A `$4201` WRIO write: a change of bit 7 from 1 to 0 latches the counters one dot
-    /// after the access starts (ADR 0021, points 3 and 7).
-    // @source: anomie-timing
+    /// $4201 WRIO: a change of bit 7 from 1 to 0 latches the counters one dot after the
+    /// access starts (ADR 0021, points 3 and 7).
     // @source: anomie-regs#4201
+    // @source: anomie-timing
     // @source: fullsnes#snespputimersandstatus
     // @source: adr-0021
     fn write_io_port(&mut self, value: u8) {
         if self.io_port & PPU_LATCH != 0 && value & PPU_LATCH == 0 {
-            self.timing
-                .schedule_latch(Cycles(self.now.0 + WRIO_LATCH_DELAY));
+            self.timing.schedule_latch(self.now + WRIO_LATCH_DELAY);
         }
         self.io_port = value;
     }
 
-    /// Writes `value` to a B-bus device.
+    /// Writes `value` to a B-bus device, after syncing its owner.
     // @source: anomie-memmap#memory-map
+    // @source: anomie-regs#2133
+    // @source: anomie-regs#2140
     // @source: anomie-regs#2180
     // @source: anomie-regs#2181
     // @source: fullsnes#snesmemoryworkramaccess
-    // @source: anomie-regs#2133
     // @source: adr-0019
     // @source: adr-0020
-    // @source: anomie-regs#2140
     // @source: adr-0027
     pub(crate) fn write_b_bus(&mut self, device: BBus, value: u8) {
+        self.sync_owner(Target::BBus(device));
         let [low, middle, high, _] = self.wram_port_address.to_le_bytes();
         match device {
-            BBus::Ppu(register) => {
-                self.sync_ppu();
-                if register == SCREEN_MODE {
-                    self.timing.write_screen_mode(value, self.now);
-                }
-            }
-            BBus::Apu(port) => {
-                self.sync_apu();
-                self.apu.write_port(port, value);
-            }
+            BBus::Ppu(PpuRegister::ScreenMode) => self.timing.write_screen_mode(value, self.now),
+            BBus::Apu(port) => self.apu.write(port, value),
             BBus::WramData => {
                 if let Some(byte) = self.wram.get_mut(self.wram_port_address as usize) {
                     *byte = value;
@@ -602,12 +561,28 @@ impl Bus {
             BBus::WramAddressHigh => {
                 self.wram_port_address = u32::from_le_bytes([low, middle, value & 0x01, 0]);
             }
-            BBus::Unanswered => {}
+            BBus::Ppu(
+                PpuRegister::SoftwareLatch | PpuRegister::Counter(_) | PpuRegister::Other(_),
+            )
+            | BBus::Unanswered => {}
         }
     }
 
-    /// Runs the PPU up to `now` before an access to its registers (technical design section
-    /// 4, catch-up rule 1). There is no PPU to run until the PPU issues land.
+    /// Runs the chip that owns `target`'s register up to `now` before an access: the PPU
+    /// for `$2100–$213F` and the APU for `$2140–$217F` (technical design section 4,
+    /// catch-up rule 1; ADR 0019, point 2).
+    // @source: adr-0019
+    // @source: adr-0027
+    const fn sync_owner(&mut self, target: Target) {
+        match target {
+            Target::BBus(BBus::Ppu(_)) => self.sync_ppu(),
+            Target::BBus(BBus::Apu(_)) => self.apu.run_until(self.now),
+            _ => {}
+        }
+    }
+
+    /// Runs the PPU up to `now` before an access to its registers. There is no PPU to run
+    /// until the PPU issues land.
     // @source: adr-0019
     #[expect(
         clippy::unused_self,
@@ -615,47 +590,36 @@ impl Bus {
     )]
     const fn sync_ppu(&mut self) {}
 
-    /// Runs the APU up to `now` before an access to its ports (technical design section 4,
-    /// catch-up rule 1; ADR 0027, point 3).
-    // @source: adr-0019
-    // @source: adr-0027
-    const fn sync_apu(&mut self) {
-        self.apu.run_until(self.now);
-    }
-
-    /// Ends a CPU cycle of `cycles` master cycles: advances the clock, then services in time
-    /// order every deadline that fell due during the cycle or at its end (ADR 0020,
-    /// point 9). A refresh pauses the CPU (ADR 0019, point 6); a line start is reported to
-    /// `observer`, after the frame end it may bring (ADR 0020, point 8), and line 0 clears
-    /// the NMI flag; the NMI flag, a trigger point and a `$4201` latch change the interrupt
-    /// state and the counters (ADR 0021). A frame end closes the frame's polled flag and the
-    /// auto-read takes its next step (ADR 0024, points 6, 8 and 9). The multiply and divide
-    /// unit counts the cycle (ADR 0023, point 2), and so does a requested DMA transfer's
-    /// countdown to its pause (ADR 0025, point 3).
-    // @source: anomie-timing#s-cpu/clocks-and-refresh
-    // @source: anomie-timing#s-cpu/interrupts
+    /// Ends a CPU cycle at `speed`: the multiply and divide unit counts it (ADR 0023,
+    /// point 2), and so does a requested DMA transfer's countdown to its pause (ADR 0025,
+    /// point 3); then the clock advances past it, with [`Bus::advance`].
+    // @source: anomie-timing#s-cpu/dma
     // @source: anomie-timing#s-cpu/registers
     // @source: fullsnes#snesmathsmultiplydivide
-    // @source: adr-0001
-    // @source: adr-0019
-    // @source: adr-0020
-    // @source: adr-0021
     // @source: adr-0023
-    // @source: adr-0024
-    // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
-    fn charge<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
+    fn charge<O: Observer>(&mut self, speed: Speed, observer: &mut O) {
         self.math.clock();
         self.dma.cycle_ended();
-        self.advance(cycles, observer);
+        self.advance(speed.cycles(), observer);
     }
 
     /// Advances the clock by `cycles` master cycles of a CPU cycle or a DMA transfer, then
-    /// services in time order every deadline that fell due (ADR 0020, point 9; ADR 0025,
-    /// point 9). An HDMA step is marked due, to run at the next point the bus can pause
-    /// (ADR 0026, point 3).
+    /// services in time order every deadline that fell due during them or at their end
+    /// (ADR 0020, point 9; ADR 0025, point 9):
+    ///
+    /// - a refresh pauses the CPU (ADR 0019, point 6);
+    /// - a line start is reported to `observer`, after the frame end it may bring
+    ///   (ADR 0020, point 8); line 0 clears the NMI flag, and a frame end closes the
+    ///   frame's polled flag (ADR 0024, point 8);
+    /// - the NMI flag, a trigger point and a `$4201` latch change the interrupt state and
+    ///   the counters (ADR 0021);
+    /// - the auto-read takes its next step (ADR 0024, points 6 and 9);
+    /// - an HDMA step is marked due, to run at the next point the bus can pause (ADR 0026,
+    ///   point 3).
     // @source: anomie-timing#s-cpu/clocks-and-refresh
     // @source: anomie-timing#s-cpu/interrupts
+    // @source: adr-0001
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
@@ -663,10 +627,10 @@ impl Bus {
     // @source: adr-0025
     // @source: adr-0026
     fn advance<O: Observer>(&mut self, cycles: u64, observer: &mut O) {
-        self.now = Cycles(self.now.0 + cycles);
+        self.now += cycles;
         while self.now >= self.timing.next_deadline() {
             match self.timing.service(self.now) {
-                Some(Event::Refresh) => self.now = Cycles(self.now.0 + REFRESH_LENGTH),
+                Some(Event::Refresh) => self.now += REFRESH_LENGTH,
                 Some(Event::Line {
                     line,
                     at,
@@ -726,20 +690,20 @@ impl<'view, O: Observer> BusView<'view, O> {
 }
 
 impl<O: Observer> Bus65816 for BusView<'_, O> {
-    // @source: anomie-memmap#memory-map
     // @source: anomie-memmap#hardware/data-bus
+    // @source: anomie-memmap#memory-map
+    // @source: anomie-timing#s-cpu/dma
+    // @source: anomie-timing#s-cpu/hdma
     // @source: anomie-timing#s-cpu/instructions
     // @source: adr-0004
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
-    // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
-    // @source: anomie-timing#s-cpu/hdma
     // @source: adr-0026
     fn read(&mut self, address: Addr24, pins: Pins) -> u8 {
-        let cycles = access_cycles(address, self.bus.fast_rom);
-        self.bus.start_due_pause(cycles, self.observer);
+        let speed = access_speed(address, self.bus.fast_rom);
+        self.bus.start_due_pause(speed, self.observer);
         self.bus.interrupts.record();
         let at = self.bus.now;
         let raw = address.get();
@@ -761,27 +725,27 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
         if O::ACTIVE {
             self.observer.on_read(BusId::Cpu, raw, value, at);
         }
-        self.bus.charge(cycles, self.observer);
+        self.bus.charge(speed, self.observer);
         value
     }
 
-    // @source: anomie-memmap#memory-map
     // @source: anomie-memmap#hardware/data-bus
+    // @source: anomie-memmap#memory-map
+    // @source: anomie-timing#s-cpu/dma
+    // @source: anomie-timing#s-cpu/hdma
     // @source: anomie-timing#s-cpu/instructions
     // @source: adr-0004
     // @source: adr-0006
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
-    // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
-    // @source: anomie-timing#s-cpu/hdma
     // @source: adr-0026
     fn write(&mut self, address: Addr24, value: u8, _pins: Pins) {
         // The access's speed is the one in force when it starts, so a write to $420D takes
         // effect from the next access.
-        let cycles = access_cycles(address, self.bus.fast_rom);
-        self.bus.start_due_pause(cycles, self.observer);
+        let speed = access_speed(address, self.bus.fast_rom);
+        self.bus.start_due_pause(speed, self.observer);
         self.bus.interrupts.record();
         let at = self.bus.now;
         let raw = address.get();
@@ -791,22 +755,22 @@ impl<O: Observer> Bus65816 for BusView<'_, O> {
         if O::ACTIVE {
             self.observer.on_write(BusId::Cpu, raw, value, at);
         }
-        self.bus.charge(cycles, self.observer);
+        self.bus.charge(speed, self.observer);
     }
 
     // @source: anomie-timing#s-cpu/clocks-and-refresh
+    // @source: anomie-timing#s-cpu/dma
+    // @source: anomie-timing#s-cpu/hdma
     // @source: adr-0004
     // @source: adr-0019
     // @source: adr-0020
     // @source: adr-0021
-    // @source: anomie-timing#s-cpu/dma
     // @source: adr-0025
-    // @source: anomie-timing#s-cpu/hdma
     // @source: adr-0026
     fn idle(&mut self, _address: Addr24, _pins: Pins) {
-        self.bus.start_due_pause(FAST, self.observer);
+        self.bus.start_due_pause(Speed::Fast, self.observer);
         self.bus.interrupts.record();
-        self.bus.charge(FAST, self.observer);
+        self.bus.charge(Speed::Fast, self.observer);
     }
 
     // @source: adr-0004

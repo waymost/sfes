@@ -1,5 +1,5 @@
-// @source: anomie-memmap#memory-map
 // @source: anomie-memmap#hardware/address-bus-a
+// @source: anomie-memmap#memory-map
 // @source: adr-0017
 //! The memory map: what answers each 8 KiB page of the 24-bit address space (EMU-04).
 //!
@@ -17,7 +17,7 @@ pub const PAGE_SIZE: u32 = 0x2000;
 /// The number of pages in the 24-bit address space.
 pub const PAGES: usize = 0x100_0000 / PAGE_SIZE as usize;
 /// The size of WRAM, banks `$7E–$7F`.
-const WRAM_SIZE: u32 = 0x2_0000;
+pub const WRAM_SIZE: u32 = 0x2_0000;
 /// The largest ROM the map can reach: 16 MiB, the whole address space.
 const LARGEST_ROM: u32 = 0x100_0000;
 
@@ -49,28 +49,29 @@ pub struct MemoryMap {
     pages: Box<[Page]>,
     /// The ROM length the offsets were mirrored to.
     rom_length: u32,
-    /// The RAM length, a power of two, or 0 for none.
+    /// The RAM length, or 0 for none.
     sram_length: u32,
 }
 
 impl MemoryMap {
-    /// The map of `board` with a ROM of `rom_length` bytes and an SRAM of `sram_length` bytes, a
-    /// power of two or 0 for none. Only the first 16 MiB of a longer ROM can be reached.
+    /// The map of `board` with a ROM of `rom_length` bytes and an SRAM of `sram_length` bytes,
+    /// 0 for none. Only the first 16 MiB of a longer ROM can be reached. Real SRAM sizes are
+    /// powers of two (ADR 0017); any other length repeats through the SRAM area modulo its
+    /// length, so every offset stays inside the RAM.
     // @source: anomie-memmap#memory-map
     // @source: adr-0017
     #[must_use]
     pub fn new(board: Board, rom_length: usize, sram_length: usize) -> Self {
-        let rom_length = u32::try_from(rom_length).map_or(LARGEST_ROM, |length| {
-            if length > LARGEST_ROM {
-                LARGEST_ROM
-            } else {
-                length
-            }
-        });
+        let rom_length =
+            u32::try_from(rom_length).map_or(LARGEST_ROM, |length| length.min(LARGEST_ROM));
         let sram_length = u32::try_from(sram_length).unwrap_or_default();
         let mut pages = vec![Page::Open; PAGES].into_boxed_slice();
         for (index, page) in pages.iter_mut().enumerate() {
-            let start = u32::try_from(index).unwrap_or_default() * PAGE_SIZE;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "there are 2,048 pages, so the index fits in u32"
+            )]
+            let start = index as u32 * PAGE_SIZE;
             *page = Self::build(board, start, rom_length, sram_length);
         }
         Self {
@@ -92,7 +93,7 @@ impl MemoryMap {
         if sram_length > 0
             && let Some(offset) = board.ram_offset(bank, address)
         {
-            return Page::CartRam(offset & (sram_length - 1));
+            return Page::CartRam(offset % sram_length);
         }
         match board.rom_offset(bank, address) {
             Some(offset) if rom_length > 0 => Page::Rom(mirror(offset, rom_length)),
@@ -104,7 +105,7 @@ impl MemoryMap {
     // @source: adr-0017
     #[must_use]
     pub fn page(&self, address: u32) -> Page {
-        let index = usize::try_from((address & 0xFF_FFFF) / PAGE_SIZE).unwrap_or_default();
+        let index = ((address & 0xFF_FFFF) / PAGE_SIZE) as usize;
         self.pages.get(index).copied().unwrap_or(Page::Open)
     }
 
@@ -123,7 +124,7 @@ impl MemoryMap {
                     Page::Rom(mirror(offset, self.rom_length))
                 }
             }
-            Page::CartRam(start) => Page::CartRam((start + inside) & (self.sram_length - 1)),
+            Page::CartRam(start) => Page::CartRam((start + inside) % self.sram_length),
             Page::Wram(start) => Page::Wram(start + inside),
             page @ (Page::Io | Page::Coproc(_) | Page::Open) => page,
         }
@@ -149,7 +150,7 @@ pub const fn console_page(bank: u8, address: u16) -> Option<Page> {
         // The system area of banks $00-$3F and $80-$BF.
         0x00..=0x3F | 0x80..=0xBF => match address {
             // A mirror of $7E:0000-1FFF.
-            0x0000..=0x1FFF => Some(Page::Wram(address as u32 % WRAM_SIZE)),
+            0x0000..=0x1FFF => Some(Page::Wram(address as u32)),
             // Address Bus B at $2100-$21FF and the CPU's registers at $4000-$43FF; the rest
             // of $2000-$5FFF answers nothing unless the bus finds otherwise.
             0x2000..=0x5FFF => Some(Page::Io),
@@ -210,8 +211,8 @@ mod tests {
         assert_eq!(map.resolve(0x00_6000), Page::Open);
     }
 
-    // @source: fullsnes#snesmemorymap
     // @source: fullsnes#snescartlorommappingromdividedinto32kbanksaround1500games
+    // @source: fullsnes#snesmemorymap
     // @source: adr-0017
     #[test]
     fn lorom_sram_fills_the_lower_halves_of_banks_70_to_7d() {
@@ -242,6 +243,24 @@ mod tests {
         assert_eq!(map.resolve(0x7D_7FFF), Page::CartRam(0x7FF));
     }
 
+    // @source: adr-0017
+    #[test]
+    fn an_sram_that_is_not_a_power_of_two_stays_inside_its_length() {
+        let map = MemoryMap::new(Board::LoRom, MIB, 3 * KIB);
+        assert_eq!(map.resolve(0x70_0000), Page::CartRam(0));
+        assert_eq!(map.resolve(0x70_0BFF), Page::CartRam(0xBFF));
+        assert_eq!(map.resolve(0x70_0C00), Page::CartRam(0));
+        assert_eq!(map.resolve(0x70_2001), Page::CartRam(0x2001 % 0xC00));
+        // The lower halves of banks $70 and $71.
+        let lower_halves = (0x70_0000..0x70_8000).chain(0x71_0000..0x71_8000);
+        for address in lower_halves.step_by(0x7F) {
+            let Page::CartRam(offset) = map.resolve(address) else {
+                panic!("{address:06X} is not SRAM");
+            };
+            assert!(offset < 0xC00, "{address:06X}");
+        }
+    }
+
     // @source: fullsnes#snescarthirommappingromdividedinto64kbanksaround500games
     // @source: adr-0017
     #[test]
@@ -260,8 +279,8 @@ mod tests {
         assert_eq!(map.resolve(0x20_6000), Page::Open);
     }
 
-    // @source: fullsnes#snesmemorymap
     // @source: fullsnes#snescarthirommappingromdividedinto64kbanksaround500games
+    // @source: fullsnes#snesmemorymap
     // @source: adr-0017
     #[test]
     fn hirom_sram_is_at_6000_in_banks_20_to_3f() {
@@ -279,8 +298,8 @@ mod tests {
         assert_eq!(map.resolve(0x50_0000), Page::Rom(0));
     }
 
-    // @source: fullsnes#snescartridgeromimageinterleave
     // @source: fullsnes#snescarthirommappingromdividedinto64kbanksaround500games
+    // @source: fullsnes#snescartridgeromimageinterleave
     // @source: adr-0017
     #[test]
     fn exhirom_puts_the_slow_banks_after_the_fast_ones() {
@@ -319,7 +338,7 @@ mod tests {
         let rom_lengths = [32 * KIB, 33 * KIB, 40 * KIB + 5, 3 * MIB, 5 * MIB, 6 * MIB];
         for board in [Board::LoRom, Board::HiRom, Board::ExHiRom] {
             for rom_length in rom_lengths {
-                for sram_length in [0, 2 * KIB, 128 * KIB] {
+                for sram_length in [0, 2 * KIB, 3 * KIB, 128 * KIB] {
                     let map = MemoryMap::new(board, rom_length, sram_length);
                     for address in (0..0x100_0000).step_by(0x3FF) {
                         match map.resolve(address) {

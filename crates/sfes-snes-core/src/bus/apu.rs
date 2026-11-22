@@ -8,8 +8,37 @@
 
 use sfes_api::Cycles;
 
+use crate::bus::Registers;
+
 /// The number of APU ports.
-pub(crate) const APU_PORTS: usize = 4;
+const APU_PORTS: usize = 4;
+
+/// One of the four APU ports, `$2140–$2143` and their mirrors through `$217F`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ApuPort {
+    /// $2140 APUIO0
+    Port0,
+    /// $2141 APUIO1
+    Port1,
+    /// $2142 APUIO2
+    Port2,
+    /// $2143 APUIO3
+    Port3,
+}
+
+impl ApuPort {
+    /// The port B-bus address `address` reaches: its low two bits (ADR 0019, point 1).
+    // @source: anomie-regs#2140
+    // @source: adr-0019
+    pub(crate) const fn from_b_bus(address: u8) -> Self {
+        match address & 0x03 {
+            0 => Self::Port0,
+            1 => Self::Port1,
+            2 => Self::Port2,
+            _ => Self::Port3,
+        }
+    }
+}
 
 /// The APU unit: the CPU's side of the four ports (ADR 0027, point 1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,41 +78,30 @@ impl Apu {
         let _ = now;
     }
 
-    /// $2140–$2143 APUIO0–APUIO3: a CPU read of `port`, the value the APU side last wrote
-    /// (anomie-regs#2140; ADR 0027, point 4).
-    // @source: anomie-regs#2140
-    // @source: adr-0027
-    pub(crate) fn read_port(&mut self, port: u8) -> u8 {
-        self.peek_port(port)
-    }
-
-    /// What a read of `port` would return, without its side effects (ADR 0027, point 4).
-    // @source: anomie-regs#2140
-    // @source: adr-0027
-    pub(crate) fn peek_port(self, port: u8) -> u8 {
-        self.to_cpu
-            .get(usize::from(port))
-            .copied()
-            .unwrap_or_default()
-    }
-
-    /// $2140–$2143 APUIO0–APUIO3: a CPU write of `value` to `port`, kept for the APU side
-    /// and never read back by the CPU (anomie-regs#2140; ADR 0027, point 5).
-    // @source: anomie-regs#2140
-    // @source: adr-0027
-    pub(crate) fn write_port(&mut self, port: u8, value: u8) {
-        if let Some(latch) = self.to_apu.get_mut(usize::from(port)) {
-            *latch = value;
-        }
-    }
-
     /// The value the CPU last wrote to `port`, as the SPC700 would read it.
     // @source: adr-0027
     #[cfg(test)]
-    pub(crate) fn written(self, port: u8) -> u8 {
-        self.to_apu
-            .get(usize::from(port))
-            .copied()
-            .unwrap_or_default()
+    pub(crate) const fn written(self, port: ApuPort) -> u8 {
+        self.to_apu[port as usize]
+    }
+}
+
+impl Registers for Apu {
+    type Register = ApuPort;
+
+    /// $2140–$2143 APUIO0–APUIO3: a CPU read of `port` returns the value the APU side last
+    /// wrote, never the CPU's own write (anomie-regs#2140; ADR 0027, point 4).
+    // @source: anomie-regs#2140
+    // @source: adr-0027
+    fn peek(&self, port: ApuPort) -> Option<u8> {
+        Some(self.to_cpu[port as usize])
+    }
+
+    /// $2140–$2143 APUIO0–APUIO3: a CPU write of `value` to `port`, kept for the APU side
+    /// (anomie-regs#2140; ADR 0027, point 5).
+    // @source: anomie-regs#2140
+    // @source: adr-0027
+    fn write(&mut self, port: ApuPort, value: u8) {
+        self.to_apu[port as usize] = value;
     }
 }

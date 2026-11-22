@@ -58,10 +58,12 @@ The checksum comes first because both documents call it the main evidence. A rea
 
 ### The checksum
 
-`checksum` adds every byte of the image into 16 bits. An image whose length is not a power of two is summed the way the cartridge mirrors it (`fullsnes#snescartridgeromheader`, `snesdev-wiki#ROM_header`):
+`checksum` adds every byte of the image into 16 bits. An image whose length is not a power of two is summed the way the cartridge mirrors it (`fullsnes#snescartridgeromheader`, `snesdev-wiki#ROM_header`; ADR 0016, ADR 0017):
 - The largest power-of-two part comes first.
-- The rest is padded with zeros to a power of two.
-- The rest is then repeated until it is as long as the first part.
+- The rest is summed the same way, as a window of its length rounded up to a power of two.
+- That window is repeated until it is as long as the first part.
+
+So the checksum is the sum of every byte the memory map reads in a window of the image's length rounded up to a power of two (see Mirroring).
 
 A 5 MiB ExHiROM is therefore summed as 4 MiB plus four copies of its last 1 MiB, as fullsnes lists for *Dai Kaiju Monogatari 2*. The stored checksum and complement always add the same `$1FE` to the sum, whatever their values, so a header with a valid pair matches the plain sum.
 
@@ -106,7 +108,7 @@ Mirroring the HiROM upper halves into bank `$00` is what puts the vectors at `$0
 
 A ROM smaller than its area repeats. [`mirror`](../../crates/sfes-snes-cart/src/board.rs) follows the checksum's layout (`fullsnes#snescartridgeromheader`): the largest power-of-two part, then the remainder repeated. A 3 MiB LoROM therefore reads its last 1 MiB twice. A 5 MiB ExHiROM reads its last 1 MiB in each of `$40`, `$50`, `$60` and `$70`. A remainder that is not a power of two is split the same way again (ADR 0017).
 
-The SRAM size comes from the header, `1 SHL n` KiB. It repeats through the board's whole SRAM area. Sizes over 128 KiB are refused (ADR 0017).
+The SRAM size comes from the header, `1 SHL n` KiB. It repeats through the board's whole SRAM area, modulo its size, so even a size that is not a power of two never reaches past its end. Sizes over 128 KiB are refused (ADR 0017).
 
 ### The cartridge
 

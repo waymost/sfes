@@ -13,35 +13,35 @@ use alloc::vec::Vec;
 /// The length of a copier header.
 const COPIER_HEADER: usize = 512;
 /// The length of the header area read at a candidate: `$FFC0–$FFFF`.
-const AREA: usize = 0x40;
+pub(crate) const AREA: usize = 0x40;
 /// The longest title, `$FFC0–$FFD4`.
 pub const TITLE_LENGTH: usize = 21;
 
 /// Offsets inside the area, relative to `$FFC0`.
-const TITLE: usize = 0x00;
+pub(crate) const TITLE: usize = 0x00;
 /// `$FFD5`, ROM speed and map mode.
-const MAP_MODE: usize = 0x15;
+pub(crate) const MAP_MODE: usize = 0x15;
 /// `$FFD6`, chipset.
 const CHIPSET: usize = 0x16;
 /// `$FFD7`, ROM size.
-const ROM_SIZE: usize = 0x17;
+pub(crate) const ROM_SIZE: usize = 0x17;
 /// `$FFD8`, RAM size.
-const RAM_SIZE: usize = 0x18;
+pub(crate) const RAM_SIZE: usize = 0x18;
 /// `$FFD9`, country.
-const COUNTRY: usize = 0x19;
+pub(crate) const COUNTRY: usize = 0x19;
 /// `$FFDA`, developer ID.
 const DEVELOPER: usize = 0x1A;
 /// `$FFDB`, ROM version.
 const VERSION: usize = 0x1B;
 /// `$FFDC`, checksum complement.
-const COMPLEMENT: usize = 0x1C;
+pub(crate) const COMPLEMENT: usize = 0x1C;
 /// `$FFDE`, checksum.
-const CHECKSUM: usize = 0x1E;
+pub(crate) const CHECKSUM: usize = 0x1E;
 /// `$FFFC`, the 6502-mode RESET vector.
-const RESET_VECTOR: usize = 0x3C;
+pub(crate) const RESET_VECTOR: usize = 0x3C;
 
 /// The largest ROM size byte that scores: `1 SHL $0D` KiB is 8 MiB, ExHiROM rounded up.
-const LARGEST_ROM_SIZE: u8 = 0x0D;
+pub(crate) const LARGEST_ROM_SIZE: u8 = 0x0D;
 
 /// The board a header location belongs to.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -229,9 +229,7 @@ impl Header {
         let mut header = Self::read(mapping, bytes);
         header.copier_header = copier_header;
         header.score = score;
-        if region.is_some() {
-            header.region = region;
-        }
+        header.region = region.or(header.region);
         Ok(header)
     }
 
@@ -288,10 +286,14 @@ pub fn strip_copier_header(image: &[u8]) -> &[u8] {
 }
 
 /// The 16-bit checksum of `rom` without copier header: every byte added, an image whose length
-/// is not a power of two being summed as its largest power-of-two part followed by mirrors of
-/// the rest, padded with zeros to a power of two, up to twice that part.
+/// is not a power of two being summed as its largest power-of-two part followed by the rest,
+/// itself summed this way, repeated up to twice that part. This is the layout [`crate::mirror`]
+/// maps (ADR 0017), so the sum is that of every byte the cartridge answers in a window of the
+/// length rounded up to a power of two.
 // @source: fullsnes#snescartridgeromheader
 // @source: snesdev-wiki#ROM_header
+// @source: adr-0016
+// @source: adr-0017
 #[must_use]
 pub fn checksum(rom: &[u8]) -> u16 {
     let sum = |bytes: &[u8]| {
@@ -304,11 +306,15 @@ pub fn checksum(rom: &[u8]) -> u16 {
     }
     let first_length = 1_usize << rom.len().ilog2();
     let (first, rest) = rom.split_at(first_length);
-    // `rest` is padded with zeros to the next power of two, which adds nothing to the sum, and
-    // repeated until it is as long as `first`.
-    let copies = first_length / rest.len().next_power_of_two();
-    let copies = u16::try_from(copies % 0x1_0000).unwrap_or_default();
-    sum(first).wrapping_add(sum(rest).wrapping_mul(copies))
+    // `rest` fills a window of its own length rounded up to a power of two, mirrored the same
+    // way, and that window repeats until it is as long as `first`. Only the copies modulo
+    // $10000 change a 16-bit sum.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the sum is modulo $10000, so only the low 16 bits of the count matter"
+    )]
+    let copies = (first_length / rest.len().next_power_of_two()) as u16;
+    sum(first).wrapping_add(checksum(rest).wrapping_mul(copies))
 }
 
 /// The candidate with the highest score, or the error that stops detection.
@@ -349,9 +355,9 @@ fn best_candidate(rom: &[u8]) -> Result<Candidate, HeaderError> {
 /// The score of the header area `bytes` at `mapping`'s location in an image of
 /// `image_length` bytes whose checksum is `image_checksum`, or `None` when its RESET vector
 /// rules it out (ADR 0016).
-// @source: adr-0016
 // @source: fullsnes#snescartridgeromheader
 // @source: snesdev-wiki#ROM_header
+// @source: adr-0016
 fn score(
     mapping: Mapping,
     bytes: &[u8; AREA],
@@ -419,40 +425,17 @@ mod tests {
     use alloc::{vec, vec::Vec};
 
     use super::*;
+    use crate::test_support::{TestHeader, fill_checksum};
 
-    /// A plausible header for `mapping`: title "SFES TEST", map mode matching the board,
-    /// ROM size fitting `length`, country `country`, RESET vector `$8000`, and the checksum
-    /// filled in over the finished image.
+    /// A plausible header for `mapping` in a zeroed image of `length` bytes, with country
+    /// `country` and the checksum filled in.
     // @source: fullsnes#snescartridgeromheader
     fn image(mapping: Mapping, length: usize, country: u8) -> Vec<u8> {
-        let mut image = vec![0_u8; length];
-        let base = mapping.header_offset();
-        let title = b"SFES TEST            ";
-        image[base..base + TITLE_LENGTH].copy_from_slice(title);
-        image[base + MAP_MODE] = match mapping {
-            Mapping::LoRom => 0x20,
-            Mapping::HiRom => 0x21,
-            Mapping::ExHiRom => 0x25,
+        let header = TestHeader {
+            country,
+            ..TestHeader::default()
         };
-        let size = (0..=LARGEST_ROM_SIZE)
-            .find(|size| (1024_usize << size) >= length)
-            .unwrap();
-        image[base + ROM_SIZE] = size;
-        image[base + COUNTRY] = country;
-        image[base + RESET_VECTOR..base + RESET_VECTOR + 2].copy_from_slice(&[0x00, 0x80]);
-        fill_checksum(&mut image, base);
-        image
-    }
-
-    /// Writes checksum and complement at the header at `base`, as fullsnes describes: the
-    /// sum with `$FFDC–$FFDF` taken as `FF FF 00 00`.
-    // @source: fullsnes#snescartridgeromheader
-    fn fill_checksum(image: &mut [u8], base: usize) {
-        image[base + COMPLEMENT..base + CHECKSUM + 2].copy_from_slice(&[0xFF, 0xFF, 0, 0]);
-        let sum = checksum(image);
-        image[base + COMPLEMENT..base + COMPLEMENT + 2]
-            .copy_from_slice(&(sum ^ 0xFFFF).to_le_bytes());
-        image[base + CHECKSUM..base + CHECKSUM + 2].copy_from_slice(&sum.to_le_bytes());
+        crate::test_support::image(mapping, length, header)
     }
 
     // @source: fullsnes#snescartridgeromheader
@@ -478,7 +461,7 @@ mod tests {
         let mut rom = image(Mapping::HiRom, 0x2_0000, 0x00);
         // Program bytes at the LoROM location that happen to look like a RESET vector.
         rom[0x7FC0 + RESET_VECTOR..0x7FC0 + RESET_VECTOR + 2].copy_from_slice(&[0x34, 0x92]);
-        fill_checksum(&mut rom, 0xFFC0);
+        fill_checksum(&mut rom, Mapping::HiRom);
         let header = Header::detect(&rom).unwrap();
         assert_eq!(header.mapping, Mapping::HiRom);
     }
@@ -514,13 +497,34 @@ mod tests {
             checksum(&rom),
             u16::try_from(0x1000 + 4 * 3 * 0x400).unwrap()
         );
-        // A remainder that is not a power of two is padded with zeros: 4 KiB + 768 bytes is
-        // counted as 4 KiB + 4 × (768 bytes + 256 zeros).
+        // A remainder that is not a power of two is split again: 4 KiB + 768 bytes is counted
+        // as 4 KiB + 4 × (512 bytes + 2 × the last 256).
         let mut rom = vec![0_u8; 0x1000];
         rom.extend(vec![1_u8; 0x300]);
-        assert_eq!(checksum(&rom), 4 * 0x300);
+        assert_eq!(checksum(&rom), 4 * (0x200 + 2 * 0x100));
         // The sum wraps at 16 bits.
         assert_eq!(checksum(&[0xFF; 0x200]), 0xFE00);
+    }
+
+    // @source: fullsnes#snescartridgeromheader
+    // @source: adr-0016
+    // @source: adr-0017
+    #[test]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "lengths and offsets here are under 64 KiB, and the fill keeps its low byte"
+    )]
+    fn checksum_sums_the_bytes_the_mirrored_map_reads() {
+        for length in [1, 3, 0x300, 0x1C00, 0x1C01, 0x2A00, 0x3001, 0x8000] {
+            let rom = (0..length)
+                .map(|index: usize| (index * 7 + index / 251) as u8)
+                .collect::<Vec<_>>();
+            let window = length.next_power_of_two();
+            let mirrored = (0..window)
+                .map(|offset| rom[crate::mirror(offset as u32, length as u32) as usize])
+                .fold(0_u16, |total, byte| total.wrapping_add(u16::from(byte)));
+            assert_eq!(checksum(&rom), mirrored, "length {length:#x}");
+        }
     }
 
     // @source: fullsnes#snescartridgeromheader
@@ -622,8 +626,8 @@ mod tests {
         );
     }
 
-    // @source: adr-0016
     // @source: snesdev-wiki#ROM_header
+    // @source: adr-0016
     #[test]
     fn homebrew_without_checksum_is_found_by_the_rest() {
         let mut rom = image(Mapping::LoRom, 0x8000, 0x01);

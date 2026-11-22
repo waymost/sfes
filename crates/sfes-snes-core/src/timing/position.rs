@@ -39,8 +39,8 @@ impl LineKind {
     }
 
     /// The number of dots in the line: 341 on a long line, 340 otherwise.
-    // @source: fullsnes#snestiminghvcounters
     // @source: fullsnes#snesppuinterrupts
+    // @source: fullsnes#snestiminghvcounters
     // @source: adr-0020
     // @source: adr-0021
     pub(crate) const fn dots(self) -> u16 {
@@ -55,6 +55,10 @@ impl LineKind {
     // @source: anomie-timing#s-ppu/rendering
     // @source: fullsnes#snestiminghvevents
     // @source: adr-0020
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the longest line has 341 dots, so the dot fits in u16"
+    )]
     pub(crate) const fn dot_at(self, offset: u64) -> u16 {
         let last_offset = self.length() - 1;
         let offset = if offset > last_offset {
@@ -80,9 +84,7 @@ impl LineKind {
                 }
             }
         };
-        // The longest line has 341 dots, so the dot fits in u16.
-        let [low, high, ..] = dot.to_le_bytes();
-        u16::from_le_bytes([low, high])
+        dot as u16
     }
 }
 
@@ -153,8 +155,8 @@ mod tests {
     }
 
     // @source: anomie-regs#213c
-    // @source: fullsnes#snestiminghvcounters
     // @source: fullsnes#snesppuinterrupts
+    // @source: fullsnes#snestiminghvcounters
     // @source: adr-0021
     #[test]
     fn a_long_line_has_one_more_dot() {

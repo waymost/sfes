@@ -48,8 +48,8 @@ impl From<Mapping> for Board {
 impl Board {
     /// The ROM offset that answers `bank:address`, before mirroring, or `None` where the board
     /// maps no ROM. Addresses the console itself answers (`is_console_area`) are never asked.
-    // @source: fullsnes#snescartlorommappingromdividedinto32kbanksaround1500games
     // @source: fullsnes#snescarthirommappingromdividedinto64kbanksaround500games
+    // @source: fullsnes#snescartlorommappingromdividedinto32kbanksaround1500games
     // @source: fullsnes#snescartridgeromimageinterleave
     // @source: adr-0017
     #[must_use]
@@ -76,25 +76,25 @@ impl Board {
 
     /// The SRAM offset that answers `bank:address`, before mirroring, or `None` outside the
     /// board's SRAM area. Only asked when the cartridge has RAM.
-    // @source: fullsnes#snesmemorymap
-    // @source: fullsnes#snescartlorommappingromdividedinto32kbanksaround1500games
     // @source: fullsnes#snescarthirommappingromdividedinto64kbanksaround500games
+    // @source: fullsnes#snescartlorommappingromdividedinto32kbanksaround1500games
+    // @source: fullsnes#snesmemorymap
     // @source: adr-0017
     #[must_use]
     pub const fn ram_offset(self, bank: u8, address: u16) -> Option<u32> {
         let address = address as u32;
-        let in_window = address >= 0x6000 && address < 0x8000;
+        let in_window = matches!(address, 0x6000..=0x7FFF);
         match self {
             // $70-$7D,$F0-$FF:0000-7FFF, one 32 KiB chunk per bank from $70.
-            Self::LoRom if ((bank >= 0x70 && bank <= 0x7D) || bank >= 0xF0) && address < 0x8000 => {
+            Self::LoRom if matches!(bank, 0x70..=0x7D | 0xF0..=0xFF) && address < 0x8000 => {
                 Some((bank as u32 & 0x0F) * LOROM_SRAM_WINDOW + address)
             }
             // $20-$3F,$A0-$BF:6000-7FFF, one 8 KiB chunk per bank from $20.
-            Self::HiRom if (bank & 0x7F) >= 0x20 && (bank & 0x7F) <= 0x3F && in_window => {
+            Self::HiRom if matches!(bank & 0x7F, 0x20..=0x3F) && in_window => {
                 Some((bank as u32 & 0x1F) * HIROM_SRAM_WINDOW + (address - 0x6000))
             }
             // $80-$BF:6000-7FFF, one 8 KiB chunk per bank from $80.
-            Self::ExHiRom if bank >= 0x80 && bank <= 0xBF && in_window => {
+            Self::ExHiRom if matches!(bank, 0x80..=0xBF) && in_window => {
                 Some((bank as u32 & 0x3F) * HIROM_SRAM_WINDOW + (address - 0x6000))
             }
             Self::LoRom | Self::HiRom | Self::ExHiRom => None,
@@ -103,8 +103,8 @@ impl Board {
 }
 
 /// The offset in a ROM of `length` bytes that answers the unmirrored `offset`, mirrored the
-/// way the checksum sums it: the largest power-of-two part first, then the remainder repeated
-/// (ADR 0017). `length` is at most 16 MiB; 0 gives 0.
+/// way [`crate::checksum`] sums it: the largest power-of-two part first, then the remainder,
+/// itself mirrored this way, repeated (ADR 0017). `length` is at most 16 MiB; 0 gives 0.
 // @source: fullsnes#snescartridgeromheader
 // @source: adr-0017
 #[must_use]

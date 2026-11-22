@@ -3,28 +3,26 @@
 //! interrupt and timer registers, the math unit, the controller ports, DMA and the APU
 //! ports' placeholder.
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use sfes_api::{Addr24, Buttons, Cycles, DmaEvent, NoopObserver};
-use sfes_snes_cart::{Cartridge, Options, Region};
+use sfes_snes_cart::{
+    Cartridge, Mapping, Options, Region,
+    test_support::{TestHeader, write_header},
+};
 use sfes_snes_cpu::{Bus65816, Pins};
 
 use super::*;
+use crate::bus::apu::ApuPort;
 
 /// A bus over a 32 KiB LoROM image whose byte at ROM offset `n` is `n & $FF`.
 // @source: fullsnes#snescartridgeromheader
 // @source: adr-0017
 fn bus() -> Bus {
-    let mut image = vec![0; 0x8000];
-    for (index, byte) in image.iter_mut().enumerate() {
-        *byte = index.to_le_bytes()[0];
-    }
-    image[0x7FC0..0x7FD5].fill(b' ');
-    image[0x7FD5..].fill(0);
-    image[0x7FD5] = 0x20;
-    image[0x7FD7] = 0x08;
-    image[0x7FD9] = 0x01;
-    image[0x7FFC..0x7FFE].copy_from_slice(&[0x00, 0x80]);
+    let mut image = (0..0x8000)
+        .map(|index: usize| index.to_le_bytes()[0])
+        .collect::<Vec<_>>();
+    write_header(&mut image, Mapping::LoRom, TestHeader::default());
     let cartridge = Cartridge::load(&image, Options::default()).expect("loads");
     Bus::power_on(cartridge, Timing::new(Region::Ntsc, Cycles(0)), 0)
 }
@@ -47,9 +45,9 @@ fn idle(bus: &mut Bus) {
 /// The master cycles one read of `address` takes, away from any refresh.
 // @source: adr-0019
 fn read_cost(bus: &mut Bus, address: u32) -> u64 {
-    let before = bus.now.0;
+    let before = bus.now;
     read(bus, address);
-    bus.now.0 - before
+    bus.now - before
 }
 
 // @source: anomie-regs#2180
@@ -138,9 +136,9 @@ fn memsel_makes_memory_2_fast_until_reset() {
     assert_eq!(read_cost(&mut bus, 0x80_8000), 8);
     assert_eq!(read_cost(&mut bus, 0xC0_0000), 8);
     // The write to $420D is itself a Fast access.
-    let before = bus.now.0;
+    let before = bus.now;
     write(&mut bus, 0x00_420D, 0xFF);
-    assert_eq!(bus.now.0 - before, 6);
+    assert_eq!(bus.now - before, 6);
     assert!(bus.fast_rom);
     assert_eq!(read_cost(&mut bus, 0x80_8000), 6);
     assert_eq!(read_cost(&mut bus, 0xC0_0000), 6);
@@ -238,10 +236,10 @@ fn the_cpu_sees_the_lines_as_they_were_when_its_last_cycle_started() {
     assert!(!bus.pending().irq);
 }
 
-// @source: anomie-timing#s-cpu/interrupts
 // @source: anomie-regs#4200
 // @source: anomie-regs#4207
 // @source: anomie-regs#4208
+// @source: anomie-timing#s-cpu/interrupts
 // @source: adr-0021
 #[test]
 fn a_trigger_inside_a_cycle_is_seen_from_the_next_one() {
@@ -297,8 +295,8 @@ fn an_enabled_nmi_is_latched_half_a_dot_into_vertical_blank() {
 // @source: anomie-regs#213c
 // @source: anomie-regs#213d
 // @source: anomie-regs#4201
-// @source: fullsnes#snespputimersandstatus
 // @source: anomie-timing
+// @source: fullsnes#snespputimersandstatus
 // @source: adr-0021
 #[test]
 fn slhv_and_wrio_latch_the_counters() {
@@ -346,8 +344,8 @@ fn peek_reports_the_timing_registers_without_their_side_effects() {
     assert_eq!(bus.peek(0x00_213C), (0xFF, true));
 }
 
-// @source: fullsnes#snesiomap
 // @source: anomie-regs#4200
+// @source: fullsnes#snesiomap
 // @source: adr-0021
 #[test]
 fn reset_clears_the_interrupts_and_sets_wrio() {
@@ -423,11 +421,11 @@ fn rdio_reads_back_wrio() {
     assert_eq!(bus.open_bus_value, 0x40);
 }
 
+// @source: anomie-regs#4202
+// @source: anomie-regs#4204
 // @source: anomie-regs#4213
 // @source: anomie-regs#4214
 // @source: anomie-regs#4216
-// @source: anomie-regs#4202
-// @source: anomie-regs#4204
 // @source: adr-0023
 #[test]
 fn the_math_unit_is_peeked_without_side_effects_and_kept_on_reset() {
@@ -476,10 +474,10 @@ fn joyser0_and_joyser1_read_data1_over_open_bus_and_clock_their_pad() {
     assert_eq!(bus.peek(0x00_4017), (0x1C, true));
 }
 
-// @source: anomie-timing#s-cpu/auto-joypad-read
 // @source: anomie-regs#4200
 // @source: anomie-regs#4212
 // @source: anomie-regs#4218
+// @source: anomie-timing#s-cpu/auto-joypad-read
 // @source: adr-0024
 #[test]
 fn the_auto_read_sets_hvbjoy_bit_0_and_fills_joy1_at_dot_74_5_of_line_225() {
@@ -488,7 +486,7 @@ fn the_auto_read_sets_hvbjoy_bit_0_and_fills_joy1_at_dot_74_5_of_line_225() {
     write(&mut bus, 0x00_4200, 0x01);
     let start = 225 * 1364 + 298;
     // Each idle is 6 master cycles: stop in the cycle before the start.
-    while bus.now.0 + 6 <= start {
+    while bus.now + 6 <= Cycles(start) {
         idle(&mut bus);
     }
     assert_eq!(bus.peek(0x00_4212).0 & 0x01, 0);
@@ -549,8 +547,8 @@ fn the_polled_flag_is_kept_at_each_frame_end() {
     assert!(!bus.ports.last_frame_polled());
 }
 
-// @source: fullsnes#snesiomap
 // @source: anomie-regs#4200
+// @source: fullsnes#snesiomap
 // @source: adr-0024
 #[test]
 fn reset_clears_the_latch_and_the_enable_and_keeps_joy1() {
@@ -613,9 +611,9 @@ fn start_dma(bus: &mut Bus, channels: u8, next: u32) -> (u64, Vec<DmaEvent>) {
     let mut log = DmaLog::default();
     BusView::new(bus, &mut log).write(Addr24::new(0x00_420B), channels, Pins::empty());
     BusView::new(bus, &mut log).read(Addr24::new(next), Pins::empty());
-    let before = bus.now.0;
+    let before = bus.now;
     BusView::new(bus, &mut log).idle(Addr24::new(0), Pins::empty());
-    (bus.now.0 - before, log.0)
+    (bus.now - before, log.0)
 }
 
 // @source: anomie-regs#420b
@@ -636,9 +634,9 @@ fn the_cpu_reads_and_writes_the_channel_registers_and_not_mdmaen() {
     assert_eq!(read(&mut bus, 0x00_4380), 0x77);
 }
 
-// @source: anomie-timing#s-cpu/dma
-// @source: anomie-regs#dma-and-hdma/dma
 // @source: anomie-regs#2180
+// @source: anomie-regs#dma-and-hdma/dma
+// @source: anomie-timing#s-cpu/dma
 // @source: adr-0025
 #[test]
 fn the_pause_reproduces_anomies_four_worked_examples() {
@@ -735,10 +733,10 @@ fn several_channels_run_in_order_each_with_its_overhead() {
     assert_eq!(bus.peek(0x00_4315), (0xFF, false));
 }
 
-// @source: anomie-regs#dma-and-hdma/dma
-// @source: anomie-regs#43x2
-// @source: fullsnes#snesunpredictablethings
 // @source: anomie-regs#4214
+// @source: anomie-regs#43x2
+// @source: anomie-regs#dma-and-hdma/dma
+// @source: fullsnes#snesunpredictablethings
 // @source: adr-0023
 // @source: adr-0025
 #[test]
@@ -838,9 +836,9 @@ fn reset_drops_a_transfer_not_yet_started() {
     write(&mut bus, 0x00_420B, 0x01);
     bus.reset();
     read(&mut bus, 0x00_8000);
-    let before = bus.now.0;
+    let before = bus.now;
     idle(&mut bus);
-    assert_eq!(bus.now.0 - before, 6);
+    assert_eq!(bus.now - before, 6);
     assert_eq!(bus.peek(0x00_4305), (0x04, false));
 }
 
@@ -854,7 +852,7 @@ fn set_hdma(bus: &mut Bus, channel: u16, control: u8, b_address: u8, table: u32)
     let base = 0x4300 | (channel << 4);
     let [low, high, bank, _] = table.to_le_bytes();
     for (register, value) in (0..).zip([control, b_address, low, high, bank]) {
-        bus.dma.write(base + register, value);
+        bus.dma.write_at(base + register, value);
     }
 }
 
@@ -866,10 +864,10 @@ fn idle_until(bus: &mut Bus, end: u64) -> (Vec<(u64, u64)>, Vec<DmaEvent>) {
     let mut log = DmaLog::default();
     let mut pauses = Vec::new();
     while bus.now.0 < end {
-        let start = bus.now.0;
+        let start = bus.now;
         BusView::new(bus, &mut log).idle(Addr24::new(0), Pins::empty());
-        if bus.now.0 - start != 6 {
-            pauses.push((start, bus.now.0));
+        if bus.now - start != 6 {
+            pauses.push((start.0, bus.now.0));
         }
     }
     (pauses, log.0)
@@ -904,9 +902,9 @@ fn hdmaen_is_write_only_and_cleared_by_reset() {
     assert_eq!(bus.dma.hdma_enabled(), 0);
 }
 
-// @source: anomie-regs#dma-and-hdma/hdma
 // @source: anomie-regs#43x8
 // @source: anomie-regs#43xa
+// @source: anomie-regs#dma-and-hdma/hdma
 // @source: fullsnes#snesdmaandhdmachannel07registers
 // @source: adr-0026
 #[test]
@@ -915,7 +913,7 @@ fn a_direct_table_moves_one_unit_per_line_repeats_and_terminates() {
     // Two lines with one unit, then three lines of repeat, then the end.
     bus.wram[0x100..0x107].copy_from_slice(&[0x02, 0xAA, 0x83, 0x11, 0x22, 0x33, 0x00]);
     set_hdma(&mut bus, 0, 0x00, 0xFF, 0x7E_0100);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x01);
     let (_, log) = idle_until(&mut bus, 10 * 1364);
     assert_eq!(
         by_line(&log),
@@ -934,9 +932,9 @@ fn a_direct_table_moves_one_unit_per_line_repeats_and_terminates() {
     assert_eq!(bus.peek(0x00_4302), (0x00, false));
 }
 
-// @source: anomie-regs#dma-and-hdma/hdma
 // @source: anomie-regs#43x5
 // @source: anomie-regs#43xa
+// @source: anomie-regs#dma-and-hdma/hdma
 // @source: fullsnes#snesdmaandhdmachannel07registers
 // @source: adr-0026
 #[test]
@@ -950,11 +948,11 @@ fn an_indirect_table_reads_pointers_and_the_last_channel_loads_one_byte_at_the_e
         bus.wram[0x320..0x322].copy_from_slice(&[0xB1, 0xB2]);
         // Indirect, mode 1, to $21FE and $21FF, with data in bank $7E.
         set_hdma(bus, 1, 0x41, 0xFE, 0x7E_0200);
-        bus.dma.write(0x4317, 0x7E);
+        bus.dma.write_at(0x4317, 0x7E);
     };
     let mut bus = bus();
     setup(&mut bus);
-    bus.dma.write_hdma_enable(0x02);
+    bus.dma.write_at(0x420C, 0x02);
     let (_, log) = idle_until(&mut bus, 10 * 1364);
     let expected = [
         (0, 0xA1, 0x7E_0310, 0x21FE),
@@ -976,7 +974,7 @@ fn an_indirect_table_reads_pointers_and_the_last_channel_loads_one_byte_at_the_e
     setup(&mut bus);
     bus.wram[0x400..0x402].copy_from_slice(&[0x7F, 0x00]);
     set_hdma(&mut bus, 2, 0x00, 0xFF, 0x7E_0400);
-    bus.dma.write_hdma_enable(0x06);
+    bus.dma.write_at(0x420C, 0x06);
     let (_, log) = idle_until(&mut bus, 10 * 1364);
     let channel_1 = log
         .iter()
@@ -997,7 +995,7 @@ fn a_line_count_of_80_is_128_lines_without_repeat() {
     let mut bus = bus();
     bus.wram[0x100..0x105].copy_from_slice(&[0x80, 0x11, 0x01, 0x22, 0x00]);
     set_hdma(&mut bus, 0, 0x00, 0xFF, 0x7E_0100);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x01);
     let (_, log) = idle_until(&mut bus, 200 * 1364);
     let lines = by_line(&log)
         .into_iter()
@@ -1006,9 +1004,9 @@ fn a_line_count_of_80_is_128_lines_without_repeat() {
     assert_eq!(lines, [(0, 0x11), (128, 0x22)]);
 }
 
-// @source: anomie-timing#s-cpu/hdma
-// @source: anomie-timing#s-cpu/dma
 // @source: anomie-regs#dma-and-hdma/hdma
+// @source: anomie-timing#s-cpu/dma
+// @source: anomie-timing#s-cpu/hdma
 // @source: fullsnes#snestiminghvevents
 // @source: adr-0019
 // @source: adr-0026
@@ -1017,7 +1015,7 @@ fn setup_and_a_line_pause_the_cpu_as_dma_does() {
     let mut bus = bus();
     bus.wram[0x100..0x103].copy_from_slice(&[0x01, 0x5A, 0x00]);
     set_hdma(&mut bus, 0, 0x00, 0xFF, 0x7E_0100);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x01);
     let (pauses, log) = idle_until(&mut bus, 2600);
     // Setup falls due at 24, the end of the fourth idle, and pauses the fifth: 8 to the
     // next multiple of 8, 18 and the channel's 8, then 2 to a whole 6-cycle clock, then the
@@ -1032,7 +1030,7 @@ fn setup_and_a_line_pause_the_cpu_as_dma_does() {
     // An indirect channel's setup reads two more bytes, 16 cycles more: 18 + 24 in all.
     let mut bus = self::bus();
     set_hdma(&mut bus, 0, 0x40, 0xFF, 0x7E_0100);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x01);
     let (pauses, _) = idle_until(&mut bus, 100);
     assert_eq!(pauses, [(24, 84)]);
 }
@@ -1045,11 +1043,11 @@ fn a_cleared_hdmaen_bit_pauses_its_channel_and_a_set_one_resumes_it() {
     let mut bus = bus();
     bus.wram[0x100..0x107].copy_from_slice(&[0x85, 1, 2, 3, 4, 5, 0x00]);
     set_hdma(&mut bus, 0, 0x00, 0xFF, 0x7E_0100);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x01);
     let (_, mut log) = idle_until(&mut bus, 2 * 1364);
-    bus.dma.write_hdma_enable(0x00);
+    bus.dma.write_at(0x420C, 0x00);
     log.extend(idle_until(&mut bus, 4 * 1364).1);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x01);
     log.extend(idle_until(&mut bus, 10 * 1364).1);
     let lines = by_line(&log)
         .into_iter()
@@ -1068,11 +1066,11 @@ fn a_channel_enabled_mid_frame_skips_its_first_line_and_stays_terminated() {
     bus.wram[0x100..0x103].copy_from_slice(&[0x81, 0x77, 0x00]);
     // $4308-$430A set by hand: the table at $0100 after a count of 1.
     set_hdma(&mut bus, 0, 0x00, 0xFF, 0x7E_0000);
-    bus.dma.write(0x4308, 0x00);
-    bus.dma.write(0x4309, 0x01);
-    bus.dma.write(0x430A, 0x01);
+    bus.dma.write_at(0x4308, 0x00);
+    bus.dma.write_at(0x4309, 0x01);
+    bus.dma.write_at(0x430A, 0x01);
     idle_until(&mut bus, 100);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x01);
     let (_, log) = idle_until(&mut bus, 5 * 1364);
     // Line 0 moves nothing and reloads; line 1 moves $77 and reaches the $00.
     let lines = by_line(&log)
@@ -1081,9 +1079,9 @@ fn a_channel_enabled_mid_frame_skips_its_first_line_and_stays_terminated() {
         .collect::<Vec<_>>();
     assert_eq!(lines, [(1, 0x77)]);
     // Enabling it again does not restart it this frame.
-    bus.dma.write_hdma_enable(0x00);
-    bus.dma.write(0x430A, 0x01);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x00);
+    bus.dma.write_at(0x430A, 0x01);
+    bus.dma.write_at(0x420C, 0x01);
     let (_, log) = idle_until(&mut bus, 10 * 1364);
     assert_eq!(log, []);
 }
@@ -1101,7 +1099,7 @@ fn each_frame_sets_up_again_and_vertical_blank_moves_nothing() {
     bus.wram[0x100] = 0xFF;
     bus.wram[0x180] = 0x00;
     set_hdma(&mut bus, 0, 0x00, 0xFF, 0x7E_0100);
-    bus.dma.write_hdma_enable(0x01);
+    bus.dma.write_at(0x420C, 0x01);
     let frame = 262 * 1364 - 4;
     let (_, log) = idle_until(&mut bus, frame + 2 * 1364);
     let first = log.iter().filter(|event| event.at.0 < frame).count();
@@ -1131,7 +1129,7 @@ fn hdma_runs_between_dma_bytes_and_ends_a_dma_on_its_channel() {
     let mut bus = bus();
     bus.wram[0x100..0x103].copy_from_slice(&table);
     set_hdma(&mut bus, 1, 0x00, 0xFF, 0x7E_0100);
-    bus.dma.write_hdma_enable(0x02);
+    bus.dma.write_at(0x420C, 0x02);
     set_channel(&mut bus, 0, 0x08, 0xFF, 0x00_8000, 400);
     bus.now = Cycles(0);
     // set_channel's writes took cycles; start again at 0 on a fresh frame.
@@ -1151,7 +1149,7 @@ fn hdma_runs_between_dma_bytes_and_ends_a_dma_on_its_channel() {
     let mut bus = self::bus();
     bus.wram[0x100..0x103].copy_from_slice(&table);
     set_channel(&mut bus, 1, 0x08, 0xFF, 0x7E_0100, 400);
-    bus.dma.write_hdma_enable(0x02);
+    bus.dma.write_at(0x420C, 0x02);
     bus.now = Cycles(0);
     bus.timing = Timing::new(Region::Ntsc, Cycles(0));
     let (cost, log) = start_dma(&mut bus, 0x02, 0x00_8000);
@@ -1182,11 +1180,15 @@ fn the_apu_ports_read_zero_and_keep_the_cpus_writes_for_the_apu() {
         assert_eq!(bus.open_bus_value, 0x00);
         assert_eq!(bus.peek(address), (0x00, false));
         // The address's low two bits pick the port: $217F is port 3 (anomie-regs#2140).
-        assert_eq!(bus.apu.written(port), 0xA0 | port, "{address:06X}");
+        assert_eq!(
+            bus.apu.written(ApuPort::from_b_bus(port)),
+            0xA0 | port,
+            "{address:06X}"
+        );
     }
     // Every mirror of a port is the same latch.
     write(&mut bus, 0x00_2145, 0x77);
-    assert_eq!(bus.apu.written(1), 0x77);
+    assert_eq!(bus.apu.written(ApuPort::Port1), 0x77);
     // A port is a fast B-bus register (ADR 0019, point 3).
     assert_eq!(read_cost(&mut bus, 0x00_2140), 6);
 }
@@ -1200,7 +1202,7 @@ fn reset_clears_the_apu_ports() {
     }
     bus.reset();
     for port in 0..4 {
-        assert_eq!(bus.apu.written(port), 0x00);
+        assert_eq!(bus.apu.written(ApuPort::from_b_bus(port)), 0x00);
     }
     assert_eq!(read(&mut bus, 0x00_2140), 0x00);
 }
@@ -1218,7 +1220,7 @@ fn dma_reaches_the_apu_ports_as_the_cpu_does() {
     let (_, log) = start_dma(&mut bus, 0x01, 0x00_8000);
     assert_eq!(log.len(), 4);
     for port in 0..4 {
-        assert_eq!(bus.apu.written(port), 0x10 + port);
+        assert_eq!(bus.apu.written(ApuPort::from_b_bus(port)), 0x10 + port);
     }
     // B bus to A bus, $2140 to WRAM $00:0100: the port reads $00.
     write(&mut bus, 0x00_0100, 0xEE);

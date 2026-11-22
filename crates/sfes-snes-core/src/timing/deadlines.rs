@@ -44,21 +44,13 @@ impl Deadline {
         Self::Hdma,
     ];
 
-    /// The event's slot in the table.
+    /// The event's slot in the table: its place in the declaration, which is service order.
     // @source: adr-0020
     // @source: adr-0021
     // @source: adr-0024
     // @source: adr-0026
     const fn index(self) -> usize {
-        match self {
-            Self::Refresh => 0,
-            Self::Line => 1,
-            Self::Nmi => 2,
-            Self::Irq => 3,
-            Self::Latch => 4,
-            Self::Joypad => 5,
-            Self::Hdma => 6,
-        }
+        self as usize
     }
 }
 
