@@ -117,7 +117,7 @@ fn write_only_and_unanswered_addresses_read_open_bus() {
         0x00_420D, // MEMSEL, write-only
         0x00_4202, 0x00_4203, 0x00_4204, 0x00_4205, 0x00_4206, // the math operands
         0x00_2000, 0x00_2184, 0x00_21FF, 0x00_2200, 0x00_4400, 0x00_5FFF, // unused
-        0x00_2100, 0x00_2137, 0x00_213F, // INIDISP, SLHV, STAT78 until #90 (ADR 0028)
+        0x00_2100, 0x00_2137, // INIDISP, SLHV (ADR 0028)
         0x00_4000, 0x00_4015, 0x00_4018, 0x00_41FF, 0x00_4220, // unused CPU registers
     ] {
         assert_eq!(read(&mut bus, address), 0x5C, "{address:06X}");
@@ -1242,8 +1242,10 @@ fn idle_to_line(bus: &mut Bus, line: u16) {
 }
 
 // @source: anomie-regs#registers
+// @source: anomie-regs#2134
 // @source: fullsnes#snesunpredictablethings
 // @source: adr-0028
+// @source: adr-0029
 #[test]
 fn ppu1_open_bus_answers_its_write_only_registers_and_ppu2_follows_the_counters() {
     let mut bus = bus();
@@ -1252,10 +1254,10 @@ fn ppu1_open_bus_answers_its_write_only_registers_and_ppu2_follows_the_counters(
     assert_eq!(read(&mut bus, 0x00_2104), 0x00);
     assert_eq!(read(&mut bus, 0x00_212A), 0x00);
     assert_eq!(bus.peek(0x00_2118), (0x00, false));
-    // $2134 is CPU open bus until #90; the read above placed $00 on the data bus.
-    assert_eq!(read(&mut bus, 0x00_2134), 0x00);
-    write(&mut bus, 0x00_4200, 0x5C);
-    assert_eq!(read(&mut bus, 0x00_2134), 0x5C);
+    // $2134 reads the multiplier, $01 at power-on, and its read sets PPU1 open bus.
+    assert_eq!(bus.peek(0x00_2134), (0x01, true));
+    assert_eq!(read(&mut bus, 0x00_2134), 0x01);
+    assert_eq!(read(&mut bus, 0x00_2104), 0x01);
     // A $213C read becomes PPU2 open bus: OPVCT's high byte shows it in bits 7-1.
     assert_eq!(read(&mut bus, 0x00_213D), 0xFF);
     assert_eq!(read(&mut bus, 0x00_213C), 0xFF);
@@ -1325,4 +1327,104 @@ fn an_interlaced_frame_is_448_rows_and_names_its_field() {
         (frame.width, frame.height, frame.field),
         (256, 448, Some(Field::Second))
     );
+}
+
+// @source: anomie-regs#2100
+// @source: anomie-regs#2118
+// @source: anomie-regs#registers
+// @source: anomie-timing#s-ppu/blanking-periods
+// @source: fullsnes#snesppucontrol
+// @source: adr-0029
+#[test]
+fn vram_writes_land_only_in_blanking() {
+    let mut bus = bus();
+    let write_word = |bus: &mut Bus, value: u8| {
+        for (address, byte) in [
+            (0x00_2115, 0x80),
+            (0x00_2116, 0x00),
+            (0x00_2117, 0x00),
+            (0x00_2118, value),
+            (0x00_2119, value),
+        ] {
+            write(bus, address, byte);
+        }
+    };
+    // Forced blank is on at power-on.
+    write_word(&mut bus, 0x11);
+    assert_eq!(bus.ppu.vram()[..2], [0x11, 0x11]);
+    // Line 0 with forced blank off is active display.
+    write(&mut bus, 0x00_2100, 0x0F);
+    write_word(&mut bus, 0x22);
+    assert_eq!(bus.ppu.vram()[..2], [0x11, 0x11]);
+    idle_to_line(&mut bus, 225);
+    write_word(&mut bus, 0x33);
+    assert_eq!(bus.ppu.vram()[..2], [0x33, 0x33]);
+}
+
+// @source: anomie-regs#2102
+// @source: anomie-regs#2138
+// @source: anomie-timing#oam-reset
+// @source: fullsnes#snesmemoryoamaccessspriteattributes
+// @source: adr-0029
+#[test]
+fn the_oam_address_reloads_when_vertical_blank_begins() {
+    let mut bus = bus();
+    bus.ppu.oam_mut()[4..8].copy_from_slice(&[0x40, 0x41, 0x42, 0x43]);
+    write(&mut bus, 0x00_2100, 0x0F);
+    write(&mut bus, 0x00_2102, 0x02);
+    write(&mut bus, 0x00_2103, 0x00);
+    assert_eq!(read(&mut bus, 0x00_2138), 0x40);
+    assert_eq!(read(&mut bus, 0x00_2138), 0x41);
+    idle_to_line(&mut bus, 225);
+    assert_eq!(read(&mut bus, 0x00_2138), 0x40);
+}
+
+// @source: anomie-regs#2137
+// @source: anomie-regs#213f
+// @source: fullsnes#snespputimersandstatus
+// @source: adr-0020
+// @source: adr-0021
+// @source: adr-0029
+#[test]
+fn stat78_shows_the_latch_flag_until_read_with_wrio_bit_7_set() {
+    let mut bus = bus();
+    // At power-on, before the field toggles at H=1 of line 0: field 0, NTSC, nothing
+    // latched, PPU2 open bus 0 and version 3.
+    assert_eq!(read(&mut bus, 0x00_213F), 0x03);
+    // On line 1 the field is 1 (ADR 0020, point 4).
+    idle_to_line(&mut bus, 1);
+    write(&mut bus, 0x00_4201, 0x80);
+    read(&mut bus, 0x00_2137);
+    assert_eq!(bus.peek(0x00_213F), (0xC3, true));
+    assert_eq!(read(&mut bus, 0x00_213F), 0xC3);
+    // The read cleared the flag; bit 5 of the last PPU2 byte read, $C3, is 0.
+    assert_eq!(read(&mut bus, 0x00_213F), 0x83);
+}
+
+// @source: anomie-regs#2118
+// @source: anomie-regs#43x0
+// @source: fullsnes#snesmemoryvramaccesstileandbgmap
+// @source: adr-0025
+// @source: adr-0029
+#[test]
+fn dma_fills_vram_through_the_port() {
+    let mut bus = bus();
+    write(&mut bus, 0x00_2115, 0x80);
+    write(&mut bus, 0x00_2116, 0x00);
+    write(&mut bus, 0x00_2117, 0x00);
+    // Mode 1, ROM $00:8010 to $2118/$2119.
+    set_channel(&mut bus, 0, 0x01, 0x18, 0x00_8010, 4);
+    start_dma(&mut bus, 0x01, 0x00_8000);
+    assert_eq!(bus.ppu.vram()[..4], [0x10, 0x11, 0x12, 0x13]);
+}
+
+// @source: anomie-regs#213f
+// @source: fullsnes#snespputimersandstatus
+// @source: adr-0029
+#[test]
+fn stat78_bit_4_is_set_on_a_pal_console() {
+    let mut bus = bus();
+    assert_eq!(read(&mut bus, 0x00_213F) & 0x10, 0);
+    bus.timing = Timing::new(Region::Pal, Cycles(0));
+    assert_eq!(read(&mut bus, 0x00_213F) & 0x10, 0x10);
 }
