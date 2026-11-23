@@ -144,6 +144,12 @@ sha256 = "177bd8b387f8f032b274677ec377d3dc9d6f30f9019f5e067750fd275ae0a35c"
 notes = "Own test cartridge: Own test cartridge: sprites: two overlapping 8x8 sprites in sprite order, a 16x16 sprite flipped both ways with solid tiles, and 33 sprites on one line setting range over. Built from tests/carts/obj-sprites/ by `cargo xtask carts build` (ADR 0013). Built from tests/carts/obj-sprites/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/windows.sfc"
+license = "own"
+sha256 = "0cb21638ba7dcc77e0e90c9476b1498610bae260887f2641cde556be3a20b9d1"
+notes = "Own test cartridge: BG1 to BG3 behind two windows: XOR of both, one inverted window, and a layer with a window but no TMW designation. Built from tests/carts/windows/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
