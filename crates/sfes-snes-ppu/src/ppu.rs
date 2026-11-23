@@ -60,6 +60,8 @@ const MAIN_SCREEN_BACKGROUNDS: u8 = 0x0F;
 const LINE_PIXELS: u16 = 256;
 /// `$2133` bit 3: pseudo-hires.
 const PSEUDO_HIRES: u8 = 0x08;
+/// `$2133` bit 6: EXTBG.
+const EXTBG: u8 = 0x40;
 /// `$2133` bit 0: interlace.
 const INTERLACE: u8 = 0x01;
 /// CGRAM bit 15 is not stored; a colour has 15 bits.
@@ -316,7 +318,8 @@ impl Ppu {
     /// - `$2100`, `$2105` and `$2133` are kept, and clearing forced blank reloads the OAM
     ///   address;
     /// - the memory ports run, writing their memory only in the periods point 7 allows;
-    /// - M7A and M7B are kept, and the registers that share their latch move it.
+    /// - M7SEL, M7A to M7D, M7X, M7Y and the Mode 7 scroll are kept, and share one latch
+    ///   (ADR 0032, point 1).
     ///
     /// A write to any other register has no effect until its issue.
     // @source: anomie-regs#2100
@@ -324,7 +327,12 @@ impl Ppu {
     // @source: anomie-regs#2103
     // @source: anomie-regs#2104
     // @source: anomie-regs#2105
+    // @source: anomie-regs#211a
     // @source: anomie-regs#211b
+    // @source: anomie-regs#211d
+    // @source: anomie-regs#211e
+    // @source: anomie-regs#211f
+    // @source: anomie-regs#2120
     // @source: anomie-regs#2115
     // @source: anomie-regs#2116
     // @source: anomie-regs#2117
@@ -338,6 +346,7 @@ impl Ppu {
     // @source: fullsnes#snesppucontrol
     // @source: adr-0028
     // @source: adr-0029
+    // @source: adr-0032
     pub fn write(&mut self, register: Register, value: u8) {
         let blank = self.forced_blank() || self.signals.period == Period::VerticalBlank;
         match register {
@@ -366,14 +375,17 @@ impl Ppu {
             // These two are also the Mode 7 scroll, which has a latch of its own.
             Register::Background1HorizontalScroll | Register::Background1VerticalScroll => {
                 self.backgrounds.write(register, value);
-                self.mode7.write(value);
+                if register == Register::Background1HorizontalScroll {
+                    self.mode7.write_scroll_x(value);
+                } else {
+                    self.mode7.write_scroll_y(value);
+                }
             }
-            Register::Mode7MatrixC
-            | Register::Mode7MatrixD
-            | Register::Mode7CenterX
-            | Register::Mode7CenterY => {
-                self.mode7.write(value);
-            }
+            Register::Mode7Settings => self.mode7.write_settings(value),
+            Register::Mode7MatrixC => self.mode7.write_matrix_c(value),
+            Register::Mode7MatrixD => self.mode7.write_matrix_d(value),
+            Register::Mode7CenterX => self.mode7.write_center_x(value),
+            Register::Mode7CenterY => self.mode7.write_center_y(value),
             Register::Mode7MatrixA => self.mode7.write_matrix_a(value),
             Register::Mode7MatrixB => self.mode7.write_matrix_b(value),
             Register::VramControl => self.vram_port.write_control(value),
@@ -433,17 +445,20 @@ impl Ppu {
     /// - in BG modes 0 to 4 each pixel is the first non-transparent pixel, front to back,
     ///   of the backgrounds `$212C` puts on the main screen, else the backdrop, CGRAM
     ///   entry 0;
-    /// - in the other modes every pixel is the backdrop, until #93 and #97;
+    /// - in BG mode 7 the pixel is mode 7's (ADR 0032), BG2 appearing with EXTBG;
+    /// - in modes 5 and 6 every pixel is the backdrop, until #97;
     /// - a wide line writes each main-screen pixel twice, until the sub screen arrives.
     // @source: anomie-regs#2105
     // @source: anomie-regs#212c
     // @source: anomie-regs#2133
     // @source: anomie-regs#backgrounds/bg-modes
+    // @source: anomie-regs#backgrounds/mode-7
     // @source: anomie-regs#rendering-the-screen/rendering-the-screen
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: fullsnes#snesppuresolution
     // @source: adr-0028
     // @source: adr-0030
+    // @source: adr-0032
     pub fn render_line(&mut self, line: u16, out: &mut LineOut) {
         let mode = self.background_mode & BACKGROUND_MODE_MASK;
         // BG modes 5 and 6 are true hi-res.
@@ -458,14 +473,25 @@ impl Ppu {
             control: self.background_mode,
             direct_color: self.color_select & DIRECT_COLOR != 0,
         };
-        let order = priority_order(mode, self.background_mode & BACKGROUND_3_FIRST != 0);
+        let extbg = self.screen_mode & EXTBG != 0;
+        let order = priority_order(mode, self.background_mode & BACKGROUND_3_FIRST != 0, extbg);
         let enabled = self.main_screen & MAIN_SCREEN_BACKGROUNDS;
         let repeat = width.pixels() / usize::from(LINE_PIXELS);
         for x in 0..LINE_PIXELS {
+            // Mode 7's one pixel, which BG1 and EXTBG's BG2 both show.
+            let mode_7 = if mode == 7 {
+                let direct = setup.direct_color;
+                self.mode7.samples(&self.vram, direct, extbg, x, line)
+            } else {
+                [None; 4]
+            };
             // Each enabled background's pixel here, fetched once however many layers it has.
             let samples = Background::ALL.map(|background| {
                 if enabled >> background as u8 & 1 == 0 {
                     return None;
+                }
+                if mode == 7 {
+                    return mode_7[background as usize];
                 }
                 self.backgrounds
                     .sample(&self.vram, setup, background, x, line)
@@ -973,5 +999,50 @@ mod tests {
         assert_eq!(out.pixels().len(), 512);
         let first = [0, 1, 2, 3].map(|x| pixel(&out, x));
         assert_eq!(first, [2, 2, 1, 1]);
+    }
+
+    // @source: anomie-regs#2133
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#backgrounds/mode-7
+    // @source: fullsnes#snesppubgcontrol
+    // @source: adr-0032
+    #[test]
+    fn mode_7_shows_bg1_and_extbg_adds_bg2_in_its_priority_order() {
+        let mut ppu = drawing_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::BackgroundMode, 0x07);
+        for register in [Register::Mode7MatrixA, Register::Mode7MatrixD] {
+            ppu.write(register, 0x00);
+            ppu.write(register, 0x01);
+        }
+        for register in [Register::Mode7MatrixB, Register::Mode7MatrixC] {
+            ppu.write(register, 0x00);
+            ppu.write(register, 0x00);
+        }
+        // Tilemap entry 0 is character 1; its row 0 has pixels $01 and $82. Entry $82 of
+        // CGRAM is colour 16.
+        ppu.vram_mut()[0] = 1;
+        ppu.vram_mut()[129] = 0x01;
+        ppu.vram_mut()[131] = 0x82;
+        ppu.cgram_mut()[0x104..0x106].copy_from_slice(&16u16.to_le_bytes());
+        let row = |ppu: &mut Ppu, out: &mut LineOut| {
+            ppu.render_line(0, out);
+            [0, 1, 2].map(|x| pixel(out, x))
+        };
+
+        // BG1: the pixel as a palette index; 0 is the backdrop.
+        ppu.write(Register::MainScreen, 0x01);
+        assert_eq!(row(&mut ppu, &mut out), [2, 16, 1]);
+        // BG2 shows nothing without EXTBG.
+        ppu.write(Register::MainScreen, 0x02);
+        assert_eq!(row(&mut ppu, &mut out), [1, 1, 1]);
+        // With EXTBG BG2's pixels use the low 7 bits, and BG2's priority-1 pixel is in front
+        // of BG1, which is in front of BG2's priority-0 pixel.
+        ppu.write(Register::ScreenMode, 0x40);
+        assert_eq!(row(&mut ppu, &mut out), [2, 4, 1]);
+        ppu.write(Register::MainScreen, 0x03);
+        assert_eq!(row(&mut ppu, &mut out), [2, 4, 1]);
+        ppu.write(Register::MainScreen, 0x01);
+        assert_eq!(row(&mut ppu, &mut out), [2, 16, 1]);
     }
 }

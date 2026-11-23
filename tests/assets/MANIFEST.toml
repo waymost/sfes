@@ -132,6 +132,12 @@ sha256 = "b1a4d3c9c0c488db0fae50ddb813abb627db70d77bc0c4964af327a2c788cdfb"
 notes = "Own test cartridge: Draws BG mode 4 offset-per-tile: BG3's single entry per column moves BG2's columns horizontally or, with bit 15, vertically. Built from tests/carts/bg-opt-mode4/ by `cargo xtask carts build` (ADR 0013). Built from tests/carts/bg-opt-mode4/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/bg-mode7.sfc"
+license = "own"
+sha256 = "f3a8ba20a82ba0a0b74f11504110ac9cfb31b94bd20e4c188a89dc4d4f9fae90"
+notes = "Own test cartridge: BG mode 7: a 2.0 matrix, a scroll of -8 and the wrap at the playfield's edge, drawn from words holding a tilemap entry and a pixel each. Built from tests/carts/bg-mode7/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
