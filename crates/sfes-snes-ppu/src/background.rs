@@ -81,66 +81,111 @@ enum Depth {
     Eight = 8,
 }
 
-/// A background's layer in a mode's priority order: the background, and whether it is its
-/// tiles with the priority bit set.
+/// A layer in a mode's priority order: a background's tiles with or without their priority
+/// bit, or the sprites of one priority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Layer {
-    /// Which background.
-    pub(crate) background: Background,
-    /// Its tiles with `vhopppcc` bit `o` set (`true`) or clear.
-    pub(crate) high: bool,
+pub(crate) enum Layer {
+    /// A background's tiles with `vhopppcc` bit `o` set (`true`) or clear.
+    Background {
+        /// Which background.
+        background: Background,
+        /// Whether it is its high-priority tiles.
+        high: bool,
+    },
+    /// The sprites whose OAM priority bits are this, 0 to 3.
+    Sprites(u8),
 }
 
 // @source: anomie-regs#2105
 // @source: adr-0030
 /// A layer of BG1 to BG4.
 const fn layer(background: Background, high: bool) -> Layer {
-    Layer { background, high }
+    Layer::Background { background, high }
 }
 
 use Background::{Four, One, Three, Two};
+use Layer::Sprites;
 
-/// Mode 0, front to back.
-const MODE_0: [Layer; 8] = [
+/// Mode 0, front to back (anomie-regs#backgrounds/mode-0).
+const MODE_0: [Layer; 12] = [
+    Sprites(3),
     layer(One, true),
     layer(Two, true),
+    Sprites(2),
     layer(One, false),
     layer(Two, false),
+    Sprites(1),
     layer(Three, true),
     layer(Four, true),
+    Sprites(0),
     layer(Three, false),
     layer(Four, false),
 ];
 /// Mode 1 with `$2105` bit 3 clear.
-const MODE_1: [Layer; 6] = [
+const MODE_1: [Layer; 10] = [
+    Sprites(3),
     layer(One, true),
     layer(Two, true),
+    Sprites(2),
     layer(One, false),
     layer(Two, false),
+    Sprites(1),
     layer(Three, true),
+    Sprites(0),
     layer(Three, false),
 ];
 /// Mode 1 with `$2105` bit 3 set: BG3's high tiles in front.
-const MODE_1_BG3_FIRST: [Layer; 6] = [
+const MODE_1_BG3_FIRST: [Layer; 10] = [
     layer(Three, true),
+    Sprites(3),
     layer(One, true),
     layer(Two, true),
+    Sprites(2),
     layer(One, false),
     layer(Two, false),
+    Sprites(1),
+    Sprites(0),
     layer(Three, false),
 ];
-/// Modes 2, 3 and 4.
-const TWO_BACKGROUNDS: [Layer; 4] = [
+/// Modes 2 to 5.
+const TWO_BACKGROUNDS: [Layer; 8] = [
+    Sprites(3),
     layer(One, true),
+    Sprites(2),
     layer(Two, true),
+    Sprites(1),
     layer(One, false),
+    Sprites(0),
     layer(Two, false),
+];
+/// Mode 6: BG1 alone.
+const MODE_6: [Layer; 6] = [
+    Sprites(3),
+    layer(One, true),
+    Sprites(2),
+    Sprites(1),
+    layer(One, false),
+    Sprites(0),
 ];
 
 /// Mode 7: BG1 alone.
-const MODE_7: [Layer; 1] = [layer(One, false)];
+const MODE_7: [Layer; 5] = [
+    Sprites(3),
+    Sprites(2),
+    Sprites(1),
+    layer(One, false),
+    Sprites(0),
+];
 /// Mode 7 with EXTBG: BG2's high pixels, BG1, then BG2's low pixels.
-const MODE_7_EXTBG: [Layer; 3] = [layer(Two, true), layer(One, false), layer(Two, false)];
+const MODE_7_EXTBG: [Layer; 7] = [
+    Sprites(3),
+    Sprites(2),
+    layer(Two, true),
+    Sprites(1),
+    layer(One, false),
+    Sprites(0),
+    layer(Two, false),
+];
 
 /// The registers of BG1 to BG4, and the write-twice latch their scrolls share.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -191,24 +236,28 @@ impl Background {
     pub(crate) const ALL: [Self; 4] = [One, Two, Three, Four];
 }
 
-/// The layers of `mode` from front to back; `bg3_first` is `$2105` bit 3, which moves
-/// BG3's high tiles in front in mode 1.
-/// Sprites will take their places between them (#94). Modes 5 and 6 draw none yet; `extbg` is `$2133` bit 6, which adds mode 7's BG2.
+/// The layers of `mode` from front to back, sprites among them (ADR 0033, point 6);
+/// `bg3_first` is `$2105` bit 3, which moves BG3's high tiles in front in mode 1, and `extbg`
+/// is `$2133` bit 6, which adds mode 7's BG2.
 // @source: anomie-regs#2105
 // @source: anomie-regs#backgrounds/mode-0
 // @source: anomie-regs#backgrounds/mode-1
 // @source: anomie-regs#backgrounds/mode-2
 // @source: anomie-regs#backgrounds/mode-3
 // @source: anomie-regs#backgrounds/mode-4
+// @source: anomie-regs#backgrounds/mode-5
+// @source: anomie-regs#backgrounds/mode-6
 // @source: anomie-regs#backgrounds/mode-7
 // @source: adr-0030
 // @source: adr-0032
+// @source: adr-0033
 pub(crate) const fn priority_order(mode: u8, bg3_first: bool, extbg: bool) -> &'static [Layer] {
     match (mode, bg3_first) {
         (0, _) => &MODE_0,
         (1, true) => &MODE_1_BG3_FIRST,
         (1, false) => &MODE_1,
-        (2..=4, _) => &TWO_BACKGROUNDS,
+        (2..=5, _) => &TWO_BACKGROUNDS,
+        (6, _) => &MODE_6,
         (7, _) if extbg => &MODE_7_EXTBG,
         (7, _) => &MODE_7,
         _ => &[],
@@ -493,7 +542,7 @@ pub(crate) fn direct_color(value: u8, palette: u8) -> u16 {
 
 /// VRAM word `address`.
 // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
-fn vram_word(vram: &[u8], address: u16) -> u16 {
+pub(crate) fn vram_word(vram: &[u8], address: u16) -> u16 {
     let byte = usize::from(address & VRAM_WORD_MASK) * 2;
     let low = vram.get(byte).copied().unwrap_or_default();
     let high = vram.get(byte + 1).copied().unwrap_or_default();
@@ -509,7 +558,7 @@ pub(crate) fn vram_byte(vram: &[u8], address: u32) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{vec, vec::Vec};
+    use alloc::{format, vec, vec::Vec};
 
     use super::*;
 
@@ -855,59 +904,39 @@ mod tests {
     // @source: anomie-regs#backgrounds/mode-0
     // @source: anomie-regs#backgrounds/mode-1
     // @source: anomie-regs#backgrounds/mode-2
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#backgrounds/mode-6
+    // @source: anomie-regs#backgrounds/mode-7
     // @source: adr-0030
+    // @source: adr-0032
+    // @source: adr-0033
     #[test]
     fn the_priority_order_follows_the_mode_and_mode_1_s_bg3_bit() {
-        let names = |mode, bg3_first| {
-            priority_order(mode, bg3_first, false)
+        // `S3` is the sprites of priority 3, `1h` BG1's tiles with the priority bit and
+        // `1l` those without; the lists are anomie's, front to back.
+        let names = |mode, bg3_first, extbg| {
+            priority_order(mode, bg3_first, extbg)
                 .iter()
-                .map(|layer| (layer.background as u8 + 1, layer.high))
+                .map(|layer| match layer {
+                    Layer::Sprites(priority) => format!("S{priority}"),
+                    Layer::Background { background, high } => {
+                        format!("{}{}", *background as u8 + 1, if *high { 'h' } else { 'l' })
+                    }
+                })
                 .collect::<Vec<_>>()
+                .join(" ")
         };
-        // 3AB2ab1CD0cd without the sprites.
         assert_eq!(
-            names(0, false),
-            [
-                (1, true),
-                (2, true),
-                (1, false),
-                (2, false),
-                (3, true),
-                (4, true),
-                (3, false),
-                (4, false)
-            ]
+            names(0, false, false),
+            "S3 1h 2h S2 1l 2l S1 3h 4h S0 3l 4l"
         );
-        // 3AB2ab1C 0c, and with the bit C3AB2ab1 0c.
-        assert_eq!(
-            names(1, false),
-            [
-                (1, true),
-                (2, true),
-                (1, false),
-                (2, false),
-                (3, true),
-                (3, false)
-            ]
-        );
-        assert_eq!(
-            names(1, true),
-            [
-                (3, true),
-                (1, true),
-                (2, true),
-                (1, false),
-                (2, false),
-                (3, false)
-            ]
-        );
-        // 3A 2B 1a 0b.
-        for mode in 2..=4 {
-            assert_eq!(
-                names(mode, false),
-                [(1, true), (2, true), (1, false), (2, false)]
-            );
+        assert_eq!(names(1, false, false), "S3 1h 2h S2 1l 2l S1 3h S0 3l");
+        assert_eq!(names(1, true, false), "3h S3 1h 2h S2 1l 2l S1 S0 3l");
+        for mode in 2..=5 {
+            assert_eq!(names(mode, false, false), "S3 1h S2 2h S1 1l S0 2l");
         }
-        assert_eq!(priority_order(5, false, false), &[] as &[Layer]);
+        assert_eq!(names(6, false, false), "S3 1h S2 S1 1l S0");
+        assert_eq!(names(7, false, false), "S3 S2 S1 1l S0");
+        assert_eq!(names(7, false, true), "S3 S2 2h S1 1l S0 2l");
     }
 }
