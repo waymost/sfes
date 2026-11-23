@@ -20,6 +20,7 @@ use crate::{
     register::{ReadKind, Register},
     signals::{Period, Signals},
     sprite::Sprites,
+    window::{Masked, Windows},
 };
 
 /// VRAM: 64 KiB.
@@ -93,6 +94,8 @@ pub struct Ppu {
     mode7: Mode7,
     /// $2101 OBSEL and the flags of $213E: the sprites.
     sprites: Sprites,
+    /// $2123–$212B and $212E: the windows.
+    windows: Windows,
     /// $2105 BGMODE: the BG mode and character sizes.
     background_mode: u8,
     /// $2107–$2114 BG1SC–BG4VOFS: the backgrounds' tilemaps, characters and scrolls.
@@ -146,6 +149,7 @@ impl Ppu {
             cgram_port: CgramPort::power_on(),
             mode7: Mode7::power_on(),
             sprites: Sprites::power_on(),
+            windows: Windows::power_on(),
             background_mode: BACKGROUND_MODE_POWER_ON,
             backgrounds: Backgrounds::power_on(),
             main_screen: 0,
@@ -427,6 +431,16 @@ impl Ppu {
                 let allowed = blank || self.signals.period == Period::HorizontalBlank;
                 self.cgram_port.write(&mut self.cgram, value, allowed);
             }
+            Register::WindowMaskBackground12
+            | Register::WindowMaskBackground34
+            | Register::WindowMaskObjectColor
+            | Register::Window1Left
+            | Register::Window1Right
+            | Register::Window2Left
+            | Register::Window2Right
+            | Register::WindowLogicBackgrounds
+            | Register::WindowLogicObjectColor
+            | Register::MainScreenWindow => self.windows.write(register, value),
             Register::MainScreen => self.main_screen = value,
             Register::ColorMathSelect => self.color_select = value,
             Register::ScreenMode => self.screen_mode = value,
@@ -518,7 +532,8 @@ impl Ppu {
             };
             // Each enabled background's pixel here, fetched once however many layers it has.
             let samples = Background::ALL.map(|background| {
-                if enabled >> background as u8 & 1 == 0 {
+                let layer = Masked::from(background);
+                if enabled >> background as u8 & 1 == 0 || self.windows.masked_on_main(layer, x) {
                     return None;
                 }
                 if mode == 7 {
@@ -529,6 +544,7 @@ impl Ppu {
             });
             let sprite = sprites
                 .as_ref()
+                .filter(|_| !self.windows.masked_on_main(Masked::Object, x))
                 .and_then(|pixels| pixels.get(usize::from(x)).copied().flatten());
             let shown =
                 order.iter().find_map(|layer| match *layer {
@@ -1206,5 +1222,78 @@ mod tests {
         assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x81));
         ppu.render_line(2, &mut out);
         assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x81));
+    }
+
+    // @source: anomie-regs#2123
+    // @source: anomie-regs#2126
+    // @source: anomie-regs#212e
+    // @source: anomie-regs#rendering-the-screen/rendering-the-screen
+    // @source: fullsnes#snesppuwindow
+    // @source: adr-0034
+    #[test]
+    fn a_window_masks_a_background_where_it_is_designated_and_inside() {
+        let mut ppu = drawing_ppu();
+        let mut out = LineOut::default();
+        // Mode 1, BG1's map at word $0400 and characters at 0; tile 1 has pixels 0 and 1 of
+        // row 0 set to colour 1 (CGRAM entry 1, `$0002`), and the backdrop is `$0001`.
+        ppu.write(Register::BackgroundMode, 0x01);
+        ppu.write(Register::Background1Tilemap, 0x04);
+        ppu.vram_mut()[0x800..0x802].copy_from_slice(&[0x01, 0x00]);
+        ppu.vram_mut()[32] = 0xC0;
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.render_line(0, &mut out);
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (2, 2));
+
+        // Window 1 is pixel 0 alone and acts on BG1, but BG1 is not designated: no change.
+        ppu.write(Register::Window1Left, 0);
+        ppu.write(Register::Window1Right, 0);
+        ppu.write(Register::WindowMaskBackground12, 0x02);
+        ppu.render_line(0, &mut out);
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (2, 2));
+
+        // Designated: pixel 0 is masked, so the backdrop shows; pixel 1 is outside.
+        ppu.write(Register::MainScreenWindow, 0x01);
+        ppu.render_line(0, &mut out);
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (1, 2));
+
+        // Inverted, the window is everything but pixel 0.
+        ppu.write(Register::WindowMaskBackground12, 0x03);
+        ppu.render_line(0, &mut out);
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (2, 1));
+    }
+
+    // @source: anomie-regs#212e
+    // @source: anomie-regs#2125
+    // @source: anomie-regs#213e
+    // @source: fullsnes#snesppuwindow
+    // @source: adr-0033
+    // @source: adr-0034
+    #[test]
+    fn a_window_masks_the_whole_sprite_layer_but_not_its_evaluation() {
+        let mut ppu = sprite_ppu();
+        let mut out = LineOut::default();
+        // Sprite 0's first two pixels are colour 32 over mode 7's picture.
+        ppu.write(Register::MainScreen, 0x10);
+        ppu.render_line(1, &mut out);
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (32, 32));
+
+        // Window 2 covers pixel 1 alone, acts on OBJ and is designated.
+        ppu.write(Register::Window2Left, 1);
+        ppu.write(Register::Window2Right, 1);
+        ppu.write(Register::WindowMaskObjectColor, 0x08);
+        ppu.write(Register::MainScreenWindow, 0x10);
+        ppu.render_line(1, &mut out);
+        assert_eq!(pixel(&out, 0), 32);
+        assert_ne!(pixel(&out, 1), 32);
+
+        // The flags are set from the evaluation, whatever the windows hide.
+        for record in ppu.oam.chunks_mut(4).take(33) {
+            record.copy_from_slice(&[0, 0, 0, 0]);
+        }
+        ppu.write(Register::Window2Left, 0);
+        ppu.write(Register::Window2Right, 255);
+        ppu.render_line(1, &mut out);
+        assert_ne!(pixel(&out, 0), 32);
+        assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x41));
     }
 }

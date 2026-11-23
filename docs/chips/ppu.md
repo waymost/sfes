@@ -1,6 +1,6 @@
 # The PPU (`sfes-snes-ppu`)
 
-This page explains the SNES's picture processing unit and how the crate models it (QA-08). It is written issue by issue during milestone M2: #89, #90 and #91 so far. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
+This page explains the SNES's picture processing unit and how the crate models it (QA-08). It is written issue by issue during milestone M2: #89 to #95 so far. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
 
 - Anomie's register doc (`anomie-regs`), by register or heading path;
 - Anomie's timing doc (`anomie-timing`), by heading path;
@@ -29,6 +29,7 @@ The crate models both chips as one `Ppu`. It holds no reference to the machine: 
 | `mode7` | The Mode 7 write-twice latch, `$211A M7SEL`, `$211B–$211E M7A–M7D`, `$211F/$2120 M7X/M7Y` and the Mode 7 scroll `M7HOFS/M7VOFS` | `$FF`, then 0 except M7A and M7B, `$FFFF` | kept |
 | `background_mode` | `$2105 BGMODE` | `$0F` | kept |
 | `sprites` | `$2101 OBSEL` and the time-over and range-over flags of `$213E` | 0 | kept |
+| `windows` | `$2123–$212B` the window settings, edges and logic, and `$212E TMW` | 0 | kept |
 | `backgrounds` | `$2107–$210A BGnSC`, `$210B/$210C BGnnNBA`, the eight scroll registers and their latch | 0 | kept |
 | `main_screen`, `color_select` | `$212C TM`, `$2130 CGWSEL` | 0 | kept |
 | `screen_mode` | `$2133 SETINI` | `$00` | `$00` |
@@ -40,7 +41,7 @@ The crate models both chips as one `Ppu`. It holds no reference to the machine: 
 - **The memories.** Each is a heap-allocated byte slice, never built on the stack (technical design section 5). No source says what they hold at power-on, so they are filled from the machine's power-on stream, continuing after WRAM: VRAM, then CGRAM, then OAM (FND-02; ADR 0028, point 1). The machine exposes them as `RegionId::Vram`, `Cgram` and `Oam`.
 - **The registers.** fullsnes's I/O map gives each register's value at reset, and in brackets the ones reset leaves unchanged, with their power-on value (`fullsnes#snesiomap`). `$2105` is "(xFh)", kept on reset; its unknown high nibble is taken as 0. `$2133` is "00h?" (ADR 0028, point 5).
 - **The ports' values.** fullsnes gives `$2100` as "8xh", `$2115` as "(?Fh)" and `$211B/$211C` as "(FFh)(w2)"; the unknown nibbles are taken as 0. The other port values are "(?)": 0 at power-on, a project choice, and kept on reset (ADR 0029, points 2, 3, 8 and 12).
-- **What is kept so far.** Besides the ports, the PPU keeps `$2100`, `$2105`, `$2133`, `$2101` and the registers of the backgrounds and mode 7. Writes to the other registers have no effect until their issues: windows, mosaic, colour math and the sub screen (#95, #96).
+- **What is kept so far.** Besides the ports, the PPU keeps `$2100`, `$2105`, `$2133`, `$2101` and the registers of the backgrounds and mode 7. Writes to the other registers have no effect until their issues: mosaic, colour math and the sub screen (#96).
 
 ## Registers
 
@@ -230,11 +231,21 @@ In modes 2 and 4 BG3 is not drawn: its tilemap holds the scrolls of BG1 and BG2 
 - **Priority.** The front sprite is sprite 0, or with `$2103` bit 7 the sprite `(OAM byte address >> 2) & 127`. Among the loaded tiles the sprite nearer the front covers the others, and its OAM priority picks the sprite's place in the mode's order.
 - The line a sprite starts on, which tiles time over drops, evaluation in forced blank and the power-on values are the least certain points; see the ADR. anomie's "major oddity" of the rotation is not modelled.
 
+## Windows
+
+[`window.rs`](../../crates/sfes-snes-ppu/src/window.rs) holds the window registers and masks layers on the main screen (ADR 0034).
+
+- **Edges.** `$2126–$2129` give window 1's and window 2's left and right pixel, inclusive. A window whose left edge is above its right is empty (`anomie-regs#2126`, `fullsnes#snesppuwindow`).
+- **Settings.** Each layer has four bits in `$2123–$2125`: window 1's enable (bit 1) and invert (bit 0), window 2's (bits 3 and 2). BG1, BG3 and OBJ use the low half of their register, BG2, BG4 and the colour window the high half. fullsnes's value table for these bits has a slip; the bit letters of `anomie-regs#2123` are used (`fullsnes#snesppuwindow`).
+- **Area.** With neither window enabled the area is empty. With one, it is that window, inverted if its bit says. With both, the layer's two logic bits in `$212A/$212B` pick OR, AND, XOR or XNOR (`anomie-regs#212a`).
+- **Masking.** A layer whose `$212E` bit is set has no pixel where its area is true, so the layers behind it show; the backdrop is never masked. The sprite layer is masked as a whole, and sprite evaluation and its flags do not depend on windows.
+- Not read yet: `$212F` and the colour window's settings, which #96 uses.
+
 ### Not yet
 
 - Mode 6's offset-per-tile arrives with hi-res (#97).
 - Modes 5 and 6 (#97): sprites over the backdrop, each pixel doubled.
-- Windows (#95), the sub screen, colour math, mosaic, brightness and forced blank (#96): not applied. A wide line repeats each main-screen pixel.
+- The sub screen and `$212F`, the colour window's effect, colour math, mosaic, brightness and forced blank (#96): not applied. A wide line repeats each main-screen pixel.
 
 ## Frame geometry
 
@@ -264,6 +275,7 @@ Two alternatives were rejected. A fixed 512 × 478 canvas would cost four times 
 | [`background.rs`](../../crates/sfes-snes-ppu/src/background.rs) | BG1 to BG4's registers, the pixel fetch and each mode's priority order |
 | [`mode7.rs`](../../crates/sfes-snes-ppu/src/mode7.rs) | The Mode 7 registers and latch, the multiplier, and mode 7's and EXTBG's pixels |
 | [`sprite.rs`](../../crates/sfes-snes-ppu/src/sprite.rs) | `$2101`, the per-line evaluation with its limits and flags, and the sprites' pixels |
+| [`window.rs`](../../crates/sfes-snes-ppu/src/window.rs) | The window registers, a layer's area and its masking on the main screen |
 | [`counters.rs`](../../crates/sfes-snes-ppu/src/counters.rs) | The H/V counter latch, its flip-flops and the latch flag |
 | [`line.rs`](../../crates/sfes-snes-ppu/src/line.rs) | `LineOut` and `LineWidth`: one drawn line and its width |
 
@@ -278,10 +290,10 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
   - each line's width and colour;
   - each port's increments, translation and prefetch, with anomie's OAM examples;
   - which writes land in each period, the OAM reload, the multiplier and the status bits;
-  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, mode 7's matrix, scroll, centre, flips, fills and EXTBG, the sprites' sizes, record, rows, tile addresses, flips, planes, limits and flags, and a line's composition.
+  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, mode 7's matrix, scroll, centre, flips, fills and EXTBG, the sprites' sizes, record, rows, tile addresses, flips, planes, limits and flags, the windows' edges, inversion, logic and designation, and a line's composition.
 - **The machine's tests** cover reads through the bus, when lines are drawn, overscan and interlaced frames, the frame geometry, VRAM writes by period, the OAM reload at vertical blank, `$213F` through the bus and a DMA into VRAM ([`core.md`](core.md#testing)).
 
-- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2`, `bg-opt-mode4` and `bg-mode7` (`tests/carts/`) draw each mode, its offset-per-tile and mode 7's scaling, scroll and wrap, and `obj-sprites` draws overlapping and flipped sprites and sets range over; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
+- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2`, `bg-opt-mode4` and `bg-mode7` (`tests/carts/`) draw each mode, its offset-per-tile and mode 7's scaling, scroll and wrap, `obj-sprites` draws overlapping and flipped sprites and sets range over, and `windows` masks backgrounds by window logic, inversion and designation; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
 
 ## Decisions
 
@@ -293,5 +305,6 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
 | [0031](../adr/0031-offset-per-tile-in-bg-modes-2-and-4.md) | Which backgrounds take offsets, the BG3 entry's bits, which BG3 column and row each column reads, mode 4's single entry, and mode 6 left to #97 | high for the entry and mode 2; medium for the column and row; low for mode 4's row and valid bit |
 | [0032](../adr/0032-mode-7-and-extbg.md) | The Mode 7 registers and their latch, the matrix formula, the playfield's wrap and fills, the pixel and its address, EXTBG's BG2 and its priority order | high for the registers, formula and addressing; medium for the flip and the power-on values; low for EXTBG's detail |
 | [0033](../adr/0033-sprites.md) | `$2101` and the OAM record, which lines a sprite is on, the tile addresses and flips, the range and time limits and their flags, the priority rotation, and the sprites' places in each mode's order | high for the formats, limits and order; medium for the first line, which tiles time over drops and when the flags clear; low for forced blank and the rotation's oddity |
+| [0034](../adr/0034-windows.md) | The window registers, a layer's area from the two windows, inversion and logic, and masking by `$212E`, the sprite layer as a whole | high for the registers and logic; medium for masking the whole sprite layer; low for power-on values |
 
 ADR 0021, point 7 covers the counter latch, which moved into the PPU with this issue.

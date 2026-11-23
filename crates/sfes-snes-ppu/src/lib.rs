@@ -31,6 +31,7 @@ mod ppu;
 mod register;
 mod signals;
 mod sprite;
+mod window;
 
 pub use crate::{
     line::{LineOut, LineWidth},

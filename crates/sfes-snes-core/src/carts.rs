@@ -465,6 +465,45 @@ fn sprites_cart_draws_sprites_in_order_with_flips_and_sets_range_over() {
     assert_eq!(status & 0x0F, 1);
 }
 
+// @source: anomie-regs#2123
+// @source: anomie-regs#2126
+// @source: anomie-regs#212a
+// @source: anomie-regs#212e
+// @source: anomie-regs#windows
+// @source: fullsnes#snesppuwindow
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0034
+#[test]
+fn windows_cart_masks_layers_by_window_logic_inversion_and_designation() {
+    const BLUE: u16 = 0x7C00;
+    const RED: u16 = 0x001F;
+    const GREEN: u16 = 0x03E0;
+    const WHITE: u16 = 0x7FFF;
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/windows.sfc"));
+    // Window 1 is pixels 8 to 23 and window 2 is 16 to 31 (edges inclusive). BG1 is masked
+    // where exactly one is on (XOR): 8 to 15 and 24 to 31. BG2 is masked outside window 1,
+    // so it shows only at 8 to 23. Both are behind BG1 where BG1 is not masked; the
+    // backdrop shows where both are masked. BG3 has an inverted window 1 but is not in
+    // $212E, so it is not masked at 40 to 63.
+    //   0-7: BG1.   8-15: BG1 masked, BG2 shows.   16-23: BG1.
+    //   24-31: both masked, the backdrop.   32-39: BG1.   40-63: BG3.
+    let expected = runs(
+        &[
+            (RED, 8),
+            (GREEN, 8),
+            (RED, 8),
+            (BLUE, 8),
+            (RED, 8),
+            (WHITE, 24),
+        ],
+        BLUE,
+    );
+    for row in 0..7 {
+        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+}
+
 // @source: anomie-regs#2105
 // @source: anomie-regs#2107
 // @source: anomie-regs#210b
