@@ -12,13 +12,14 @@ use alloc::{boxed::Box, vec};
 use sfes_api::{Rgb555, SplitMix64};
 
 use crate::{
-    background::{Background, Backgrounds, Color, Setup, priority_order},
+    background::{Background, Backgrounds, Color, Layer, Sample, Setup, priority_order},
     counters::{CounterLatch, CounterRegister},
     line::{LineOut, LineWidth},
     memory::{CgramPort, Half, OamPort, VramPort},
     mode7::Mode7,
     register::{ReadKind, Register},
     signals::{Period, Signals},
+    sprite::Sprites,
 };
 
 /// VRAM: 64 KiB.
@@ -54,8 +55,10 @@ const BACKGROUND_MODE_MASK: u8 = 0x07;
 const BACKGROUND_3_FIRST: u8 = 0x08;
 /// `$2130` bit 0: direct colour.
 const DIRECT_COLOR: u8 = 0x01;
-/// `$212C` bits 3–0: BG4 to BG1 on the main screen; bit 4 is the sprites.
+/// `$212C` bits 3–0: BG4 to BG1 on the main screen.
 const MAIN_SCREEN_BACKGROUNDS: u8 = 0x0F;
+/// `$212C` bit 4: the sprites on the main screen.
+const MAIN_SCREEN_SPRITES: u8 = 0x10;
 /// The pixels of a normal line.
 const LINE_PIXELS: u16 = 256;
 /// `$2133` bit 3: pseudo-hires.
@@ -88,6 +91,8 @@ pub struct Ppu {
     cgram_port: CgramPort,
     /// $211B–$2120's shared latch, M7A and M7B: the multiplier.
     mode7: Mode7,
+    /// $2101 OBSEL and the flags of $213E: the sprites.
+    sprites: Sprites,
     /// $2105 BGMODE: the BG mode and character sizes.
     background_mode: u8,
     /// $2107–$2114 BG1SC–BG4VOFS: the backgrounds' tilemaps, characters and scrolls.
@@ -140,6 +145,7 @@ impl Ppu {
             vram_port: VramPort::power_on(),
             cgram_port: CgramPort::power_on(),
             mode7: Mode7::power_on(),
+            sprites: Sprites::power_on(),
             background_mode: BACKGROUND_MODE_POWER_ON,
             backgrounds: Backgrounds::power_on(),
             main_screen: 0,
@@ -182,6 +188,17 @@ impl Ppu {
     pub const fn start_vertical_blank(&mut self) {
         if !self.forced_blank() {
             self.oam_port.reload();
+        }
+    }
+
+    /// Vertical blank has ended, as line 0 starts: the sprite overflow flags clear unless
+    /// forced blank is on (ADR 0033, point 7).
+    // @source: anomie-regs#213e
+    // @source: fullsnes#snespputimersandstatus
+    // @source: adr-0033
+    pub const fn end_vertical_blank(&mut self) {
+        if !self.forced_blank() {
+            self.sprites.clear_flags();
         }
     }
 
@@ -235,13 +252,14 @@ impl Ppu {
         }
     }
 
-    /// $213E STAT77: the sprite overflow flags, 0 until #94, the master/slave bit 0, PPU1
-    /// open bus in bit 4 and the version (ADR 0029, point 9).
+    /// $213E STAT77: the sprite time-over and range-over flags, the master/slave bit 0,
+    /// PPU1 open bus in bit 4 and the version (ADR 0029, point 9; ADR 0033, point 7).
     // @source: anomie-regs#213e
     // @source: fullsnes#snespputimersandstatus
     // @source: adr-0029
+    // @source: adr-0033
     const fn ppu1_status(&self) -> u8 {
-        (self.ppu1_open_bus & STAT77_OPEN_BUS) | PPU1_VERSION
+        self.sprites.status() | (self.ppu1_open_bus & STAT77_OPEN_BUS) | PPU1_VERSION
     }
 
     /// $213F STAT78: the field, the latch flag, PPU2 open bus in bit 5, the PAL bit and the
@@ -341,12 +359,14 @@ impl Ppu {
     // @source: anomie-regs#2121
     // @source: anomie-regs#2122
     // @source: anomie-regs#2133
+    // @source: anomie-regs#2101
     // @source: anomie-regs#sprites/oam
     // @source: anomie-timing#oam-reset
     // @source: fullsnes#snesppucontrol
     // @source: adr-0028
     // @source: adr-0029
     // @source: adr-0032
+    // @source: adr-0033
     pub fn write(&mut self, register: Register, value: u8) {
         let blank = self.forced_blank() || self.signals.period == Period::VerticalBlank;
         match register {
@@ -356,6 +376,7 @@ impl Ppu {
                 }
                 self.display_control = value;
             }
+            Register::ObjectSelect => self.sprites.write_select(value),
             Register::OamAddressLow => self.oam_port.write_address_low(value),
             Register::OamAddressHigh => self.oam_port.write_address_high(value),
             Register::OamData => self.oam_port.write(&mut self.oam, value, blank),
@@ -446,7 +467,9 @@ impl Ppu {
     ///   of the backgrounds `$212C` puts on the main screen, else the backdrop, CGRAM
     ///   entry 0;
     /// - in BG mode 7 the pixel is mode 7's (ADR 0032), BG2 appearing with EXTBG;
-    /// - in modes 5 and 6 every pixel is the backdrop, until #97;
+    /// - the sprites come in at their places in the order (ADR 0033), their pixels drawn
+    ///   only when `$212C` bit 4 is set, and their range and time flags set whatever it is;
+    /// - in modes 5 and 6 every pixel is a sprite's or the backdrop, until #97;
     /// - a wide line writes each main-screen pixel twice, until the sub screen arrives.
     // @source: anomie-regs#2105
     // @source: anomie-regs#212c
@@ -454,11 +477,13 @@ impl Ppu {
     // @source: anomie-regs#backgrounds/bg-modes
     // @source: anomie-regs#backgrounds/mode-7
     // @source: anomie-regs#rendering-the-screen/rendering-the-screen
+    // @source: anomie-regs#sprites/sprite-priority
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: fullsnes#snesppuresolution
     // @source: adr-0028
     // @source: adr-0030
     // @source: adr-0032
+    // @source: adr-0033
     pub fn render_line(&mut self, line: u16, out: &mut LineOut) {
         let mode = self.background_mode & BACKGROUND_MODE_MASK;
         // BG modes 5 and 6 are true hi-res.
@@ -476,6 +501,12 @@ impl Ppu {
         let extbg = self.screen_mode & EXTBG != 0;
         let order = priority_order(mode, self.background_mode & BACKGROUND_3_FIRST != 0, extbg);
         let enabled = self.main_screen & MAIN_SCREEN_BACKGROUNDS;
+        // Evaluation always runs: its flags are readable state (EMU-06); the pixels only
+        // when the sprites are on the main screen.
+        let first = self.oam_port.first_sprite();
+        let evaluated = self.sprites.evaluate(&self.oam, first, line);
+        let sprites =
+            (self.main_screen & MAIN_SCREEN_SPRITES != 0).then(|| evaluated.pixels(&self.vram));
         let repeat = width.pixels() / usize::from(LINE_PIXELS);
         for x in 0..LINE_PIXELS {
             // Mode 7's one pixel, which BG1 and EXTBG's BG2 both show.
@@ -496,13 +527,23 @@ impl Ppu {
                 self.backgrounds
                     .sample(&self.vram, setup, background, x, line)
             });
-            let shown = order.iter().find_map(|layer| {
-                samples
-                    .get(layer.background as usize)
-                    .copied()
-                    .flatten()
-                    .filter(|sample| sample.high == layer.high)
-            });
+            let sprite = sprites
+                .as_ref()
+                .and_then(|pixels| pixels.get(usize::from(x)).copied().flatten());
+            let shown =
+                order.iter().find_map(|layer| match *layer {
+                    Layer::Background { background, high } => samples
+                        .get(background as usize)
+                        .copied()
+                        .flatten()
+                        .filter(|sample| sample.high == high),
+                    Layer::Sprites(priority) => sprite
+                        .filter(|pixel| pixel.priority == priority)
+                        .map(|pixel| Sample {
+                            color: Color::Palette(pixel.index),
+                            high: false,
+                        }),
+                });
             let Some(sample) = shown else { continue };
             let color = match sample.color {
                 Color::Palette(index) => self.color(index),
@@ -1044,5 +1085,126 @@ mod tests {
         assert_eq!(row(&mut ppu, &mut out), [2, 4, 1]);
         ppu.write(Register::MainScreen, 0x01);
         assert_eq!(row(&mut ppu, &mut out), [2, 16, 1]);
+    }
+
+    /// Hides every sprite at Y 128, where none of up to 64 rows reaches lines 1 to 8, but
+    /// sprite 0 (Y 0, on line 1), and puts its tile 0 row 0 at word `$4000` with its first
+    /// two pixels set (colour 1), with CGRAM entry 129 the colour 32.
+    // @source: anomie-regs#sprites
+    // @source: adr-0033
+    fn sprite_ppu() -> Ppu {
+        let mut ppu = drawing_ppu();
+        for record in ppu.oam.chunks_mut(4).take(128) {
+            record.copy_from_slice(&[0, 128, 0, 0]);
+        }
+        // Sprite 0 is at X 0, Y 0: on line 1.
+        ppu.oam[1] = 0;
+        ppu.oam[0x200..].fill(0);
+        ppu.vram_mut()[0x8000] = 0xC0;
+        ppu.cgram_mut()[258..260].copy_from_slice(&32u16.to_le_bytes());
+        // Base 2: the first table at word `$4000`, past mode 7's tilemap and characters.
+        ppu.write(Register::ObjectSelect, 0x02);
+        ppu
+    }
+
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#sprites/sprite-priority
+    // @source: anomie-regs#backgrounds/mode-7
+    // @source: adr-0033
+    #[test]
+    fn a_sprite_is_in_front_of_a_background_pixel_only_by_its_priority() {
+        let mut ppu = sprite_ppu();
+        let mut out = LineOut::default();
+        // Mode 7 with the identity matrix: line 1 is row 1 of tile 1, whose first pixels
+        // are $01, $82 and 0.
+        ppu.write(Register::BackgroundMode, 0x07);
+        for register in [Register::Mode7MatrixA, Register::Mode7MatrixD] {
+            ppu.write(register, 0x00);
+            ppu.write(register, 0x01);
+        }
+        for register in [Register::Mode7MatrixB, Register::Mode7MatrixC] {
+            ppu.write(register, 0x00);
+            ppu.write(register, 0x00);
+        }
+        ppu.vram_mut()[0] = 1;
+        ppu.vram_mut()[145] = 0x01;
+        ppu.vram_mut()[147] = 0x82;
+        ppu.cgram_mut()[0x104..0x106].copy_from_slice(&16u16.to_le_bytes());
+        let row = |ppu: &mut Ppu, out: &mut LineOut| {
+            ppu.render_line(1, out);
+            [0, 1, 2].map(|x| pixel(out, x))
+        };
+
+        // The sprite is at X 1: over pixels 1 and 2, with priority 0 behind BG1's pixel 1.
+        ppu.oam[0] = 1;
+        ppu.write(Register::MainScreen, 0x11);
+        assert_eq!(row(&mut ppu, &mut out), [2, 16, 32]);
+        // Priority 1 puts it in front of BG1.
+        ppu.oam[3] = 0x10;
+        assert_eq!(row(&mut ppu, &mut out), [2, 32, 32]);
+        // Not on the main screen, it is not drawn.
+        ppu.write(Register::MainScreen, 0x01);
+        assert_eq!(row(&mut ppu, &mut out), [2, 16, 1]);
+    }
+
+    // @source: anomie-regs#2103
+    // @source: anomie-regs#sprites/sprite-priority
+    // @source: adr-0033
+    #[test]
+    fn the_priority_bit_gives_the_sprite_at_the_oam_address_the_front() {
+        let mut ppu = sprite_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::MainScreen, 0x10);
+        // Sprites 0 and 1 overlap; sprite 1 uses tile 1, whose word `$4010` has colour 2.
+        ppu.oam[4..8].copy_from_slice(&[0, 0, 1, 0]);
+        ppu.vram_mut()[0x8020 + 1] = 0xC0;
+        ppu.cgram_mut()[260..262].copy_from_slice(&64u16.to_le_bytes());
+        ppu.render_line(1, &mut out);
+        assert_eq!(pixel(&out, 0), 32);
+        // $2102/$2103 = $102 names word 2, byte 4: sprite 1.
+        ppu.write(Register::OamAddressLow, 0x02);
+        ppu.write(Register::OamAddressHigh, 0x80);
+        ppu.render_line(1, &mut out);
+        assert_eq!(pixel(&out, 0), 64);
+        // Without the bit sprite 0 is first again.
+        ppu.write(Register::OamAddressHigh, 0x00);
+        ppu.render_line(1, &mut out);
+        assert_eq!(pixel(&out, 0), 32);
+    }
+
+    // @source: anomie-regs#213e
+    // @source: fullsnes#snespputimersandstatus
+    // @source: adr-0033
+    #[test]
+    fn the_overflow_flags_are_set_whether_or_not_sprites_are_shown_and_clear_at_line_0() {
+        let mut ppu = sprite_ppu();
+        let mut out = LineOut::default();
+        // 33 sprites on line 1; the sprites are not on the main screen.
+        for record in ppu.oam.chunks_mut(4).take(33) {
+            record.copy_from_slice(&[0, 0, 0, 0]);
+        }
+        ppu.write(Register::MainScreen, 0x00);
+        assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x01));
+        ppu.render_line(1, &mut out);
+        assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x41));
+        // Forced blank is on at power-on: the end of vertical blank leaves the flags.
+        ppu.end_vertical_blank();
+        assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x41));
+        ppu.write(Register::DisplayControl, 0x0F);
+        ppu.end_vertical_blank();
+        assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x01));
+        // 9 sprites of 32 pixels have 36 tiles: time over, and the flags stay set past
+        // the next lines.
+        for record in ppu.oam.chunks_mut(4).take(33) {
+            record.copy_from_slice(&[0, 128, 0, 0]);
+        }
+        for (index, record) in ppu.oam.chunks_mut(4).take(9).enumerate() {
+            record.copy_from_slice(&[u8::try_from(index * 8).unwrap_or_default(), 0, 0, 0]);
+        }
+        ppu.write(Register::ObjectSelect, 0xA2);
+        ppu.render_line(1, &mut out);
+        assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x81));
+        ppu.render_line(2, &mut out);
+        assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x81));
     }
 }

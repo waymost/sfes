@@ -417,6 +417,19 @@ impl OamPort {
         self.address = (self.address + 1) & OAM_ADDRESS_MASK;
     }
 
+    /// The sprite in front: sprite 0, or with `$2103` bit 7 set the one the internal word
+    /// address names, `(word >> 1) & 127` (ADR 0033, point 6).
+    // @source: anomie-regs#2103
+    // @source: anomie-regs#sprites/sprite-priority
+    // @source: adr-0033
+    pub(crate) const fn first_sprite(self) -> u8 {
+        if self.priority {
+            ((self.address >> 2) & 0x7F) as u8
+        } else {
+            0
+        }
+    }
+
     /// The OAM offset of byte address `address`: the high table's 32 bytes repeat from
     /// `$200` up.
     // @source: anomie-regs#sprites/oam

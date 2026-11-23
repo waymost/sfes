@@ -746,7 +746,8 @@ impl Bus {
     ///
     /// - a refresh pauses the CPU (ADR 0019, point 6);
     /// - a line start is reported to `observer`, after the frame end it may bring
-    ///   (ADR 0020, point 8); line 0 clears the NMI flag, and a frame end presents the
+    ///   (ADR 0020, point 8); line 0 clears the NMI flag and the PPU's sprite overflow flags
+    ///   (ADR 0033, point 7), and a frame end presents the
     ///   frame (ADR 0028, point 8) and closes its polled flag (ADR 0024, point 8);
     /// - the NMI flag, a trigger point and a `$4201` latch change the interrupt state and
     ///   the counters (ADR 0021);
@@ -775,6 +776,7 @@ impl Bus {
                 }) => {
                     if line == 0 {
                         self.interrupts.end_vertical_blank();
+                        self.ppu.end_vertical_blank();
                     }
                     if frame_ended {
                         self.end_frame_video(line);

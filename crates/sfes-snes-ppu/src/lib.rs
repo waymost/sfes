@@ -30,6 +30,7 @@ mod mode7;
 mod ppu;
 mod register;
 mod signals;
+mod sprite;
 
 pub use crate::{
     line::{LineOut, LineWidth},

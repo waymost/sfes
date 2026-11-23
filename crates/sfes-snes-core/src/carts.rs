@@ -410,6 +410,61 @@ fn bg_mode_7_cart_scales_scrolls_and_wraps_the_playfield() {
     assert_eq!(picture_row(&snes, 3), runs(&[], WHITE));
 }
 
+// @source: anomie-regs#2101
+// @source: anomie-regs#212c
+// @source: anomie-regs#213e
+// @source: anomie-regs#sprites
+// @source: anomie-regs#sprites/drawing-the-sprites
+// @source: anomie-regs#sprites/sprite-priority
+// @source: fullsnes#snesppuspritesobjs
+// @source: fullsnes#snespputimersandstatus
+// @source: adr-0013
+// @source: adr-0033
+#[test]
+fn sprites_cart_draws_sprites_in_order_with_flips_and_sets_range_over() {
+    const WHITE: u16 = 0x7FFF;
+    const RED: u16 = 0x001F;
+    const BLUE: u16 = 0x7C00;
+    const GREEN: u16 = 0x03E0;
+    const MAGENTA: u16 = 0x7C1F;
+    const YELLOW: u16 = 0x03FF;
+    const CYAN: u16 = 0x7FE0;
+    let snes = drawn(include_bytes!(
+        "../../../tests/assets/carts/obj-sprites.sfc"
+    ));
+    // Sprites 0 (X 8, red) and 1 (X 12, blue) are 8 pixels wide and rows high, and sprite 0
+    // is in front, so blue shows only at 16 to 19. Sprite 2 is 16 by 16 at X 32 flipped both
+    // ways: its screen's top row of tiles is the character table's second row, right to left,
+    // so tile $31 (cyan) comes first and then $30 (yellow); the second row is $21 (magenta)
+    // then $20 (green).
+    let top = runs(
+        &[
+            (WHITE, 8),
+            (RED, 8),
+            (BLUE, 4),
+            (WHITE, 12),
+            (CYAN, 8),
+            (YELLOW, 8),
+        ],
+        WHITE,
+    );
+    let bottom = runs(&[(WHITE, 32), (MAGENTA, 8), (GREEN, 8)], WHITE);
+    // Sprites at Y 0 are on lines 1 to 8 (rows 0 to 7) for the small ones, to line 16 (row
+    // 15) for the large one.
+    for row in 0..8 {
+        assert_eq!(picture_row(&snes, row), top, "row {row}");
+    }
+    for row in 8..16 {
+        assert_eq!(picture_row(&snes, row), bottom, "row {row}");
+    }
+    assert_eq!(picture_row(&snes, 16), runs(&[], WHITE));
+    // 33 sprites on one line set range over (bit 6) but not time over (33 tiles); the
+    // version is 1.
+    let status = snes.peek_bus(0x00_213E).value;
+    assert_eq!(status & 0xC0, 0x40);
+    assert_eq!(status & 0x0F, 1);
+}
+
 // @source: anomie-regs#2105
 // @source: anomie-regs#2107
 // @source: anomie-regs#210b

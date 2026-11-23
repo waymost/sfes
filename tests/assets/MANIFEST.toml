@@ -138,6 +138,12 @@ sha256 = "f3a8ba20a82ba0a0b74f11504110ac9cfb31b94bd20e4c188a89dc4d4f9fae90"
 notes = "Own test cartridge: BG mode 7: a 2.0 matrix, a scroll of -8 and the wrap at the playfield's edge, drawn from words holding a tilemap entry and a pixel each. Built from tests/carts/bg-mode7/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/obj-sprites.sfc"
+license = "own"
+sha256 = "177bd8b387f8f032b274677ec377d3dc9d6f30f9019f5e067750fd275ae0a35c"
+notes = "Own test cartridge: Own test cartridge: sprites: two overlapping 8x8 sprites in sprite order, a 16x16 sprite flipped both ways with solid tiles, and 33 sprites on one line setting range over. Built from tests/carts/obj-sprites/ by `cargo xtask carts build` (ADR 0013). Built from tests/carts/obj-sprites/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
