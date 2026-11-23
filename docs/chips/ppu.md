@@ -26,7 +26,7 @@ The crate models both chips as one `Ppu`. It holds no reference to the machine: 
 | `oam_port` | `$2102/$2103` reload value and priority bit, the OAM address and latch | 0 | kept |
 | `vram_port` | `$2115 VMAIN`, the VRAM address and prefetch | `$0F`, 0, 0 | kept |
 | `cgram_port` | The CGRAM address, flip-flop and latch | 0 | kept |
-| `mode7` | The Mode 7 write-twice latch, `$211B M7A` and `$211C M7B` | `$FF`, `$FFFF`, `$FFFF` | kept |
+| `mode7` | The Mode 7 write-twice latch, `$211A M7SEL`, `$211B–$211E M7A–M7D`, `$211F/$2120 M7X/M7Y` and the Mode 7 scroll `M7HOFS/M7VOFS` | `$FF`, then 0 except M7A and M7B, `$FFFF` | kept |
 | `background_mode` | `$2105 BGMODE` | `$0F` | kept |
 | `backgrounds` | `$2107–$210A BGnSC`, `$210B/$210C BGnnNBA`, the eight scroll registers and their latch | 0 | kept |
 | `main_screen`, `color_select` | `$212C TM`, `$2130 CGWSEL` | 0 | kept |
@@ -131,7 +131,7 @@ fullsnes limits the second case to the first line of vertical blank (`fullsnes#s
 
 [`mode7.rs`](../../crates/sfes-snes-ppu/src/mode7.rs) (ADR 0029, point 8):
 
-- **The latch.** `$210D`, `$210E` and `$211B–$2120` are write-twice registers sharing one latch: a write makes the register `(value << 8) | latch`, then sets the latch to the value (`anomie-regs#211b`). Until #91 and #93 only M7A and M7B keep their values.
+- **The latch.** `$210D`, `$210E` and `$211B–$2120` are write-twice registers sharing one latch: a write makes the register `(value << 8) | latch`, then sets the latch to the value (`anomie-regs#211b`). The other registers sharing it are the Mode 7 matrix, centre and scroll ([Mode 7](#mode-7-and-extbg)).
 - **The product.** `$2134–$2136` read the 24-bit two's-complement product of M7A, signed 16-bit, and the last byte written to `$211C`, signed 8-bit (`anomie-regs#2134`, `fullsnes#snesmathsmultiplydivide`). It is ready at once.
 - **Power-on.** M7A and M7B are `$FFFF`, so the product is `$000001`, as fullsnes's I/O map lists.
 - fullsnes reports garbage in Mode 7 outside blanking; the PPU always returns the product.
@@ -157,7 +157,7 @@ Sources: `anomie-regs#213e`, `#213f`, `fullsnes#snespputimersandstatus`; ADR 002
 
 - **Width.** A line's `LineWidth` is `Wide`, 512 pixels, in BG modes 5 and 6 (`$2105` bits 2–0) or with pseudo-hires (`$2133` bit 3), otherwise `Normal`, 256 (`anomie-regs#2105`, `#2133`, `fullsnes#snesppuresolution`).
 - **Interlace.** The line records whether `$2133` bit 0 was set.
-- **Pixels.** A pixel is a CGRAM colour, an `sfes_api::Rgb555`: red in bits 4–0, green in 9–5, blue in 14–10, bit 15 clear (`fullsnes#snesppucolorpalettememorycgramanddirectcolors`). CGRAM does not store bit 15, so the PPU drops it, and `Rgb555` refuses a value with it set. Where no layer shows a pixel it is the backdrop, CGRAM entry 0 (`fullsnes#snesppuresolution`, "Hires Notes"). [The backgrounds](#the-backgrounds) draw the rest in BG modes 0 to 4; in the other modes every pixel is the backdrop until #93 and #97.
+- **Pixels.** A pixel is a CGRAM colour, an `sfes_api::Rgb555`: red in bits 4–0, green in 9–5, blue in 14–10, bit 15 clear (`fullsnes#snesppucolorpalettememorycgramanddirectcolors`). CGRAM does not store bit 15, so the PPU drops it, and `Rgb555` refuses a value with it set. Where no layer shows a pixel it is the backdrop, CGRAM entry 0 (`fullsnes#snesppuresolution`, "Hires Notes"). [The backgrounds](#the-backgrounds) draw the rest in BG modes 0 to 4 and 7; in modes 5 and 6 every pixel is the backdrop until #97.
 
 The machine decides when a line is drawn and how lines make a frame ([`core.md`](core.md#drawing-and-presenting-frames)).
 
@@ -203,10 +203,20 @@ In modes 2 and 4 BG3 is not drawn: its tilemap holds the scrolls of BG1 and BG2 
 - **Mode 2** reads two entries per column: the horizontal one in BG3's row `BG3VOFS`, the vertical one in the row 8 pixels below. **Mode 4** reads one, in the first row; with bit 15 set it is the vertical offset, else the horizontal (`anomie-regs#backgrounds/mode-4`). The line number never selects BG3's row.
 - The columns' alignment with BG1's fine scroll (medium) and mode 4's row and valid bit (low) are the least certain points; see the ADR.
 
+### Mode 7 and EXTBG
+
+[`mode7.rs`](../../crates/sfes-snes-ppu/src/mode7.rs) draws mode 7's one 256-colour background (ADR 0032). The tilemap and character registers are not used.
+
+- **Registers.** `$211A M7SEL`: bit 7 makes the playfield larger than the tilemap, bit 6 then fills outside with character 0 instead of transparent, bits 1 and 0 flip the screen. `$211B–$211E M7A–M7D` are the signed 8.8 matrix; `$211F/$2120 M7X/M7Y` the centre and `$210D/$210E M7HOFS/M7VOFS` the scroll, each 13 bits signed (`anomie-regs#211a`, `#211b`, `#211f`). All are write-twice on the one latch.
+- **The coordinate.** For line `L` and column `x`, with `ox = CLIP(HOFS − CX)` and `oy = CLIP(VOFS − CY)` (10 bits and a sign), `X = (A·ox & ~63) + (B·oy & ~63) + (B·L & ~63) + A·x + (CX << 8)` and `Y` likewise from C and D, with 8 fraction bits. Both documents give this (`anomie-regs#211f`, `fullsnes#snesppurotationscaling`). A flip XORs `x` or `L` with `$FF`.
+- **The pixel.** The playfield position is `X >> 8`, `Y >> 8`. The tilemap is 128 × 128 one-byte entries in the low bytes of VRAM words; a character is 64 words, one pixel in each high byte. Outside 0–1023, the playfield wraps, is transparent, or shows character 0 at the low three bits of each coordinate. Pixel 0 is transparent. BG1 may be direct colour, with palette bits 0.
+- **EXTBG.** With `$2133` bit 6, BG2 shows the same pixel: bit 7 is its priority and bits 6–0 the CGRAM index. Front to back: BG2 high, BG1, BG2 low.
+- The flip's use of the line number, the unlisted registers' power-on value (0) and EXTBG outside mode 7 (nothing) are the least certain points; see the ADR.
+
 ### Not yet
 
 - Mode 6's offset-per-tile arrives with hi-res (#97).
-- Modes 5, 6 and 7 (#97, #93): the backdrop.
+- Modes 5 and 6 (#97): the backdrop.
 - Sprites (#94), windows (#95), the sub screen, colour math, mosaic, brightness and forced blank (#96): not applied. A wide line repeats each main-screen pixel.
 
 ## Frame geometry
@@ -235,7 +245,7 @@ Two alternatives were rejected. A fixed 512 × 478 canvas would cost four times 
 | [`signals.rs`](../../crates/sfes-snes-ppu/src/signals.rs) | `Signals` and `Period`: what the bus passes in before each access |
 | [`memory.rs`](../../crates/sfes-snes-ppu/src/memory.rs) | The VRAM, CGRAM and OAM ports |
 | [`background.rs`](../../crates/sfes-snes-ppu/src/background.rs) | BG1 to BG4's registers, the pixel fetch and each mode's priority order |
-| [`mode7.rs`](../../crates/sfes-snes-ppu/src/mode7.rs) | The Mode 7 latch, M7A, M7B and the multiplier |
+| [`mode7.rs`](../../crates/sfes-snes-ppu/src/mode7.rs) | The Mode 7 registers and latch, the multiplier, and mode 7's and EXTBG's pixels |
 | [`counters.rs`](../../crates/sfes-snes-ppu/src/counters.rs) | The H/V counter latch, its flip-flops and the latch flag |
 | [`line.rs`](../../crates/sfes-snes-ppu/src/line.rs) | `LineOut` and `LineWidth`: one drawn line and its width |
 
@@ -250,10 +260,10 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
   - each line's width and colour;
   - each port's increments, translation and prefetch, with anomie's OAM examples;
   - which writes land in each period, the OAM reload, the multiplier and the status bits;
-  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, and a line's composition.
+  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, mode 7's matrix, scroll, centre, flips, fills and EXTBG, and a line's composition.
 - **The machine's tests** cover reads through the bus, when lines are drawn, overscan and interlaced frames, the frame geometry, VRAM writes by period, the OAM reload at vertical blank, `$213F` through the bus and a DMA into VRAM ([`core.md`](core.md#testing)).
 
-- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2` and `bg-opt-mode4` (`tests/carts/`) draw each mode and its offset-per-tile; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
+- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2`, `bg-opt-mode4` and `bg-mode7` (`tests/carts/`) draw each mode, its offset-per-tile and mode 7's scaling, scroll and wrap; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
 
 ## Decisions
 
@@ -263,5 +273,6 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
 | [0029](../adr/0029-ppu-memory-ports-multiplier-and-status-registers.md) | The signals, `$2100`, the VRAM, CGRAM and OAM ports, the OAM reload, which writes land in each period, the multiplier, `$213E` and `$213F`, and the ports' power-on values | high for the ports, the multiplier and the status bits; medium for the reload and `$2100`'s reset value; low for access by period, the PPU2 version and the latch flag rule |
 | [0030](../adr/0030-backgrounds-in-bg-modes-0-to-4.md) | The background registers, the scroll write rule, where a tile and a pixel are, the palette and direct colour of each mode and depth, each mode's priority order, which row a line shows, and what is left to the other layer issues | high for the formats, palettes and orders; medium for the scroll write and the row |
 | [0031](../adr/0031-offset-per-tile-in-bg-modes-2-and-4.md) | Which backgrounds take offsets, the BG3 entry's bits, which BG3 column and row each column reads, mode 4's single entry, and mode 6 left to #97 | high for the entry and mode 2; medium for the column and row; low for mode 4's row and valid bit |
+| [0032](../adr/0032-mode-7-and-extbg.md) | The Mode 7 registers and their latch, the matrix formula, the playfield's wrap and fills, the pixel and its address, EXTBG's BG2 and its priority order | high for the registers, formula and addressing; medium for the flip and the power-on values; low for EXTBG's detail |
 
 ADR 0021, point 7 covers the counter latch, which moved into the PPU with this issue.

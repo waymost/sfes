@@ -375,6 +375,42 @@ fn runs(list: &[(u16, usize)], fill: u16) -> Vec<u16> {
 }
 
 // @source: anomie-regs#2105
+// @source: anomie-regs#210d
+// @source: anomie-regs#211b
+// @source: anomie-regs#211e
+// @source: anomie-regs#211f
+// @source: anomie-regs#212c
+// @source: anomie-regs#backgrounds/mode-7
+// @source: fullsnes#snesppurotationscaling
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0032
+#[test]
+fn bg_mode_7_cart_scales_scrolls_and_wraps_the_playfield() {
+    const WHITE: u16 = 0x7FFF;
+    const RED: u16 = 0x001F;
+    const BLUE: u16 = 0x7C00;
+    const GREEN: u16 = 0x03E0;
+    const MAGENTA: u16 = 0x7C1F;
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode7.sfc"));
+    // With A = 2.0 and a scroll of -8, screen column x is playfield column 2 * (x - 8) (the
+    // centre is 0). Columns 0 to 3 are playfield -16 to -10, which wrap to tilemap column
+    // 126 (character 0, transparent); 4 to 7 are -8 to -2, tilemap column 127 (character 4);
+    // then 8 to 11, 12 to 15 and 16 to 19 are the first three columns, characters 1 to 3;
+    // column 20 is playfield 24, tilemap column 3 (character 0 again).
+    let expected = runs(
+        &[(WHITE, 4), (MAGENTA, 4), (RED, 4), (BLUE, 4), (GREEN, 4)],
+        WHITE,
+    );
+    // D = 2.0 too, so lines 1 to 3 are playfield rows 2, 4 and 6, still in the first row of
+    // tiles, which are solid colours; line 4 is row 8, in the next tile row (character 0).
+    for row in 0..3 {
+        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+    assert_eq!(picture_row(&snes, 3), runs(&[], WHITE));
+}
+
+// @source: anomie-regs#2105
 // @source: anomie-regs#2107
 // @source: anomie-regs#210b
 // @source: anomie-regs#212c

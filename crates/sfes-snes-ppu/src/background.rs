@@ -137,6 +137,11 @@ const TWO_BACKGROUNDS: [Layer; 4] = [
     layer(Two, false),
 ];
 
+/// Mode 7: BG1 alone.
+const MODE_7: [Layer; 1] = [layer(One, false)];
+/// Mode 7 with EXTBG: BG2's high pixels, BG1, then BG2's low pixels.
+const MODE_7_EXTBG: [Layer; 3] = [layer(Two, true), layer(One, false), layer(Two, false)];
+
 /// The registers of BG1 to BG4, and the write-twice latch their scrolls share.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Backgrounds {
@@ -188,20 +193,24 @@ impl Background {
 
 /// The layers of `mode` from front to back; `bg3_first` is `$2105` bit 3, which moves
 /// BG3's high tiles in front in mode 1.
-/// Sprites will take their places between them (#94). Modes 5 to 7 draw none yet.
+/// Sprites will take their places between them (#94). Modes 5 and 6 draw none yet; `extbg` is `$2133` bit 6, which adds mode 7's BG2.
 // @source: anomie-regs#2105
 // @source: anomie-regs#backgrounds/mode-0
 // @source: anomie-regs#backgrounds/mode-1
 // @source: anomie-regs#backgrounds/mode-2
 // @source: anomie-regs#backgrounds/mode-3
 // @source: anomie-regs#backgrounds/mode-4
+// @source: anomie-regs#backgrounds/mode-7
 // @source: adr-0030
-pub(crate) const fn priority_order(mode: u8, bg3_first: bool) -> &'static [Layer] {
+// @source: adr-0032
+pub(crate) const fn priority_order(mode: u8, bg3_first: bool, extbg: bool) -> &'static [Layer] {
     match (mode, bg3_first) {
         (0, _) => &MODE_0,
         (1, true) => &MODE_1_BG3_FIRST,
         (1, false) => &MODE_1,
         (2..=4, _) => &TWO_BACKGROUNDS,
+        (7, _) if extbg => &MODE_7_EXTBG,
+        (7, _) => &MODE_7,
         _ => &[],
     }
 }
@@ -475,7 +484,7 @@ const fn index_offset(background: Background) -> u8 {
 /// `BBb00:RRRr0:GGGg0`.
 // @source: anomie-regs#backgrounds/direct-color-mode
 // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
-fn direct_color(value: u8, palette: u8) -> u16 {
+pub(crate) fn direct_color(value: u8, palette: u8) -> u16 {
     let red = u16::from(value & 0x07) << 2 | u16::from(palette & 1) << 1;
     let green = u16::from(value >> 3 & 0x07) << 2 | u16::from(palette >> 1 & 1) << 1;
     let blue = u16::from(value >> 6) << 3 | u16::from(palette >> 2 & 1) << 2;
@@ -493,7 +502,7 @@ fn vram_word(vram: &[u8], address: u16) -> u16 {
 
 /// VRAM byte `address`, wrapped to 64 KiB.
 // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
-fn vram_byte(vram: &[u8], address: u32) -> u8 {
+pub(crate) fn vram_byte(vram: &[u8], address: u32) -> u8 {
     let index = usize::try_from(address & VRAM_BYTE_MASK).unwrap_or_default();
     vram.get(index).copied().unwrap_or_default()
 }
@@ -850,7 +859,7 @@ mod tests {
     #[test]
     fn the_priority_order_follows_the_mode_and_mode_1_s_bg3_bit() {
         let names = |mode, bg3_first| {
-            priority_order(mode, bg3_first)
+            priority_order(mode, bg3_first, false)
                 .iter()
                 .map(|layer| (layer.background as u8 + 1, layer.high))
                 .collect::<Vec<_>>()
@@ -899,6 +908,6 @@ mod tests {
                 [(1, true), (2, true), (1, false), (2, false)]
             );
         }
-        assert_eq!(priority_order(5, false), &[] as &[Layer]);
+        assert_eq!(priority_order(5, false, false), &[] as &[Layer]);
     }
 }
