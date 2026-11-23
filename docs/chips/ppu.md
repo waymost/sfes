@@ -194,9 +194,18 @@ The first of these, front to back, that `$212C` turns on and that is not transpa
 | 1 | BG1 high, BG2 high, BG1 low, BG2 low, BG3 high, BG3 low; with `$2105` bit 3, BG3 high first |
 | 2, 3, 4 | BG1 high, BG2 high, BG1 low, BG2 low |
 
+### Offset-per-tile
+
+In modes 2 and 4 BG3 is not drawn: its tilemap holds the scrolls of BG1 and BG2 (ADR 0031).
+
+- **Which column.** BG*n*'s visible 8-pixel columns are counted from 0 as `(x + (HOFS & 7)) / 8`. Column 0 is as normal; column *T* reads BG3's entry at pixel `(BG3HOFS & ~7) + 8 × (T − 1)` (`anomie-regs#backgrounds/mode-2`).
+- **The entry.** Bits 9–0 are the offset; bit 13 applies it to BG1 and bit 14 to BG2 (`fullsnes#snesppuvideomemoryvram`). A horizontal offset replaces `HOFS` with `(HOFS & 7) | (offset & ~7)`; a vertical one replaces `VOFS` whole.
+- **Mode 2** reads two entries per column: the horizontal one in BG3's row `BG3VOFS`, the vertical one in the row 8 pixels below. **Mode 4** reads one, in the first row; with bit 15 set it is the vertical offset, else the horizontal (`anomie-regs#backgrounds/mode-4`). The line number never selects BG3's row.
+- The columns' alignment with BG1's fine scroll (medium) and mode 4's row and valid bit (low) are the least certain points; see the ADR.
+
 ### Not yet
 
-- Offset-per-tile (#92): modes 2 and 4 use each background's own scroll.
+- Mode 6's offset-per-tile arrives with hi-res (#97).
 - Modes 5, 6 and 7 (#97, #93): the backdrop.
 - Sprites (#94), windows (#95), the sub screen, colour math, mosaic, brightness and forced blank (#96): not applied. A wide line repeats each main-screen pixel.
 
@@ -241,10 +250,10 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
   - each line's width and colour;
   - each port's increments, translation and prefetch, with anomie's OAM examples;
   - which writes land in each period, the OAM reload, the multiplier and the status bits;
-  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, and a line's composition.
+  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, and a line's composition.
 - **The machine's tests** cover reads through the bus, when lines are drawn, overscan and interlaced frames, the frame geometry, VRAM writes by period, the OAM reload at vertical blank, `$213F` through the bus and a DMA into VRAM ([`core.md`](core.md#testing)).
 
-- **Test cartridges** `bg-mode0` to `bg-mode4` (`tests/carts/`) draw each mode; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
+- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2` and `bg-opt-mode4` (`tests/carts/`) draw each mode and its offset-per-tile; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
 
 ## Decisions
 
@@ -253,5 +262,6 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
 | [0028](../adr/0028-ppu-state-registers-and-frame-geometry.md) | The memories and their power-on fill, the registers and their reads, PPU1 and PPU2 open bus, which lines are drawn and when, a line's width and pixels, the frame geometry, and where the outputs live | high for the reads and open bus; medium for which lines are output and their width; the power-on values and the geometry are project choices |
 | [0029](../adr/0029-ppu-memory-ports-multiplier-and-status-registers.md) | The signals, `$2100`, the VRAM, CGRAM and OAM ports, the OAM reload, which writes land in each period, the multiplier, `$213E` and `$213F`, and the ports' power-on values | high for the ports, the multiplier and the status bits; medium for the reload and `$2100`'s reset value; low for access by period, the PPU2 version and the latch flag rule |
 | [0030](../adr/0030-backgrounds-in-bg-modes-0-to-4.md) | The background registers, the scroll write rule, where a tile and a pixel are, the palette and direct colour of each mode and depth, each mode's priority order, which row a line shows, and what is left to the other layer issues | high for the formats, palettes and orders; medium for the scroll write and the row |
+| [0031](../adr/0031-offset-per-tile-in-bg-modes-2-and-4.md) | Which backgrounds take offsets, the BG3 entry's bits, which BG3 column and row each column reads, mode 4's single entry, and mode 6 left to #97 | high for the entry and mode 2; medium for the column and row; low for mode 4's row and valid bit |
 
 ADR 0021, point 7 covers the counter latch, which moved into the PPU with this issue.

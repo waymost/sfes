@@ -5,7 +5,9 @@
 // @source: anomie-regs#backgrounds
 // @source: fullsnes#snesppubgcontrol
 // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: fullsnes#snesppuvideomemoryvram
 // @source: adr-0030
+// @source: adr-0031
 //! BG1 to BG4: their registers, and fetching one pixel of one background in BG modes 0 to
 //! 4 (ADR 0030). The PPU composes the pixels into a line.
 
@@ -35,6 +37,18 @@ const ENTRY_PRIORITY: u16 = 0x2000;
 const ENTRY_FLIP_HORIZONTAL: u16 = 0x4000;
 /// A tilemap entry's bit 15: flip vertically.
 const ENTRY_FLIP_VERTICAL: u16 = 0x8000;
+/// An offset-per-tile entry's bits 9–0: the offset.
+const OFFSET_MASK: u16 = 0x03FF;
+/// A horizontal offset ignores its low 3 bits.
+const OFFSET_HORIZONTAL_MASK: u16 = 0x03F8;
+/// An offset-per-tile entry's bit 13: the offset applies to BG1.
+const OFFSET_BACKGROUND_1: u16 = 0x2000;
+/// An offset-per-tile entry's bit 14: the offset applies to BG2.
+const OFFSET_BACKGROUND_2: u16 = 0x4000;
+/// A mode 4 offset entry's bit 15: the offset is vertical.
+const OFFSET_VERTICAL: u16 = 0x8000;
+/// Pixels in the column of one offset entry.
+const OFFSET_COLUMN: u16 = 8;
 /// `$2105` bits 2–0: the BG mode.
 const MODE_MASK: u8 = 0x07;
 /// `$2105` bit 4 is BG1's character size; each BG's is the next bit up.
@@ -300,6 +314,81 @@ impl Backgrounds {
         vram_word(vram, word)
     }
 
+    /// The horizontal and vertical scroll `background` has at column `x`: its registers',
+    /// or in modes 2 and 4 what BG3's entry for the column replaces them with (ADR 0031).
+    // @source: anomie-regs#backgrounds/mode-2
+    // @source: anomie-regs#backgrounds/mode-4
+    // @source: fullsnes#snesppuvideomemoryvram
+    // @source: adr-0031
+    fn scrolls(&self, vram: &[u8], setup: Setup, background: Background, x: u16) -> (u16, u16) {
+        let index = background as usize;
+        let horizontal = self.horizontal[index] & SCROLL_MASK;
+        let vertical = self.vertical[index] & SCROLL_MASK;
+        let mode = setup.control & MODE_MASK;
+        let valid = match background {
+            Background::One => OFFSET_BACKGROUND_1,
+            Background::Two => OFFSET_BACKGROUND_2,
+            _ => return (horizontal, vertical),
+        };
+        let tile = (x + (horizontal & 7)) / OFFSET_COLUMN;
+        if !matches!(mode, 2 | 4) || tile == 0 {
+            return (horizontal, vertical);
+        }
+        let third = Background::Three as usize;
+        let across = (self.horizontal[third] & OFFSET_HORIZONTAL_MASK) + (tile - 1) * OFFSET_COLUMN;
+        let down = self.vertical[third] & SCROLL_MASK;
+        let first = self.pixel_entry(vram, setup, Background::Three, across, down);
+        let (horizontal_entry, vertical_entry) = if mode == 2 {
+            let second =
+                self.pixel_entry(vram, setup, Background::Three, across, down + OFFSET_COLUMN);
+            (first, second)
+        } else if first & OFFSET_VERTICAL != 0 {
+            (0, first)
+        } else {
+            (first, 0)
+        };
+        let horizontal = if horizontal_entry & valid != 0 {
+            (horizontal & 7) | (horizontal_entry & OFFSET_HORIZONTAL_MASK)
+        } else {
+            horizontal
+        };
+        let vertical = if vertical_entry & valid != 0 {
+            vertical_entry & OFFSET_MASK
+        } else {
+            vertical
+        };
+        (horizontal, vertical)
+    }
+
+    /// The tilemap entry of `background` under playfield pixel (`across`, `down`), wrapped at
+    /// the playfield's edges.
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    // @source: anomie-regs#backgrounds/bg-scrolling
+    // @source: adr-0031
+    fn pixel_entry(
+        &self,
+        vram: &[u8],
+        setup: Setup,
+        background: Background,
+        across: u16,
+        down: u16,
+    ) -> u16 {
+        let size: u16 = if setup.control >> (BGMODE_SIZE_SHIFT + background as u8) & 1 != 0 {
+            16
+        } else {
+            8
+        };
+        let tilemap = self.tilemaps[background as usize];
+        let columns = if tilemap & TILEMAP_WIDE != 0 { 64 } else { 32 };
+        let rows = if tilemap & TILEMAP_TALL != 0 { 64 } else { 32 };
+        self.entry(
+            vram,
+            background,
+            across % (columns * size) / size,
+            down % (rows * size) / size,
+        )
+    }
+
     /// What `background` shows at column `x` of `line`, or `None` where it is transparent
     /// or not drawn in this mode: scrolled by its registers, wrapped at its edges.
     // @source: anomie-regs#backgrounds/bg-scrolling
@@ -307,6 +396,7 @@ impl Backgrounds {
     // @source: anomie-regs#backgrounds/direct-color-mode
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0030
+    // @source: adr-0031
     pub(crate) fn sample(
         &self,
         vram: &[u8],
@@ -326,8 +416,9 @@ impl Backgrounds {
         let tilemap = self.tilemaps[index];
         let columns = if tilemap & TILEMAP_WIDE != 0 { 64 } else { 32 };
         let rows = if tilemap & TILEMAP_TALL != 0 { 64 } else { 32 };
-        let across = (x + (self.horizontal[index] & SCROLL_MASK)) % (columns * size);
-        let down = (line + (self.vertical[index] & SCROLL_MASK)) % (rows * size);
+        let (horizontal, vertical) = self.scrolls(vram, setup, background, x);
+        let across = (x + horizontal) % (columns * size);
+        let down = (line + vertical) % (rows * size);
 
         let entry = self.entry(vram, background, across / size, down / size);
         let mut column = across % size;
@@ -630,6 +721,125 @@ mod tests {
         assert_eq!(at(7, 15), Some(Color::Palette(2)));
         assert_eq!(at(15, 7), Some(Color::Palette(3)));
         assert_eq!(at(0, 0), Some(Color::Palette(1)));
+    }
+
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    // @source: adr-0031
+    /// Sets VRAM word `address`.
+    fn put(vram: &mut [u8], address: usize, entry: u16) {
+        let [low, high] = entry.to_le_bytes();
+        vram[address * 2] = low;
+        vram[address * 2 + 1] = high;
+    }
+
+    // @source: anomie-regs#2105
+    // @source: anomie-regs#backgrounds/mode-2
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    // @source: fullsnes#snesppuvideomemoryvram
+    // @source: adr-0031
+    #[test]
+    fn mode_2_takes_each_columns_offsets_from_the_bg3_entry_one_column_before() {
+        let mut vram = vram();
+        let mut backgrounds = Backgrounds::power_on();
+        backgrounds.write(Register::Background1Tilemap, 0x04); // word $0400
+        backgrounds.write(Register::Background2Tilemap, 0x0C); // word $0C00
+        backgrounds.write(Register::Background3Tilemap, 0x08); // word $0800
+        // 4-bit tiles at base 0, 32 bytes each: tile 1 colour 1, tile 2 colour 2.
+        vram[32] = 0xFF;
+        vram[64 + 1] = 0xFF;
+        for column in 0..32 {
+            let palette = (column & 7) << 10;
+            put(&mut vram, 0x400 + column as usize, palette | 1);
+            put(&mut vram, 0x420 + column as usize, palette | 2);
+            put(&mut vram, 0xC00 + column as usize, palette | 1);
+        }
+        // BG3 column 0 (for BG1 and BG2's tile 1): BG1 only, 16 right ($15's low bits are
+        // ignored), and 8 down in its next row. Column 1 (tile 2): BG2 only, 8 right.
+        put(&mut vram, 0x800, 0x2000 | 0x15);
+        put(&mut vram, 0x820, 0x2000 | 8);
+        put(&mut vram, 0x801, 0x4000 | 8);
+        let large = setup(2);
+        let at = |backgrounds: &Backgrounds, background, x, line| {
+            backgrounds
+                .sample(&vram, large, background, x, line)
+                .map(|s| s.color)
+        };
+        // Tile 0 is as normal; tile 1 of BG1: column 3 of the row below.
+        assert_eq!(
+            at(&backgrounds, Background::One, 0, 0),
+            Some(Color::Palette(1))
+        );
+        assert_eq!(
+            at(&backgrounds, Background::One, 8, 0),
+            Some(Color::Palette(3 * 16 + 2))
+        );
+        assert_eq!(
+            at(&backgrounds, Background::One, 15, 0),
+            Some(Color::Palette(3 * 16 + 2))
+        );
+        // BG1's tile 2 has no valid bit set in its entry, and BG2's tile 1 has bit 14 clear.
+        assert_eq!(
+            at(&backgrounds, Background::One, 16, 0),
+            Some(Color::Palette(2 * 16 + 1))
+        );
+        assert_eq!(
+            at(&backgrounds, Background::Two, 8, 0),
+            Some(Color::Palette(16 + 1))
+        );
+        // BG2's tile 2 is 8 right: column 3, and keeps its own vertical scroll.
+        assert_eq!(
+            at(&backgrounds, Background::Two, 16, 0),
+            Some(Color::Palette(3 * 16 + 1))
+        );
+        // BG3 is not drawn in mode 2.
+        assert_eq!(at(&backgrounds, Background::Three, 8, 0), None);
+        // BG1HOFS = 3 moves the tile boundaries: pixel 4 is still tile 0, pixel 5 starts
+        // tile 1, whose horizontal scroll is 16 with the low bits 3: column 3.
+        backgrounds.horizontal[0] = 3;
+        let at = |x| {
+            backgrounds
+                .sample(&vram, large, Background::One, x, 0)
+                .map(|s| s.color)
+        };
+        assert_eq!(at(4), Some(Color::Palette(1)));
+        assert_eq!(at(5), Some(Color::Palette(3 * 16 + 2)));
+        assert_eq!(at(12), Some(Color::Palette(3 * 16 + 2)));
+        assert_eq!(at(13), Some(Color::Palette(2 * 16 + 1)));
+    }
+
+    // @source: anomie-regs#backgrounds/mode-4
+    // @source: fullsnes#snesppuvideomemoryvram
+    // @source: adr-0031
+    #[test]
+    fn mode_4_takes_one_entry_per_column_for_either_scroll() {
+        let mut vram = vram();
+        let mut backgrounds = Backgrounds::power_on();
+        backgrounds.write(Register::Background2Tilemap, 0x04);
+        backgrounds.write(Register::Background3Tilemap, 0x08);
+        two_bit_row(&mut vram, 1, 0, 0xFF, 0x00); // tile 1: colour 1
+        two_bit_row(&mut vram, 2, 0, 0x00, 0xFF); // tile 2: colour 2
+        for column in 0..32 {
+            let palette = (column & 7) << 10;
+            put(&mut vram, 0x400 + column as usize, palette | 1);
+            put(&mut vram, 0x420 + column as usize, palette | 2);
+        }
+        // Column 0: a horizontal offset of 16; column 1: bit 15, a vertical offset of 8.
+        put(&mut vram, 0x800, 0x4000 | 16);
+        put(&mut vram, 0x801, 0xC000 | 8);
+        let at = |x| {
+            backgrounds
+                .sample(&vram, setup(4), Background::Two, x, 0)
+                .map(|s| s.color)
+        };
+        assert_eq!(at(0), Some(Color::Palette(1)));
+        assert_eq!(at(8), Some(Color::Palette(3 * 4 + 1)));
+        // The vertical entry leaves the horizontal scroll alone: column 2, the row below.
+        assert_eq!(at(16), Some(Color::Palette(2 * 4 + 2)));
+        // BG1 has no valid bit anywhere in these entries; BG3 shows nothing in mode 4.
+        assert_eq!(
+            backgrounds.sample(&vram, setup(4), Background::Three, 8, 0),
+            None
+        );
     }
 
     // @source: anomie-regs#2105
