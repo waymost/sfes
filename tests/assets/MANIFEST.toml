@@ -120,6 +120,18 @@ sha256 = "4aaabaa3a43dfc89ccc7b31090d447126f64706fc5c0fc4ed19a66b6bf0656b3"
 notes = "Own test cartridge: Runs a direct and an indirect HDMA table into the WRAM port at $2180 over one frame, then copies the channels' table addresses, line counters and indirect address to WRAM (ADR 0026). Built from tests/carts/hdma/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/bg-opt-mode2.sfc"
+license = "own"
+sha256 = "d06362678222b241409a828264a618590f3c48ec85a797414c0bad35aecf404e"
+notes = "Own test cartridge: Draws BG mode 2 offset-per-tile: BG3's entries move BG1's columns 16 right and 8 down, none, and 1016 right (wrapping). Built from tests/carts/bg-opt-mode2/ by `cargo xtask carts build` (ADR 0013). Built from tests/carts/bg-opt-mode2/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
+path = "carts/bg-opt-mode4.sfc"
+license = "own"
+sha256 = "b1a4d3c9c0c488db0fae50ddb813abb627db70d77bc0c4964af327a2c788cdfb"
+notes = "Own test cartridge: Draws BG mode 4 offset-per-tile: BG3's single entry per column moves BG2's columns horizontally or, with bit 15, vertically. Built from tests/carts/bg-opt-mode4/ by `cargo xtask carts build` (ADR 0013). Built from tests/carts/bg-opt-mode4/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"

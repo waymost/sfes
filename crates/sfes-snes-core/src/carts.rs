@@ -531,3 +531,63 @@ fn bg_mode_4_cart_draws_bg1_in_direct_colour_and_bg2_from_the_palette() {
         assert_eq!(picture_row(&snes, row), expected, "row {row}");
     }
 }
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2107
+// @source: anomie-regs#2109
+// @source: anomie-regs#210b
+// @source: anomie-regs#212c
+// @source: anomie-regs#backgrounds/mode-2
+// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: fullsnes#snesppuvideomemoryvram
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0031
+#[test]
+fn bg_opt_mode_2_cart_takes_each_columns_offsets_from_bg3() {
+    const WHITE: u16 = 0x7FFF;
+    const RED: u16 = 0x001F;
+    const GREEN: u16 = 0x03E0;
+    const BLUE: u16 = 0x7C00;
+    let snes = drawn(include_bytes!(
+        "../../../tests/assets/carts/bg-opt-mode2.sfc"
+    ));
+    // Tile 0 is as normal: column 0, palette 0 (red). Tile 1 takes BG3's first entries,
+    // 16 right and 8 down: column 3 of the second row, palette 3 colour 2 (green). Tile 2's
+    // entry is empty: column 2 (blue). Tile 3 is 1016 right, which wraps the 256-pixel
+    // playfield to 16: column 2 again.
+    let expected = runs(&[(RED, 8), (GREEN, 8), (BLUE, 8), (BLUE, 8)], WHITE);
+    // Lines 1 to 7: rows 1 to 7 of the tile, which repeat.
+    for row in 0..7 {
+        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+}
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2108
+// @source: anomie-regs#2109
+// @source: anomie-regs#210b
+// @source: anomie-regs#212c
+// @source: anomie-regs#backgrounds/mode-4
+// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: fullsnes#snesppuvideomemoryvram
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0031
+#[test]
+fn bg_opt_mode_4_cart_takes_one_horizontal_or_vertical_offset_per_column() {
+    const WHITE: u16 = 0x7FFF;
+    const RED: u16 = 0x001F;
+    const GREEN: u16 = 0x03E0;
+    const BLUE: u16 = 0x7C00;
+    let snes = drawn(include_bytes!(
+        "../../../tests/assets/carts/bg-opt-mode4.sfc"
+    ));
+    // Tile 0 is as normal (red). Tile 1: a horizontal 16, column 3 (green). Tile 2: a
+    // vertical 8, whose bit 15 leaves the horizontal scroll alone: column 2 of the second
+    // row (blue). Tile 3: a horizontal 8, column 4, which is empty (the backdrop).
+    let expected = runs(&[(RED, 8), (GREEN, 8), (BLUE, 8)], WHITE);
+    for row in 0..7 {
+        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+}
