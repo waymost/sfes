@@ -336,6 +336,26 @@ fn hdma_cart_runs_a_direct_and_an_indirect_table_into_the_wram_port() {
     assert_eq!(wram[0x133..0x138], [0x00, 0x77, low, high, 0x00]);
 }
 
+// The colours the drawing cartridges put in CGRAM, as 15-bit `0bbbbbgggggrrrrr` words
+// (fullsnes#snesppucolorpalettememorycgramanddirectcolors).
+
+/// Full white.
+const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
+/// Full red.
+const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
+/// Full green.
+const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
+/// Full blue.
+const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
+/// Full yellow (red and green).
+const YELLOW: Rgb555 = Rgb555::from_bits_truncate(0x03FF);
+/// Full magenta (red and blue).
+const MAGENTA: Rgb555 = Rgb555::from_bits_truncate(0x7C1F);
+/// Full cyan (green and blue).
+const CYAN: Rgb555 = Rgb555::from_bits_truncate(0x7FE0);
+/// The grey (10, 10, 10) the colour-math and hi-res carts give the backdrop.
+const GREY: Rgb555 = Rgb555::from_channels(10, 10, 10);
+
 /// How many pixels of a row the background carts' tests compare.
 const PICTURE_PIXELS: usize = 64;
 
@@ -394,11 +414,6 @@ fn runs(list: &[(Rgb555, usize)], fill: Rgb555) -> Vec<Rgb555> {
 // @source: adr-0032
 #[test]
 fn bg_mode_7_cart_scales_scrolls_and_wraps_the_playfield() {
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const MAGENTA: Rgb555 = Rgb555::from_bits_truncate(0x7C1F);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode7.sfc"));
     // With A = 2.0 and a scroll of -8, screen column x is playfield column 2 * (x - 8) (the
     // centre is 0). Columns 0 to 3 are playfield -16 to -10, which wrap to tilemap column
@@ -429,13 +444,6 @@ fn bg_mode_7_cart_scales_scrolls_and_wraps_the_playfield() {
 // @source: adr-0033
 #[test]
 fn sprites_cart_draws_sprites_in_order_with_flips_and_sets_range_over() {
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const MAGENTA: Rgb555 = Rgb555::from_bits_truncate(0x7C1F);
-    const YELLOW: Rgb555 = Rgb555::from_bits_truncate(0x03FF);
-    const CYAN: Rgb555 = Rgb555::from_bits_truncate(0x7FE0);
     let snes = drawn(include_bytes!(
         "../../../tests/assets/carts/obj-sprites.sfc"
     ));
@@ -483,10 +491,6 @@ fn sprites_cart_draws_sprites_in_order_with_flips_and_sets_range_over() {
 // @source: adr-0034
 #[test]
 fn windows_cart_masks_layers_by_window_logic_inversion_and_designation() {
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/windows.sfc"));
     // Window 1 is pixels 8 to 23 and window 2 is 16 to 31 (edges inclusive). BG1 is masked
     // where exactly one is on (XOR): 8 to 15 and 24 to 31. BG2 is masked outside window 1,
@@ -523,11 +527,6 @@ fn windows_cart_masks_layers_by_window_logic_inversion_and_designation() {
 // @source: adr-0030
 #[test]
 fn bg_mode_0_cart_draws_four_2_bit_backgrounds_in_priority_order() {
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const MAGENTA: Rgb555 = Rgb555::from_bits_truncate(0x7C1F);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode0.sfc"));
     // Pixels 0-1: only BG1 (red). 2-5: BG2's priority-1 tile (green) is in front of BG1's
     // priority-0 one, and of BG3's priority-1 tile at 4-5, since BG2 comes first at the
@@ -552,10 +551,6 @@ fn bg_mode_0_cart_draws_four_2_bit_backgrounds_in_priority_order() {
 // @source: adr-0030
 #[test]
 fn bg_mode_1_cart_puts_bg3_in_front_when_bit_3_is_set() {
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode1.sfc"));
     // BG1's priority-1 tile covers pixels 0-3 and BG3's covers 2-5; with $2105 bit 3 set
     // BG3 is in front of BG1 at 2-3. BG2's priority-0 tile shows behind both at 6-7.
@@ -577,11 +572,6 @@ fn bg_mode_1_cart_puts_bg3_in_front_when_bit_3_is_set() {
 // @source: adr-0030
 #[test]
 fn bg_mode_2_cart_draws_16_by_16_tiles_and_flips_them_whole() {
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
-    const YELLOW: Rgb555 = Rgb555::from_bits_truncate(0x03FF);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode2.sfc"));
     // The top half of a 16x16 tile is tiles 1 and 2 (red, green) and the bottom half tiles
     // $11 and $12 (blue, yellow). Flipped horizontally the two columns swap and, since the
@@ -632,9 +622,6 @@ fn bg_mode_2_cart_draws_16_by_16_tiles_and_flips_them_whole() {
 // @source: adr-0030
 #[test]
 fn bg_mode_3_cart_scrolls_a_256_colour_background_across_its_second_screen() {
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode3.sfc"));
     // BG1HOFS = 252 puts map column 32 at pixel 4: BG1's priority-0 tile (red, entry $A5)
     // covers 4-11 and is in front of BG2's tile (green) at 4-7, which shows at 0-3.
@@ -657,8 +644,6 @@ fn bg_mode_3_cart_scrolls_a_256_colour_background_across_its_second_screen() {
 // @source: adr-0030
 #[test]
 fn bg_mode_4_cart_draws_bg1_in_direct_colour_and_bg2_from_the_palette() {
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
     const DIRECT: Rgb555 = Rgb555::from_channels(0b11010, 0b11000, 0b10100);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode4.sfc"));
     // Character $B6 with palette bits 101 is blue 10 1, green 110 0, red 110 1: $531A.
@@ -682,10 +667,6 @@ fn bg_mode_4_cart_draws_bg1_in_direct_colour_and_bg2_from_the_palette() {
 // @source: adr-0031
 #[test]
 fn bg_opt_mode_2_cart_takes_each_columns_offsets_from_bg3() {
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
     let snes = drawn(include_bytes!(
         "../../../tests/assets/carts/bg-opt-mode2.sfc"
     ));
@@ -713,10 +694,6 @@ fn bg_opt_mode_2_cart_takes_each_columns_offsets_from_bg3() {
 // @source: adr-0031
 #[test]
 fn bg_opt_mode_4_cart_takes_one_horizontal_or_vertical_offset_per_column() {
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
-    const GREEN: Rgb555 = Rgb555::from_bits_truncate(0x03E0);
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
     let snes = drawn(include_bytes!(
         "../../../tests/assets/carts/bg-opt-mode4.sfc"
     ));
@@ -744,8 +721,6 @@ fn bg_opt_mode_4_cart_takes_one_horizontal_or_vertical_offset_per_column() {
 // @source: adr-0035
 #[test]
 fn color_math_cart_adds_the_sub_screen_or_fixed_colour_clips_in_the_window_and_pixelates() {
-    const BACKDROP: Rgb555 = Rgb555::from_channels(10, 10, 10);
-    const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/color-math.sfc"));
     // BG1 (20, 4, 0) is on the main screen, BG2 (3, 6, 9) on the sub screen at pixels 8 to
     // 23, and the fixed colour is (5, 0, 3). `$2131` adds, halves and takes BG1 only.
@@ -764,13 +739,13 @@ fn color_math_cart_adds_the_sub_screen_or_fixed_colour_clips_in_the_window_and_p
             (Rgb555::from_channels(5, 0, 3), 8),
             (Rgb555::from_channels(25, 4, 3), 8),
             (WHITE, 4),
-            (BACKDROP, 4),
+            (GREY, 4),
             (WHITE, 4),
-            (BACKDROP, 4),
+            (GREY, 4),
             (WHITE, 4),
-            (BACKDROP, 4),
+            (GREY, 4),
         ],
-        BACKDROP,
+        GREY,
     );
     for row in 0..7 {
         assert_eq!(picture_row(&snes, row), expected, "row {row}");
@@ -795,9 +770,7 @@ fn color_math_cart_adds_the_sub_screen_or_fixed_colour_clips_in_the_window_and_p
 // @source: adr-0036
 #[test]
 fn hires_cart_shows_mode_5_half_pixels_and_maths_the_sub_pixels_after_the_main_pixel() {
-    const BACKDROP: Rgb555 = Rgb555::from_bits_truncate(0x294A);
     let snes = drawn(include_bytes!("../../../tests/assets/carts/hires.sfc"));
-    let backdrop = BACKDROP;
     // BG1's tile 1 is "1.1.1.1." then ".2.2.2.2" across its 16 half-pixels, colour 1
     // (20, 4, 0) and colour 2 (3, 6, 9), on both screens; the sub screen shows the even
     // half-pixels and the main screen the odd, so pixel `2x` is the sub screen's pixel `x`
@@ -817,14 +790,14 @@ fn hires_cart_shows_mode_5_half_pixels_and_maths_the_sub_pixels_after_the_main_p
     let backdrop_math = Rgb555::from_channels(15, 10, 13);
     let mut expected = Vec::new();
     for _ in 0..4 {
-        expected.extend([one, backdrop]);
+        expected.extend([one, GREY]);
     }
-    expected.extend([backdrop, two_math]);
+    expected.extend([GREY, two_math]);
     for _ in 5..8 {
         expected.extend([backdrop_math, two_math]);
     }
-    expected.extend([backdrop_math, backdrop]);
-    expected.resize(PICTURE_PIXELS, backdrop);
+    expected.extend([backdrop_math, GREY]);
+    expected.resize(PICTURE_PIXELS, GREY);
     for row in 0..7 {
         assert_eq!(wide_row(&snes, row), expected, "row {row}");
     }
@@ -871,8 +844,6 @@ fn render_skip_keeps_the_sprite_flags_and_presents_no_frame_until_it_is_turned_o
 // @source: adr-0037
 #[test]
 fn layer_output_holds_the_sprites_before_compositing_and_changes_no_frame() {
-    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
-    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
     let rom = include_bytes!("../../../tests/assets/carts/obj-sprites.sfc");
     let mut snes = Snes::<Fast>::builder(Arc::from(rom.as_slice()))
         .build()
