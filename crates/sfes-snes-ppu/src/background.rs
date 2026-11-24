@@ -8,8 +8,10 @@
 // @source: fullsnes#snesppuvideomemoryvram
 // @source: adr-0030
 // @source: adr-0031
+// @source: adr-0036
 //! BG1 to BG4: their registers, and fetching one pixel of one background in BG modes 0 to
-//! 4 (ADR 0030). The PPU composes the pixels into a line.
+//! 6 (ADR 0030; ADR 0031; ADR 0036). The PPU composes the pixels into a line; mode 7 has its
+//! own fetch.
 
 use sfes_api::Rgb555;
 
@@ -266,8 +268,8 @@ pub(crate) const fn priority_order(mode: u8, bg3_first: bool, extbg: bool) -> &'
     }
 }
 
-/// How many bitplanes `background` has in `mode`; `None` where it has no pixels or the
-/// mode is not drawn yet.
+/// How many bitplanes `background` has in `mode`; `None` where it has no pixels, and in
+/// mode 7, whose pixels `mode7.rs` fetches.
 // @source: anomie-regs#backgrounds/bg-modes
 // @source: fullsnes#snesppubgcontrol
 // @source: adr-0030
@@ -326,7 +328,7 @@ impl Backgrounds {
     }
 
     /// `BGnHOFS`: the new byte over the latch's high five bits and the old register's bits
-    /// 9–8 in the low three.
+    /// 10–8 in the low three (ADR 0030, point 2).
     // @source: anomie-regs#210d
     // @source: fullsnes#snesppubgcontrol
     // @source: adr-0030
@@ -574,8 +576,10 @@ pub(crate) fn direct_color(value: u8, palette: u8) -> Rgb555 {
     Rgb555::from_channels(red, green, blue)
 }
 
-/// VRAM word `address`.
+/// VRAM word `address`, with bit 15 dropped (ADR 0029, point 3).
 // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: fullsnes#snesmemoryvramaccesstileandbgmap
+// @source: adr-0029
 pub(crate) fn vram_word(vram: &[u8], address: u16) -> u16 {
     let byte = usize::from(address & VRAM_WORD_MASK) * 2;
     let low = vram.get(byte).copied().unwrap_or_default();
@@ -583,8 +587,9 @@ pub(crate) fn vram_word(vram: &[u8], address: u16) -> u16 {
     u16::from_le_bytes([low, high])
 }
 
-/// VRAM byte `address`, wrapped to 64 KiB.
+/// VRAM byte `address`, wrapped to 64 KiB (ADR 0030, point 3).
 // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: adr-0030
 pub(crate) fn vram_byte(vram: &[u8], address: u32) -> u8 {
     let index = usize::try_from(address & VRAM_BYTE_MASK).unwrap_or_default();
     vram.get(index).copied().unwrap_or_default()
@@ -615,7 +620,7 @@ mod tests {
 
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0030
-    /// Writes the 2-bit tile `number` at character base 0 with its first row `pixels`.
+    /// Writes row `row` of the 2-bit tile `number` at character base 0: `plane0` and `plane1`.
     fn two_bit_row(vram: &mut [u8], number: usize, row: usize, plane0: u8, plane1: u8) {
         vram[number * 16 + row * 2] = plane0;
         vram[number * 16 + row * 2 + 1] = plane1;
@@ -937,7 +942,7 @@ mod tests {
         assert_eq!(at(8), Some(Color::Palette(3 * 4 + 1)));
         // The vertical entry leaves the horizontal scroll alone: column 2, the row below.
         assert_eq!(at(16), Some(Color::Palette(2 * 4 + 2)));
-        // BG1 has no valid bit anywhere in these entries; BG3 shows nothing in mode 4.
+        // BG3 only supplies offsets in mode 4 and shows nothing itself.
         assert_eq!(
             backgrounds.sample(&vram, setup(4), Background::Three, 8, 0, 0),
             None

@@ -369,7 +369,7 @@ impl OamPort {
     /// The OAM address reset: the address becomes the reload value's first byte (ADR 0029,
     /// point 6).
     // @source: anomie-regs#2102
-    // @source: anomie-timing#oam-reset
+    // @source: anomie-timing#s-ppu/oam-reset
     // @source: fullsnes#snesmemoryoamaccessspriteattributes
     // @source: adr-0029
     pub(crate) const fn reload(&mut self) {

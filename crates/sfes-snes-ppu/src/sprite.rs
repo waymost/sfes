@@ -2,7 +2,7 @@
 // @source: anomie-regs#2103
 // @source: anomie-regs#213e
 // @source: anomie-regs#sprites
-// @source: anomie-timing#detailed-renderer-timing
+// @source: anomie-timing#s-ppu/detailed-renderer-timing
 // @source: fullsnes#snesppuspritesobjs
 // @source: fullsnes#snespputimersandstatus
 // @source: adr-0033
@@ -287,7 +287,7 @@ impl Sprites {
     /// first, setting the range and time flags when there are more (ADR 0033, point 5).
     // @source: anomie-regs#sprites/drawing-the-sprites
     // @source: anomie-regs#213e
-    // @source: anomie-timing#detailed-renderer-timing
+    // @source: anomie-timing#s-ppu/detailed-renderer-timing
     // @source: fullsnes#snespputimersandstatus
     // @source: adr-0033
     pub(crate) fn evaluate(&mut self, oam: &[u8], first: u8, line: u16) -> Line {

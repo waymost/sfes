@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-11-22
+- **Amended:** 2026-11-24: cites the OAM reset and renderer timing sections by their full heading paths, `anomie-timing#s-ppu/oam-reset` and `#s-ppu/detailed-renderer-timing`.
 - **Confidence:**
   - high: `$2101`'s sizes and base, the OAM record, the character addressing, the palette and the colour 0 transparency, the priority order among sprites and against the backgrounds, and the 32-sprite and 34-tile limits and their flags (points 1 to 7);
   - medium: the line a sprite first appears on, which tiles are dropped by time-over, and when the flags clear (points 3, 6 and 7);
@@ -26,8 +27,8 @@ The documents agree on the OAM record and the limits. They are silent or loose o
 - **anomie-regs#213e**: bit 7 is time over, bit 6 range over, "set whether or not OBJ are actually enabled", reset at the end of V-Blank.
 - **anomie-regs#backgrounds**: the priority lists with the sprites, mode by mode, in front to back order; "the SNES loads OBJ data for each scanline during the previous scanline", so the first line (line 0) is not output and games set their vertical scrolls to -1 to make a background line match a sprite's Y.
 - **anomie-regs#rendering-the-screen/rendering-the-screen**: sprites are one of the layers composed per pixel; the sprite layer is enabled by `$212C` bit 4.
-- **anomie-timing#detailed-renderer-timing**: OAM is examined during a line for the 32 sprites of the next, and 34 tiles are loaded in horizontal blank, which is why line 0 exists, "otherwise there would be no sprite data for the first scanline on the screen".
-- **anomie-timing#oam-reset**: the internal OAM address is reset at the start of vertical blank.
+- **anomie-timing#s-ppu/detailed-renderer-timing**: OAM is examined during a line for the 32 sprites of the next, and 34 tiles are loaded in horizontal blank, which is why line 0 exists, "otherwise there would be no sprite data for the first scanline on the screen".
+- **anomie-timing#s-ppu/oam-reset**: the internal OAM address is reset at the start of vertical blank.
 - **fullsnes#snesppuspritesobjs**: `$2101` as above, with bits 4 and 3 the gap between the two tables in 4K-word steps and bits 2 to 0 the base in 8K-word steps; 8x8 tiles in a "two-dimensional array of 16x32 OBJ tiles", with "no carry-outs" from x to y or y to the next; a 64-pixel-high sprite "may wrap from lower to upper screen border". The OAM record, and attribute bit 7 vertical flip, bit 6 horizontal flip, bits 5 and 4 priority, bits 3 to 1 palette, bit 0 the tile's bit 8; OBJ palettes 4 to 7 use colour math.
 - **fullsnes#snespputimersandstatus**: `$213E` bit 7 is "more than 8x34 OBJ pixels per scanline", bit 6 more than 32 OBJs; "the overflow flags are cleared at end of V-Blank, but NOT during forced blank"; they are set regardless of `$212C`. Bit 6 is set when `V=OBJ.YLOC`, `H=OAM.INDEX*2`, and bit 7 when `V=OBJ.YLOC+1`, `H=0`.
 - **fullsnes#snesiomap**: `$2101` to `$2103` are "?" at power-on.

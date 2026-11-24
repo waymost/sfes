@@ -2,10 +2,11 @@
 
 - **Status:** accepted
 - **Date:** 2026-11-23
+- **Amended:** 2026-11-24: the confidence lines name the points their items are in.
 - **Confidence:**
-  - high: that a wide line's even half-pixels are the sub screen's and its odd ones the main screen's, that a mode 5 or 6 tile is two characters wide and shows the even columns on the sub screen and the odd on the main, and that mosaic in modes 5 and 6 acts on half-pixels (points 1 to 4 and 7);
+  - high: that a wide line's even half-pixels are the sub screen's and its odd ones the main screen's, that a mode 5 or 6 tile is two characters wide and shows the even columns on the sub screen and the odd on the main, and that mosaic in modes 5 and 6 acts on half-pixels (points 1, 3 and 5);
   - medium: the half-pixel mosaic block rule, and how hi-res math chooses its operation (points 5 and 7);
-  - low: which half-lines a field shows, flipping a 16-pixel tile whole, the window and math state at column 0, the hi-res sub backdrop, and mode 6's tile height (points 3, 5, 6 and 9).
+  - low: which half-lines a field shows, flipping a 16-pixel tile whole, the window and math state at column 0, the hi-res sub backdrop, and mode 6's tile height (points 2, 3, 4, 7 and 9).
 
 ## Context
 

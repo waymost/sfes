@@ -19,8 +19,8 @@
 
 use crate::{background::Background, register::Register};
 
-/// `$212E` bits 4–0: BG1 to BG4 and OBJ.
-const MAIN_SCREEN_MASK: u8 = 0x1F;
+/// `$212E` and `$212F` bits 4–0: BG1 to BG4 and OBJ.
+const SCREEN_MASK: u8 = 0x1F;
 /// A layer's window setting is four bits: window 1's enable and invert, then window 2's.
 const SETTING_MASK: u8 = 0x0F;
 /// A setting's bit for window 1 enabled; the invert bit is the one below it.
@@ -116,7 +116,7 @@ impl Logic {
     }
 }
 
-/// `$2123–$212B` and `$212E`: the windows' registers, all plain bytes.
+/// `$2123–$212B`, `$212E` and `$212F`: the windows' registers, all plain bytes.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Windows {
     /// `$2123 W12SEL`, `$2124 W34SEL` and `$2125 WOBJSEL`.
@@ -173,8 +173,8 @@ impl Windows {
             Register::Window2Right => self.second[1] = value,
             Register::WindowLogicBackgrounds => self.logic[0] = value,
             Register::WindowLogicObjectColor => self.logic[1] = value,
-            Register::MainScreenWindow => self.main = value & MAIN_SCREEN_MASK,
-            Register::SubScreenWindow => self.sub = value & MAIN_SCREEN_MASK,
+            Register::MainScreenWindow => self.main = value & SCREEN_MASK,
+            Register::SubScreenWindow => self.sub = value & SCREEN_MASK,
             _ => {}
         }
     }

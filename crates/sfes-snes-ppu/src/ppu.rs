@@ -3,9 +3,9 @@
 // @source: fullsnes#snesunpredictablethings
 // @source: adr-0028
 // @source: adr-0029
-//! The PPU's state: its memories and their ports, the registers rendering needs so far,
+//! The PPU: its memories and their ports, every register of `$2100–$213F`, the renderer,
 //! the multiplier, PPU1 and PPU2 open bus, the counter latch, and which line it renders
-//! next (ADR 0028; ADR 0029).
+//! next (ADR 0028 to ADR 0037).
 
 use alloc::{boxed::Box, vec};
 
@@ -93,15 +93,15 @@ pub struct Ppu {
     mode7: Mode7,
     /// $2101 OBSEL and the flags of $213E: the sprites.
     sprites: Sprites,
-    /// $2123–$212B and $212E: the windows.
+    /// $2123–$212B, $212E and $212F: the windows.
     windows: Windows,
     /// $2105 BGMODE: the BG mode and character sizes.
     background_mode: u8,
     /// $2107–$2114 BG1SC–BG4VOFS: the backgrounds' tilemaps, characters and scrolls.
     backgrounds: Backgrounds,
-    /// $212C TM: the layers on the main screen.
+    /// $212C TM: the layers on the main screen, bits 4–0.
     main_screen: u8,
-    /// $212D TS: the layers on the sub screen.
+    /// $212D TS: the layers on the sub screen, bits 4–0.
     sub_screen: u8,
     /// $2130–$2132 CGWSEL, CGADSUB and COLDATA: colour math and the fixed colour.
     color_math: ColorMath,
@@ -191,7 +191,7 @@ impl Ppu {
     /// Vertical blank has begun: the OAM address is reloaded unless forced blank is on
     /// (ADR 0029, point 6).
     // @source: anomie-regs#2102
-    // @source: anomie-timing#oam-reset
+    // @source: anomie-timing#s-ppu/oam-reset
     // @source: fullsnes#snesmemoryoamaccessspriteattributes
     // @source: adr-0029
     pub const fn start_vertical_blank(&mut self) {
@@ -346,36 +346,55 @@ impl Ppu {
     ///   address;
     /// - the memory ports run, writing their memory only in the periods point 7 allows;
     /// - M7SEL, M7A to M7D, M7X, M7Y and the Mode 7 scroll are kept, and share one latch
-    ///   (ADR 0032, point 1).
+    ///   (ADR 0032, point 1);
+    /// - `$2101` goes to the sprites (ADR 0033), `$2106` to mosaic, `$2107–$2114` to the
+    ///   backgrounds (ADR 0030), `$2123–$212B`, `$212E` and `$212F` to the windows
+    ///   (ADR 0034), and `$2130–$2132` to colour math (ADR 0035);
+    /// - `$212C` and `$212D` keep their low 5 bits (ADR 0035, point 1).
     ///
-    /// A write to any other register has no effect until its issue.
+    /// The read-only registers `$2134–$213F` ignore writes.
     // @source: anomie-regs#2100
+    // @source: anomie-regs#2101
     // @source: anomie-regs#2102
     // @source: anomie-regs#2103
     // @source: anomie-regs#2104
     // @source: anomie-regs#2105
+    // @source: anomie-regs#2106
+    // @source: anomie-regs#2107
+    // @source: anomie-regs#210b
+    // @source: anomie-regs#210d
+    // @source: anomie-regs#2115
+    // @source: anomie-regs#2116
+    // @source: anomie-regs#2117
+    // @source: anomie-regs#2118
+    // @source: anomie-regs#2119
     // @source: anomie-regs#211a
     // @source: anomie-regs#211b
     // @source: anomie-regs#211d
     // @source: anomie-regs#211e
     // @source: anomie-regs#211f
     // @source: anomie-regs#2120
-    // @source: anomie-regs#2115
-    // @source: anomie-regs#2116
-    // @source: anomie-regs#2117
-    // @source: anomie-regs#2118
-    // @source: anomie-regs#2119
     // @source: anomie-regs#2121
     // @source: anomie-regs#2122
+    // @source: anomie-regs#2123
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#212d
+    // @source: anomie-regs#212e
+    // @source: anomie-regs#212f
+    // @source: anomie-regs#2130
+    // @source: anomie-regs#2131
+    // @source: anomie-regs#2132
     // @source: anomie-regs#2133
-    // @source: anomie-regs#2101
     // @source: anomie-regs#sprites/oam
-    // @source: anomie-timing#oam-reset
+    // @source: anomie-timing#s-ppu/oam-reset
     // @source: fullsnes#snesppucontrol
     // @source: adr-0028
     // @source: adr-0029
+    // @source: adr-0030
     // @source: adr-0032
     // @source: adr-0033
+    // @source: adr-0034
+    // @source: adr-0035
     pub fn write(&mut self, register: Register, value: u8) {
         let blank = self.forced_blank() || self.signals.period == Period::VerticalBlank;
         match register {
@@ -447,8 +466,8 @@ impl Ppu {
             | Register::WindowLogicObjectColor
             | Register::MainScreenWindow
             | Register::SubScreenWindow => self.windows.write(register, value),
-            Register::MainScreen => self.main_screen = value,
-            Register::SubScreen => self.sub_screen = value,
+            Register::MainScreen => self.main_screen = value & SCREEN_LAYERS,
+            Register::SubScreen => self.sub_screen = value & SCREEN_LAYERS,
             Register::Mosaic => self.mosaic.write(value, self.next_line),
             Register::ColorMathSelect | Register::ColorMathDesignation | Register::FixedColor => {
                 self.color_math.write(register, value);
@@ -571,14 +590,10 @@ impl Ppu {
         };
         let extbg = self.screen_mode & EXTBG != 0;
         let order = priority_order(mode, self.background_mode & BACKGROUND_3_FIRST != 0, extbg);
-        let main_layers = self.main_screen & SCREEN_LAYERS;
+        let main_layers = self.main_screen;
         // The sub screen matters where math adds it, and in every wide line.
         let sub_wanted = wide || (self.color_math.adds_sub_screen() && self.color_math.any_layer());
-        let sub_layers = if sub_wanted {
-            self.sub_screen & SCREEN_LAYERS
-        } else {
-            0
-        };
+        let sub_layers = if sub_wanted { self.sub_screen } else { 0 };
         // Modes 5 and 6 show other half-pixels of a background on each screen.
         let fetched = if hires_mode {
             main_layers
@@ -591,7 +606,7 @@ impl Ppu {
         let first = self.oam_port.first_sprite();
         let evaluated = self.sprites.evaluate(&self.oam, first, line);
         // Layer images take every layer that is on a screen, looked at or not.
-        let screens = (self.main_screen | self.sub_screen) & SCREEN_LAYERS;
+        let screens = self.main_screen | self.sub_screen;
         let captured = layers.as_ref().map_or(0, |_| screens);
         let sprites = ((sprite_layers | captured) & SCREEN_SPRITES != 0)
             .then(|| evaluated.pixels(&self.vram));
@@ -1066,7 +1081,7 @@ mod tests {
 
     // @source: anomie-regs#2102
     // @source: anomie-regs#sprites/oam
-    // @source: anomie-timing#oam-reset
+    // @source: anomie-timing#s-ppu/oam-reset
     // @source: fullsnes#snesmemoryoamaccessspriteattributes
     // @source: adr-0029
     #[test]
