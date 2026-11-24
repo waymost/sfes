@@ -29,5 +29,6 @@ mod timing;
 mod video;
 
 pub use sfes_snes_cart::Region;
+pub use sfes_snes_ppu::{LayerKind, LayerLine};
 
 pub use crate::machine::{BuildError, Snes, SnesBuilder};

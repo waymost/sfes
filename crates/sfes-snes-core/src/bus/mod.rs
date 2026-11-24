@@ -142,7 +142,7 @@ pub(crate) struct Bus {
     /// latch (ADR 0021, point 7; ADR 0028).
     pub(crate) ppu: Ppu,
     /// The frame being drawn and the last presented frame: outputs, not state, so a clone
-    /// of the bus starts with `Video::default()` (ADR 0028, point 10).
+    /// of the bus starts with empty buffers and the same two settings (ADR 0028, point 10; ADR 0037, point 6).
     pub(crate) video: Video,
     /// $4202–$4206 and $4214–$4217: the multiply and divide unit (ADR 0023).
     pub(crate) math: Math,
@@ -174,7 +174,7 @@ impl Clone for Bus {
             interrupts,
             io_port,
             ppu,
-            video: _,
+            video,
             math,
             ports,
             dma,
@@ -191,7 +191,7 @@ impl Clone for Bus {
             interrupts: *interrupts,
             io_port: *io_port,
             ppu: ppu.clone(),
-            video: Video::default(),
+            video: video.empty_like(),
             math: *math,
             ports: *ports,
             dma: *dma,

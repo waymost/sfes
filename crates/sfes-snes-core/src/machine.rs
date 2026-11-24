@@ -13,6 +13,7 @@ use sfes_api::{
 };
 use sfes_snes_cart::{CartError, Cartridge, Mapping, Options};
 use sfes_snes_cpu::{Cpu65816, Pending, RunState};
+use sfes_snes_ppu::LayerLine;
 
 use crate::{
     Region,
@@ -368,6 +369,48 @@ impl<A: Accuracy, O: Observer> Snes<A, O> {
     #[must_use]
     pub fn video(&self) -> VideoFrame<'_> {
         self.state.bus.video.frame()
+    }
+
+    /// Turns render skip on or off. While it is on, each line still evaluates its sprites, so
+    /// `$213E`'s flags are as a drawn line sets them, but no pixel is drawn and no frame is
+    /// presented: [`Snes::video`] keeps the last frame drawn whole. Nothing that a program
+    /// can read changes (EMU-06; ADR 0037, points 1 and 3).
+    // @source: fullsnes#snespputimersandstatus
+    // @source: adr-0033
+    // @source: adr-0037
+    pub const fn set_render_skip(&mut self, skip: bool) {
+        self.state.bus.video.set_render_skip(skip);
+    }
+
+    /// Whether render skip is on. A clone keeps it (ADR 0037, point 6).
+    // @source: adr-0037
+    #[must_use]
+    pub const fn render_skip(&self) -> bool {
+        self.state.bus.video.render_skip()
+    }
+
+    /// Turns per-layer output on or off. It changes no emulation result and costs nothing
+    /// while off (EMU-06, WM-02; ADR 0037, points 2 and 6).
+    // @source: adr-0037
+    pub const fn set_layer_output(&mut self, output: bool) {
+        self.state.bus.video.set_layer_output(output);
+    }
+
+    /// Whether per-layer output is on. A clone keeps it (ADR 0037, point 6).
+    // @source: adr-0037
+    #[must_use]
+    pub const fn layer_output(&self) -> bool {
+        self.state.bus.video.layer_output()
+    }
+
+    /// The layers of the last presented frame, one [`LayerLine`] per output line (not doubled
+    /// for interlace): BG1 to BG4 and the sprites before windows, the layer order, math and
+    /// brightness. Empty unless layer output was on for every line of that frame
+    /// (WM-02; ADR 0037, points 4 to 6).
+    // @source: adr-0037
+    #[must_use]
+    pub fn layers(&self) -> &[LayerLine] {
+        self.state.bus.video.layers()
     }
 
     /// The video standard the machine runs.

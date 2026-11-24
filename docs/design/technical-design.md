@@ -307,7 +307,7 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
   2. Evaluate sprites for the line, enforcing the 32-sprite and 34-tile limits and setting the time-over and range-over flags.
   3. Build window masks, apply mosaic, then colour math and brightness.
   4. Write the line into the frame buffer; when layer output is requested (WM-02), copy the per-layer buffers too.
-- With render skip, steps 1, 3 and 4 are skipped but step 2 always runs, since its flags are readable state (EMU-06).
+- With render skip, steps 1, 3 and 4 are skipped but step 2 always runs, since its flags are readable state (EMU-06). Skipped lines present no frame, so `video()` keeps the last frame drawn whole; layer output is a per-line `LayerLine` of BG1 to BG4 and the sprites at 256 columns, the main screen's view of each layer before windows and math, kept per frame only when on for the whole frame; a clone keeps both settings and starts with empty buffers (ADR 0037).
 - Lines are 256 pixels wide, or 512 in BG modes 5 and 6 and with pseudo-hi-res; frames have 224 or 239 visible lines, or 448 or 478 when interlaced. Hi-res and interlace are P1 but built in M2, so the frame buffer and `VideoFrame` are sized for them from the start. In a wide line each column is the sub screen's pixel then the main screen's, with math on both and BG modes 5 and 6 showing the even half-pixels on the sub screen (ADR 0036). A frame is 512 wide if any of its lines is, with 256-pixel lines doubled, and twice its line count high if any line is interlaced, each line filling two rows; it shows only its own field, which `VideoFrame::field` names, and goldens hash it as presented (ADR 0028).
 - Mode 7 uses the documented fixed-point matrix arithmetic in integers.
 
