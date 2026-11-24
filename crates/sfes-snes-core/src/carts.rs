@@ -12,7 +12,7 @@ use alloc::{sync::Arc, vec::Vec};
 use sfes_api::{Buttons, Cycles, Fast, InstrEvent, Interrupt, Observer, RegionId, Rgb555, Stop};
 use sfes_snes_cpu::RunState;
 
-use crate::Snes;
+use crate::{LayerKind, Snes};
 
 /// Records each instruction's program address and start time.
 #[derive(Clone, Debug, Default)]
@@ -828,4 +828,78 @@ fn hires_cart_shows_mode_5_half_pixels_and_maths_the_sub_pixels_after_the_main_p
     for row in 0..7 {
         assert_eq!(wide_row(&snes, row), expected, "row {row}");
     }
+}
+
+// @source: anomie-regs#213e
+// @source: fullsnes#snespputimersandstatus
+// @source: adr-0013
+// @source: adr-0033
+// @source: adr-0037
+#[test]
+fn render_skip_keeps_the_sprite_flags_and_presents_no_frame_until_it_is_turned_off() {
+    let rom = include_bytes!("../../../tests/assets/carts/obj-sprites.sfc");
+    let mut snes = Snes::<Fast>::builder(Arc::from(rom.as_slice()))
+        .build()
+        .expect("builds");
+    snes.set_render_skip(true);
+    assert!(snes.render_skip());
+    snes.run(Stop::Frames(4));
+    assert_eq!(snes.cpu().run, RunState::Stopped);
+    // Nothing was drawn, so nothing was presented; the flags are those a drawn frame leaves:
+    // range over set (the cart's 33 sprites on one line), time over clear.
+    assert_eq!(snes.video().pixels.len(), 0);
+    assert_eq!(snes.peek_bus(0x00_213E).value & 0xC0, 0x40);
+    // A clone keeps the setting. Turning it off, the next whole frame is the picture the
+    // cart draws.
+    let mut copy = snes.clone();
+    assert!(copy.render_skip());
+    snes.set_render_skip(false);
+    snes.run(Stop::Frames(2));
+    let reference = drawn(rom);
+    assert_eq!(snes.video().pixels, reference.video().pixels);
+    assert_eq!(snes.video().pixels.len(), 256 * 224);
+    // Skipped still, the copy shows nothing new.
+    copy.run(Stop::Frames(2));
+    assert_eq!(copy.video().pixels.len(), 0);
+}
+
+// @source: anomie-regs#212c
+// @source: anomie-regs#sprites/sprite-priority
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0033
+// @source: adr-0037
+#[test]
+fn layer_output_holds_the_sprites_before_compositing_and_changes_no_frame() {
+    const RED: Rgb555 = Rgb555::from_bits_truncate(0x001F);
+    const BLUE: Rgb555 = Rgb555::from_bits_truncate(0x7C00);
+    let rom = include_bytes!("../../../tests/assets/carts/obj-sprites.sfc");
+    let mut snes = Snes::<Fast>::builder(Arc::from(rom.as_slice()))
+        .build()
+        .expect("builds");
+    assert!(!snes.layer_output());
+    snes.set_layer_output(true);
+    snes.run(Stop::Frames(4));
+    // One entry per output line. Sprite 0 (red, X 8) is in front of sprite 1 (blue, X 12)
+    // on line 1, so blue shows at 16 to 19, as in the picture; no background is on a screen.
+    let layers = snes.layers();
+    assert_eq!(layers.len(), 224);
+    let sprites = layers[0].layer(LayerKind::Sprites);
+    assert_eq!(sprites[7], None);
+    assert!(sprites[8..16].iter().all(|&pixel| pixel == Some(RED)));
+    assert!(sprites[16..20].iter().all(|&pixel| pixel == Some(BLUE)));
+    assert_eq!(sprites[20], None);
+    for kind in [
+        LayerKind::Background1,
+        LayerKind::Background2,
+        LayerKind::Background3,
+        LayerKind::Background4,
+    ] {
+        assert!(layers[0].layer(kind).iter().all(Option::is_none));
+    }
+    // The picture is the one the cart draws with layer output off, and a machine that never
+    // asked for layers has none.
+    let reference = drawn(rom);
+    assert_eq!(snes.video().pixels, reference.video().pixels);
+    assert_eq!(reference.layers().len(), 0);
 }

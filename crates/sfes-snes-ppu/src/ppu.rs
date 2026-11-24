@@ -15,6 +15,7 @@ use crate::{
     background::{Background, Backgrounds, Color, Layer, Sample, Setup, priority_order},
     color_math::{ColorMath, Operand, Previous, Source, dim},
     counters::{CounterLatch, CounterRegister},
+    layer::{LayerKind, LayerLine},
     line::{LineOut, LineWidth},
     memory::{CgramPort, Half, OamPort, VramPort},
     mode7::Mode7,
@@ -482,6 +483,24 @@ impl Ppu {
         self.mosaic.start_frame(FIRST_OUTPUT_LINE);
     }
 
+    /// Renders `line` into `out` as [`Ppu::render_line_layers`] does, without layer images.
+    // @source: adr-0037
+    pub fn render_line(&mut self, line: u16, out: &mut LineOut) {
+        self.render_line_layers(line, out, None);
+    }
+
+    /// Skips `line`: render skip draws no pixel, but evaluates the sprites, so `$213E`'s
+    /// flags are set as a drawn line sets them, and makes the next line the one after it
+    /// (EMU-06; ADR 0037, point 1).
+    // @source: fullsnes#snespputimersandstatus
+    // @source: adr-0033
+    // @source: adr-0037
+    pub fn skip_line(&mut self, line: u16) {
+        let first = self.oam_port.first_sprite();
+        self.sprites.evaluate(&self.oam, first, line);
+        self.next_line = line + 1;
+    }
+
     /// Renders `line` into `out` from the registers and memories as they stand, and makes
     /// the next line the one after it (technical design section 5; ADR 0028, points 6 and
     /// 7; ADR 0030; ADR 0035; ADR 0036):
@@ -500,7 +519,9 @@ impl Ppu {
     ///   the main pixel to its left, then the main screen's (ADR 0036);
     /// - in modes 5 and 6 each screen shows its half of every 16-half-pixel tile, and with
     ///   interlace a line is a half-line of the field `$213F` names;
-    /// - `$2100` forced blank makes the line black, and its brightness dims every pixel.
+    /// - `$2100` forced blank makes the line black, and its brightness dims every pixel;
+    /// - with `layers`, each layer of the main or sub screen is also copied into it before
+    ///   windows and math (ADR 0037).
     // @source: anomie-regs#2100
     // @source: anomie-regs#2105
     // @source: anomie-regs#2106
@@ -526,7 +547,13 @@ impl Ppu {
     // @source: adr-0033
     // @source: adr-0035
     // @source: adr-0036
-    pub fn render_line(&mut self, line: u16, out: &mut LineOut) {
+    // @source: adr-0037
+    pub fn render_line_layers(
+        &mut self,
+        line: u16,
+        out: &mut LineOut,
+        layers: Option<&mut LayerLine>,
+    ) {
         let mode = self.background_mode & BACKGROUND_MODE_MASK;
         // BG modes 5 and 6 are true hi-res.
         let hires_mode = matches!(mode, 5 | 6);
@@ -563,7 +590,14 @@ impl Ppu {
         // when the sprites are on a screen that is looked at.
         let first = self.oam_port.first_sprite();
         let evaluated = self.sprites.evaluate(&self.oam, first, line);
-        let sprites = (sprite_layers & SCREEN_SPRITES != 0).then(|| evaluated.pixels(&self.vram));
+        // Layer images take every layer that is on a screen, looked at or not.
+        let screens = (self.main_screen | self.sub_screen) & SCREEN_LAYERS;
+        let captured = layers.as_ref().map_or(0, |_| screens);
+        let sprites = ((sprite_layers | captured) & SCREEN_SPRITES != 0)
+            .then(|| evaluated.pixels(&self.vram));
+        if let Some(layers) = layers {
+            self.capture_layers(layers, mode, setup, captured, line, sprites.as_ref());
+        }
         let forced_blank = self.forced_blank();
         let finish = |color: Rgb555| {
             if forced_blank {
@@ -627,6 +661,41 @@ impl Ppu {
             }
         }
         self.next_line = line + 1;
+    }
+
+    /// Copies each layer `screens` names into `out`: a background's pixel at each column as
+    /// the main screen shows it, from `samples`, and the sprites' colours from `sprites`;
+    /// before windows, the layer order, math and brightness (ADR 0037, points 4 and 5).
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#212d
+    // @source: adr-0036
+    // @source: adr-0037
+    fn capture_layers(
+        &self,
+        out: &mut LayerLine,
+        mode: u8,
+        setup: Setup,
+        screens: u8,
+        line: u16,
+        sprites: Option<&[Option<SpritePixel>; 256]>,
+    ) {
+        out.clear();
+        for x in 0..LINE_PIXELS {
+            let column = usize::from(x);
+            let samples = self.samples(mode, setup, screens, x, line, 1);
+            for (background, sample) in Background::ALL.into_iter().zip(samples) {
+                let kind = LayerKind::ALL[background as usize];
+                if let Some(slot) = out.layer_mut(kind).get_mut(column) {
+                    *slot = sample.map(|sample| self.resolve(sample));
+                }
+            }
+            let sprite = sprites.and_then(|pixels| pixels.get(column).copied().flatten());
+            if screens & SCREEN_SPRITES != 0
+                && let Some(slot) = out.layer_mut(LayerKind::Sprites).get_mut(column)
+            {
+                *slot = sprite.map(|pixel| self.color(pixel.index));
+            }
+        }
     }
 
     /// What each background in `layers` shows at column `x` of `line`, each from the top-left
@@ -1934,5 +2003,143 @@ mod tests {
         ppu.write(Register::ScreenMode, 0x01);
         ppu.render_line(1, &mut out);
         assert_eq!(out.pixels(), plain.pixels());
+    }
+
+    /// Mode 1 with BG1 and BG2 as `a_line_shows_the_first_enabled_opaque_layer_front_to_back`
+    /// has them: BG1's pixels 0 and 1 are CGRAM entry 1, BG2's priority-1 pixel 0 is entry 2.
+    // @source: anomie-regs#backgrounds/mode-1
+    // @source: adr-0030
+    fn two_background_ppu() -> Ppu {
+        let mut ppu = drawing_ppu();
+        ppu.write(Register::BackgroundMode, 0x01);
+        ppu.write(Register::Background1Tilemap, 0x04);
+        ppu.write(Register::Background2Tilemap, 0x08);
+        ppu.write(Register::Background12Characters, 0x10);
+        ppu.vram_mut()[0x800..0x802].copy_from_slice(&[0x01, 0x00]);
+        ppu.vram_mut()[0x1000..0x1002].copy_from_slice(&[0x01, 0x20]);
+        ppu.vram_mut()[32] = 0xC0;
+        ppu.vram_mut()[0x2000 + 32 + 1] = 0x80;
+        ppu
+    }
+
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#212d
+    // @source: anomie-regs#backgrounds/mode-1
+    // @source: adr-0037
+    #[test]
+    fn layer_images_hold_each_layer_before_the_layer_order_and_only_if_it_is_on_a_screen() {
+        let mut ppu = two_background_ppu();
+        let mut out = LineOut::default();
+        let mut layers = LayerLine::default();
+        // BG1 on the main screen and BG2 on the sub screen: both are held, though BG2's
+        // pixel would be in front of BG1's and only one screen is shown.
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.write(Register::SubScreen, 0x02);
+        ppu.render_line_layers(0, &mut out, Some(&mut layers));
+        let first = layers.layer(LayerKind::Background1);
+        assert_eq!(
+            [first[0], first[1], first[2]],
+            [Some(raw(2)), Some(raw(2)), None]
+        );
+        let second = layers.layer(LayerKind::Background2);
+        assert_eq!([second[0], second[1]], [Some(raw(4)), None]);
+        // BG3, BG4 and the sprites are on neither screen.
+        for kind in [
+            LayerKind::Background3,
+            LayerKind::Background4,
+            LayerKind::Sprites,
+        ] {
+            assert!(layers.layer(kind).iter().all(Option::is_none));
+        }
+        // A layer on neither screen is absent.
+        ppu.write(Register::SubScreen, 0x00);
+        ppu.render_line_layers(0, &mut out, Some(&mut layers));
+        assert!(
+            layers
+                .layer(LayerKind::Background2)
+                .iter()
+                .all(Option::is_none)
+        );
+        assert_eq!(layers.layer(LayerKind::Background1)[0], Some(raw(2)));
+    }
+
+    // @source: anomie-regs#2100
+    // @source: anomie-regs#2123
+    // @source: anomie-regs#2126
+    // @source: anomie-regs#212e
+    // @source: adr-0037
+    #[test]
+    fn layer_images_ignore_windows_forced_blank_and_brightness_and_leave_the_line_alone() {
+        let mut ppu = two_background_ppu();
+        let mut out = LineOut::default();
+        let mut plain = LineOut::default();
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.render_line(0, &mut plain);
+        // Window 1 over pixels 0 to 7 masks BG1, and the screen is forced blank.
+        ppu.write(Register::WindowMaskBackground12, 0x02);
+        ppu.write(Register::Window1Left, 0);
+        ppu.write(Register::Window1Right, 7);
+        ppu.write(Register::MainScreenWindow, 0x01);
+        ppu.write(Register::DisplayControl, 0x80);
+        let mut layers = LayerLine::default();
+        ppu.render_line_layers(0, &mut out, Some(&mut layers));
+        assert!(out.pixels().iter().all(|&color| color == Rgb555::BLACK));
+        assert_eq!(layers.layer(LayerKind::Background1)[0], Some(raw(2)));
+        // With the screen on and no window, layers or not, the line is the same.
+        ppu.write(Register::MainScreenWindow, 0x00);
+        ppu.write(Register::DisplayControl, 0x0F);
+        ppu.render_line_layers(0, &mut out, Some(&mut layers));
+        assert_eq!(out, plain);
+    }
+
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#sprites/sprite-priority
+    // @source: adr-0033
+    // @source: adr-0037
+    #[test]
+    fn layer_images_hold_the_sprites_when_they_are_on_a_screen() {
+        let mut ppu = sprite_ppu();
+        ppu.write(Register::BackgroundMode, 0x01);
+        let mut out = LineOut::default();
+        let mut layers = LayerLine::default();
+        // Sprite 0 is on line 1: pixels 0 and 1, CGRAM entry 129 (the fixture's `32`).
+        ppu.render_line_layers(1, &mut out, Some(&mut layers));
+        assert!(layers.layer(LayerKind::Sprites).iter().all(Option::is_none));
+        ppu.write(Register::SubScreen, 0x10);
+        ppu.render_line_layers(1, &mut out, Some(&mut layers));
+        let sprites = layers.layer(LayerKind::Sprites);
+        assert_eq!(
+            [sprites[0], sprites[1], sprites[2]],
+            [Some(raw(32)), Some(raw(32)), None]
+        );
+        // The sprites are not drawn: the sub screen is not looked at in a normal line.
+        assert_eq!(out.pixels()[0], raw(1));
+    }
+
+    // @source: fullsnes#snespputimersandstatus
+    // @source: adr-0033
+    // @source: adr-0037
+    #[test]
+    fn a_skipped_line_sets_the_overflow_flags_like_a_drawn_one_and_makes_the_next_line_next() {
+        let mut drawn = sprite_ppu();
+        let mut skipped = drawn.clone();
+        let mut out = LineOut::default();
+        // 33 sprites on line 1: range over.
+        for ppu in [&mut drawn, &mut skipped] {
+            for record in ppu.oam.chunks_mut(4).take(33) {
+                record.copy_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+        drawn.render_line(1, &mut out);
+        skipped.skip_line(1);
+        assert_eq!(read(&mut skipped, Register::Ppu1Status), Some(0x41));
+        assert_eq!(
+            read(&mut skipped, Register::Ppu1Status),
+            read(&mut drawn, Register::Ppu1Status)
+        );
+        assert_eq!(skipped.next_line(), 2);
+        assert_eq!(skipped.next_line(), drawn.next_line());
+        // Nothing else about the PPU differs.
+        assert_eq!(skipped, drawn);
     }
 }

@@ -6,9 +6,19 @@
 //! empty [`Video`], and serialization will skip it (technical design section 5).
 
 use alloc::vec::Vec;
+use core::mem;
 
 use sfes_api::{Field, Rgb555, VideoFrame};
-use sfes_snes_ppu::{LineOut, LineWidth, Ppu};
+use sfes_snes_ppu::{LayerLine, LineOut, LineWidth, Ppu};
+
+/// Which optional outputs are on (ADR 0037, point 6).
+#[derive(Clone, Copy, Debug, Default)]
+struct Settings {
+    /// Render skip is on: lines evaluate their sprites and draw nothing (point 1).
+    render_skip: bool,
+    /// Layer output is on: lines also fill the layer lines.
+    layer_output: bool,
+}
 
 /// The frame buffers. They are not `Clone`: a copy of the machine starts with
 /// `Video::default()` (ADR 0028, point 10).
@@ -28,27 +38,94 @@ pub(crate) struct Video {
     height: u16,
     /// The field it shows, if it is interlaced.
     field: Option<Field>,
+    /// What to render: the two output settings of ADR 0037.
+    settings: Settings,
+    /// The layers of the frame being drawn: line *L* is entry *L* − 1.
+    layer_lines: Vec<LayerLine>,
+    /// Layer output was on for every line of the frame being drawn so far.
+    layers_complete: bool,
+    /// The layers of the last presented frame; empty if layer output was not on for it.
+    layer_frame: Vec<LayerLine>,
 }
 
 impl Video {
+    /// Empty buffers with this one's two settings: what a clone of the machine starts with
+    /// (ADR 0037, point 6).
+    // @source: adr-0028
+    // @source: adr-0037
+    pub(crate) fn empty_like(&self) -> Self {
+        Self {
+            settings: self.settings,
+            ..Self::default()
+        }
+    }
+
+    /// Turns render skip on or off (ADR 0037, point 1).
+    // @source: adr-0037
+    pub(crate) const fn set_render_skip(&mut self, skip: bool) {
+        self.settings.render_skip = skip;
+    }
+
+    /// Whether render skip is on.
+    // @source: adr-0037
+    pub(crate) const fn render_skip(&self) -> bool {
+        self.settings.render_skip
+    }
+
+    /// Turns layer output on or off (ADR 0037, point 6).
+    // @source: adr-0037
+    pub(crate) const fn set_layer_output(&mut self, output: bool) {
+        self.settings.layer_output = output;
+    }
+
+    /// Whether layer output is on.
+    // @source: adr-0037
+    pub(crate) const fn layer_output(&self) -> bool {
+        self.settings.layer_output
+    }
+
+    /// The layers of the last presented frame: one entry per output line, none unless layer
+    /// output was on for the whole frame (ADR 0037, point 6).
+    // @source: adr-0037
+    pub(crate) fn layers(&self) -> &[LayerLine] {
+        &self.layer_frame
+    }
+
     /// Renders `line` on `ppu` into the frame being drawn. Line 1 starts a frame; a line
     /// that does not follow the one before marks the frame incomplete (ADR 0028,
-    /// point 10).
+    /// point 10). With render skip on the line is skipped instead, which makes its frame
+    /// incomplete, and with layer output on its layers are kept (ADR 0037).
     // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0028
+    // @source: adr-0037
     pub(crate) fn render(&mut self, ppu: &mut Ppu, line: u16) {
         if line == 1 {
             self.complete = true;
+            self.layers_complete = true;
         } else if line != self.next_line {
             self.complete = false;
         }
         self.next_line = line + 1;
+        if self.settings.render_skip {
+            self.complete = false;
+            ppu.skip_line(line);
+            return;
+        }
         let index = usize::from(line.saturating_sub(1));
         if self.lines.len() <= index {
             self.lines.resize_with(index + 1, LineOut::default);
         }
+        if self.settings.layer_output && self.layer_lines.len() <= index {
+            self.layer_lines.resize_with(index + 1, LayerLine::default);
+        }
+        let layers = if self.settings.layer_output {
+            self.layer_lines.get_mut(index)
+        } else {
+            self.layers_complete = false;
+            None
+        };
         if let Some(out) = self.lines.get_mut(index) {
-            ppu.render_line(line, out);
+            ppu.render_line_layers(line, out, layers);
         }
     }
 
@@ -98,6 +175,13 @@ impl Video {
                 self.frame.extend_from_within(start..);
             }
         }
+        if self.layers_complete {
+            mem::swap(&mut self.layer_frame, &mut self.layer_lines);
+            self.layer_frame.truncate(count);
+        } else {
+            self.layer_frame.clear();
+        }
+        self.layers_complete = false;
         self.width = u16::try_from(width.pixels()).unwrap_or(u16::MAX);
         self.height = u16::try_from(count * rows).unwrap_or(u16::MAX);
         self.field = (rows == 2).then_some(field);
@@ -107,6 +191,7 @@ impl Video {
     // @source: adr-0028
     pub(crate) const fn abandon(&mut self) {
         self.complete = false;
+        self.layers_complete = false;
     }
 
     /// The last presented frame; 0 × 0 before the first.
@@ -268,5 +353,58 @@ mod tests {
         }
         copy.present(224, Field::First);
         assert_eq!(copy.frame().width, 256);
+    }
+
+    // @source: adr-0028
+    // @source: adr-0037
+    #[test]
+    fn a_frame_with_a_skipped_line_is_not_presented_and_the_last_whole_frame_stays() {
+        let mut ppu = ppu(pixel(0x0005));
+        let mut video = Video::default();
+        for line in 1..=224 {
+            video.render(&mut ppu, line);
+        }
+        video.present(224, Field::First);
+        ppu.start_frame();
+        set_backdrop(&mut ppu, pixel(0x0006));
+        video.set_render_skip(true);
+        for line in 1..=224 {
+            video.render(&mut ppu, line);
+        }
+        video.present(224, Field::First);
+        assert_eq!(ppu.next_line(), 225);
+        let VideoFrame { pixels, .. } = video.frame();
+        assert!(pixels.iter().all(|&found| found == pixel(0x0005)));
+    }
+
+    // @source: adr-0037
+    #[test]
+    fn layers_are_kept_only_for_a_frame_drawn_whole_with_layer_output_on() {
+        let mut ppu = ppu(pixel(0x0007));
+        let mut video = Video::default();
+        video.set_layer_output(true);
+        for line in 1..=224 {
+            video.render(&mut ppu, line);
+        }
+        video.present(224, Field::First);
+        assert_eq!(video.layers().len(), 224);
+        // Turned off part-way through the next frame: its picture is presented, and no
+        // layers, so none are stale.
+        ppu.start_frame();
+        for line in 1..=224 {
+            if line == 100 {
+                video.set_layer_output(false);
+            }
+            video.render(&mut ppu, line);
+        }
+        video.present(224, Field::First);
+        assert_eq!(video.layers().len(), 0);
+        assert_eq!(video.frame().pixels.len(), 256 * 224);
+        // A copy keeps the settings and starts with empty buffers.
+        let copy = video.empty_like();
+        assert!(!copy.layer_output() && !copy.render_skip());
+        assert_eq!(copy.layers().len(), 0);
+        video.set_render_skip(true);
+        assert!(video.empty_like().render_skip());
     }
 }

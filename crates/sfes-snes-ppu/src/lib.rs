@@ -10,6 +10,8 @@
 //!   ADR 0029).
 //! - [`Signals`]: what the machine passes the PPU before each access to its registers.
 //! - [`LineOut`]: one rendered line, 256 or 512 pixels.
+//! - [`LayerLine`]: a line's per-layer images, on request, and [`Ppu::skip_line`] for render
+//!   skip (ADR 0037).
 //!
 //! The machine decodes addresses, syncs the PPU before each access to its registers and
 //! presents the rendered lines as frames (ADR 0028). `docs/chips/ppu.md` explains the chip
@@ -25,6 +27,7 @@ extern crate std;
 mod background;
 mod color_math;
 mod counters;
+mod layer;
 mod line;
 mod memory;
 mod mode7;
@@ -36,6 +39,7 @@ mod sprite;
 mod window;
 
 pub use crate::{
+    layer::{LAYER_COLUMNS, LayerKind, LayerLine},
     line::{LineOut, LineWidth},
     ppu::{CGRAM_SIZE, OAM_SIZE, Ppu, VRAM_SIZE},
     register::{NotAPpuRegister, ReadKind, Register},

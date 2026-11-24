@@ -1,6 +1,6 @@
 # The PPU (`sfes-snes-ppu`)
 
-This page explains the SNES's picture processing unit and how the crate models it (QA-08). It is written issue by issue during milestone M2: #89 to #95 so far. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
+This page explains the SNES's picture processing unit and how the crate models it (QA-08). It was written issue by issue during milestone M2, #89 to #98. Every statement cites its source, by its id in [`provenance/bibliography.toml`](../../provenance/bibliography.toml):
 
 - Anomie's register doc (`anomie-regs`), by register or heading path;
 - Anomie's timing doc (`anomie-timing`), by heading path;
@@ -267,6 +267,18 @@ The code is in [`background.rs`](../../crates/sfes-snes-ppu/src/background.rs) (
 - **Math on sub pixels.** A sub pixel is clipped, halved or not and given the fixed colour, or the main pixel to its left, as that main pixel was; column 0 has nothing to its left and none of it. The colour window effect is read from that main pixel too (`anomie-regs#rendering-the-screen/color-math`, `#2133`).
 - **Not modelled.** OBJ interlace (`$2133` bit 1) and fullsnes's window glitch in hi-res: the documents give no rule. Sprites are the same on both screens and in both fields.
 
+## Render skip and layer output
+
+Two outputs the hardware does not have, for emulation speed and for observations (EMU-06, WM-02; ADR 0037). Neither changes a register, a memory or the hash of a frame that is drawn.
+
+- **Render skip.** [`Ppu::skip_line`](../../crates/sfes-snes-ppu/src/ppu.rs) evaluates the sprites and moves on to the next line. Evaluation is the one step a skipped line keeps, because its range-over and time-over flags are readable in `$213E` (`fullsnes#snespputimersandstatus`, ADR 0033). No background is fetched and no pixel composed.
+- **No frame while skipping.** A frame with a skipped line is incomplete in the sense of the [frame geometry](#frame-geometry), so the machine presents nothing and `video()` keeps the last frame drawn whole. Turning skip off brings frames back at the next whole one.
+- **Layer images.** [`Ppu::render_line_layers`](../../crates/sfes-snes-ppu/src/ppu.rs) also fills a [`LayerLine`](../../crates/sfes-snes-ppu/src/layer.rs) for BG1 to BG4 and the sprites. Each layer is 256 columns of `Option<Rgb555>`: `None` where the layer is transparent, is absent from the mode or is on neither screen (`anomie-regs#212c`, `#212d`). It is the layer's pixel after scrolling, offset-per-tile, flips, mosaic and interlace and before windows, the layer order, clipping, math and brightness, so it is unaffected by a window or forced blank. In modes 5 and 6 it is what the main screen shows, the odd half-pixels.
+- **No cost when off.** A line passes no buffer and the capture is one skipped branch; the machine keeps no layer lines.
+- **In the machine.** `Snes::set_render_skip` and `set_layer_output` set them, `Snes::layers` returns the last whole frame's lines, one per output line and empty unless layer output was on for the whole frame. A clone keeps both settings and starts with empty buffers, as the frame does (ADR 0028, point 10).
+
+Not here: scroll offsets, mode 7's matrix, the decoded sprite table and the tilemaps of WM-02, which are registers and memory the machine already exposes.
+
 ## Frame geometry
 
 How lines are presented as a `VideoFrame` and hashed (ADR 0028, points 8 and 9):
@@ -300,6 +312,7 @@ Two alternatives were rejected. A fixed 512 × 478 canvas would cost four times 
 | [`mosaic.rs`](../../crates/sfes-snes-ppu/src/mosaic.rs) | `$2106` and each background's block corner |
 | [`counters.rs`](../../crates/sfes-snes-ppu/src/counters.rs) | The H/V counter latch, its flip-flops and the latch flag |
 | [`line.rs`](../../crates/sfes-snes-ppu/src/line.rs) | `LineOut` and `LineWidth`: one drawn line and its width |
+| [`layer.rs`](../../crates/sfes-snes-ppu/src/layer.rs) | `LayerLine` and `LayerKind`: a line's per-layer images, on request |
 
 The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror` (technical design section 12). The machine implements its bus's `Registers` trait for `Ppu` in [`bus/ppu.rs`](../../crates/sfes-snes-core/src/bus/ppu.rs).
 
@@ -312,10 +325,10 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
   - each line's width and colour;
   - each port's increments, translation and prefetch, with anomie's OAM examples;
   - which writes land in each period, the OAM reload, the multiplier and the status bits;
-  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, mode 7's matrix, scroll, centre, flips, fills and EXTBG, the sprites' sizes, record, rows, tile addresses, flips, planes, limits and flags, the windows' edges, inversion, logic and designation, `$2132`'s planes, the clip and prevent regions, which layers and sprite palettes take math, add, subtract, half and clamping, the sub screen and its backdrop, brightness, forced blank, mosaic blocks, a line's composition, mode 5 and 6 tiles and offsets, the two screens of a wide line, math on its sub pixels, half-pixel mosaic and interlaced rows.
-- **The machine's tests** cover reads through the bus, when lines are drawn, overscan and interlaced frames, the frame geometry, VRAM writes by period, the OAM reload at vertical blank, `$213F` through the bus and a DMA into VRAM ([`core.md`](core.md#testing)).
+  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, mode 7's matrix, scroll, centre, flips, fills and EXTBG, the sprites' sizes, record, rows, tile addresses, flips, planes, limits and flags, the windows' edges, inversion, logic and designation, `$2132`'s planes, the clip and prevent regions, which layers and sprite palettes take math, add, subtract, half and clamping, the sub screen and its backdrop, brightness, forced blank, mosaic blocks, a line's composition, mode 5 and 6 tiles and offsets, the two screens of a wide line, math on its sub pixels, half-pixel mosaic and interlaced rows, a skipped line's sprite flags, and the layer images (which layers, before windows and brightness, the sprites, and that they leave the line alone).
+- **The machine's tests** cover render skip and layer output (a skipped frame, the flags, the last frame kept, a clone's settings, layers kept only for a whole frame), reads through the bus, when lines are drawn, overscan and interlaced frames, the frame geometry, VRAM writes by period, the OAM reload at vertical blank, `$213F` through the bus and a DMA into VRAM ([`core.md`](core.md#testing)).
 
-- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2`, `bg-opt-mode4` and `bg-mode7` (`tests/carts/`) draw each mode, its offset-per-tile and mode 7's scaling, scroll and wrap, `hires` draws a mode 5 tile as sub and main half-pixels with colour math on both, `obj-sprites` draws overlapping and flipped sprites and sets range over, `windows` masks backgrounds by window logic, inversion and designation, and `color-math` adds the sub screen or the fixed colour with half-math, clips a tile in the colour window and pixelates a background; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
+- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2`, `bg-opt-mode4` and `bg-mode7` (`tests/carts/`) draw each mode, its offset-per-tile and mode 7's scaling, scroll and wrap, `hires` draws a mode 5 tile as sub and main half-pixels with colour math on both, `obj-sprites` draws overlapping and flipped sprites and sets range over, `windows` masks backgrounds by window logic, inversion and designation, and `color-math` adds the sub screen or the fixed colour with half-math, clips a tile in the colour window and pixelates a background; `obj-sprites` also serves render skip and layer output; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
 
 ## Decisions
 
@@ -330,5 +343,6 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
 | [0034](../adr/0034-windows.md) | The window registers, a layer's area from the two windows, inversion and logic, and masking by `$212E`, the sprite layer as a whole | high for the registers and logic; medium for masking the whole sprite layer; low for power-on values |
 | [0035](../adr/0035-colour-math-brightness-and-mosaic.md) | The sub screen and its backdrop, the colour window's clip and prevent regions, which pixels take math and how it blends, brightness and forced blank, and mosaic blocks | high for the registers, the blend and the colour window; medium for half and the mosaic geometry; low for brightness rounding, the block restart and power-on values |
 | [0036](../adr/0036-hi-res-pseudo-hi-res-and-interlace.md) | A wide line's two screens, the mode 5 and 6 tile, interlaced rows, half-pixel mosaic, math on sub pixels, and mode 6's offsets | high for the two screens and the tile; medium for mosaic and math; low for the field, the flip and column 0 |
+| [0037](../adr/0037-render-skip-and-per-layer-output.md) | Render skip keeps sprite evaluation and presents no frame, and the per-layer images: which layers, what a column holds, where they are kept | high for the evaluation and no cost when off; medium for no frame while skipping and the main-screen view; low for which layers and the 256-column width |
 
 ADR 0021, point 7 covers the counter latch, which moved into the PPU with this issue.
