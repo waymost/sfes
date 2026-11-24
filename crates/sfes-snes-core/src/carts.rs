@@ -339,9 +339,9 @@ fn hdma_cart_runs_a_direct_and_an_indirect_table_into_the_wram_port() {
 /// How many pixels of a row the background carts' tests compare.
 const PICTURE_PIXELS: usize = 64;
 
-// @source: adr-0013
 /// Runs a drawing cartridge until its picture is steady: its setup, which clears VRAM by DMA,
 /// takes more than a frame, and the frame after is whole.
+// @source: adr-0013
 fn drawn(rom: &[u8]) -> Snes<Fast> {
     let mut snes = Snes::<Fast>::builder(Arc::from(rom))
         .build()
@@ -351,8 +351,8 @@ fn drawn(rom: &[u8]) -> Snes<Fast> {
     snes
 }
 
-// @source: adr-0013
 /// The first 64 pixels of picture row `row`, as 15-bit colours. Row 0 is line 1.
+// @source: adr-0013
 fn picture_row(snes: &Snes<Fast>, row: usize) -> Vec<Rgb555> {
     let video = snes.video();
     assert_eq!(video.width, 256);
@@ -360,9 +360,9 @@ fn picture_row(snes: &Snes<Fast>, row: usize) -> Vec<Rgb555> {
     video.pixels[start..start + PICTURE_PIXELS].to_vec()
 }
 
+/// The first 64 pixels of row `row` of a 512-wide picture, as 15-bit colours.
 // @source: adr-0013
 // @source: adr-0036
-/// The first 64 pixels of row `row` of a 512-wide picture, as 15-bit colours.
 fn wide_row(snes: &Snes<Fast>, row: usize) -> Vec<Rgb555> {
     let video = snes.video();
     assert_eq!(video.width, 512);
@@ -370,8 +370,8 @@ fn wide_row(snes: &Snes<Fast>, row: usize) -> Vec<Rgb555> {
     video.pixels[start..start + PICTURE_PIXELS].to_vec()
 }
 
-// @source: adr-0013
 /// A row of runs `(colour, length)`, then `fill` to the end of the compared pixels.
+// @source: adr-0013
 fn runs(list: &[(Rgb555, usize)], fill: Rgb555) -> Vec<Rgb555> {
     let mut row = Vec::new();
     for &(color, length) in list {

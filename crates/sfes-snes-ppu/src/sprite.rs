@@ -433,10 +433,10 @@ mod tests {
         }
     }
 
-    // @source: anomie-regs#sprites/oam
-    // @source: adr-0033
     /// An OAM image with every sprite at Y 128, which no sprite of up to 64 rows reaches
     /// on the lines the tests use.
+    // @source: anomie-regs#sprites/oam
+    // @source: adr-0033
     fn oam() -> Vec<u8> {
         let mut oam = vec![0; 0x220];
         for record in oam.chunks_mut(4).take(128) {
@@ -445,9 +445,9 @@ mod tests {
         oam
     }
 
+    /// Sets sprite `index`: position, tile and attributes, with its high-table bits.
     // @source: anomie-regs#sprites/oam
     // @source: adr-0033
-    /// Sets sprite `index`: position, tile and attributes, with its high-table bits.
     fn put(oam: &mut [u8], index: usize, x: i16, y: u8, tile: u8, attributes: u8, large: bool) {
         let [x_low, x_high] = x.to_le_bytes();
         oam[index * 4] = x_low;
@@ -556,9 +556,9 @@ mod tests {
         assert_eq!(Sprite::read(&oam, 3 << 5, 1).source_row(9), 9);
     }
 
+    /// Writes 4-bit tile row `row` of the tile at word `first`: the left pixel is bit 7.
     // @source: fullsnes#snesppuvideomemoryvram
     // @source: adr-0033
-    /// Writes 4-bit tile row `row` of the tile at word `first`: the left pixel is bit 7.
     fn tile_row(vram: &mut [u8], first: usize, row: usize, planes: [u8; 4]) {
         let low = (first + row) * 2;
         let high = (first + 8 + row) * 2;
