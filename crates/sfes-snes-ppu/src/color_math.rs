@@ -24,10 +24,6 @@ const CLIP_SHIFT: u8 = 6;
 const PREVENT_SHIFT: u8 = 4;
 /// A region field is two bits.
 const REGION_MASK: u8 = 0x03;
-/// `$2130` bit 1: add the sub screen instead of the fixed colour.
-const ADD_SUB_SCREEN: u8 = 0x02;
-/// `$2130` bit 0: direct colour.
-const DIRECT_COLOR: u8 = 0x01;
 /// The channels of a colour, each 5 bits.
 const CHANNEL_MAX: u8 = 31;
 /// `$2132` bit 5: the intensity goes into red; green and blue are the next bits up.
@@ -38,6 +34,63 @@ const FIXED_INTENSITY: u8 = 0x1F;
 const FIRST_MATH_SPRITE_ENTRY: u8 = 192;
 /// `$2100` bits 3–0: the brightness.
 const BRIGHTNESS_MASK: u8 = 0x0F;
+
+bitflags::bitflags! {
+    /// `$2130 CGWSEL` bits 1–0: the other operand and direct colour. Bits 7–4 are two
+    /// [`Region`]s.
+    // @source: anomie-regs#2130
+    // @source: fullsnes#snesppucolormath
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct Select: u8 {
+        /// Bit 0: direct colour for 256-colour backgrounds.
+        const DIRECT_COLOR = 0x01;
+        /// Bit 1: add the sub screen instead of the fixed colour.
+        const ADD_SUB_SCREEN = 0x02;
+    }
+}
+
+/// Where a `$2130` region field holds, by the colour window's area; each variant's value is
+/// the field (ADR 0035, point 4).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(u8)]
+enum Region {
+    /// Nowhere.
+    #[default]
+    Never = 0,
+    /// Outside the colour window.
+    Outside = 1,
+    /// Inside the colour window.
+    Inside = 2,
+    /// Everywhere.
+    Always = 3,
+}
+
+impl Region {
+    /// The region the two bits of `value` at `shift` name.
+    // @source: anomie-regs#2130
+    // @source: fullsnes#snesppucolormath
+    const fn from_field(value: u8, shift: u8) -> Self {
+        match value >> shift & REGION_MASK {
+            0 => Self::Never,
+            1 => Self::Outside,
+            2 => Self::Inside,
+            _ => Self::Always,
+        }
+    }
+
+    /// Whether the region holds where the colour window's area is `area`.
+    // @source: anomie-regs#2130
+    // @source: anomie-regs#windows
+    // @source: adr-0035
+    const fn holds(self, area: bool) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Outside => !area,
+            Self::Inside => area,
+            Self::Always => true,
+        }
+    }
+}
 
 bitflags::bitflags! {
     /// `$2131 CGADSUB` bits 7–5: how math is done, and whether the backdrop takes it. Bits
@@ -104,8 +157,12 @@ impl Previous {
 /// `$2130–$2132`: the colour math registers and the fixed colour.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ColorMath {
-    /// `$2130 CGWSEL`: clip and prevent regions, the sub screen and direct colour.
-    select: u8,
+    /// `$2130 CGWSEL` bits 7–6: where the main pixel is clipped to black.
+    clip: Region,
+    /// `$2130 CGWSEL` bits 5–4: where math is prevented.
+    prevent: Region,
+    /// `$2130 CGWSEL` bits 1–0: the sub screen and direct colour.
+    select: Select,
     /// `$2131 CGADSUB` bits 4–0: the layers that take math.
     layers: Layers,
     /// `$2131 CGADSUB` bits 7–5: add or subtract, half, and the backdrop.
@@ -120,7 +177,9 @@ impl ColorMath {
     // @source: adr-0035
     pub(crate) const fn power_on() -> Self {
         Self {
-            select: 0,
+            clip: Region::Never,
+            prevent: Region::Never,
+            select: Select::empty(),
             layers: Layers::empty(),
             operation: Operation::empty(),
             fixed: Rgb555::BLACK,
@@ -135,7 +194,11 @@ impl ColorMath {
     // @source: adr-0035
     pub(crate) fn write(&mut self, register: Register, value: u8) {
         match register {
-            Register::ColorMathSelect => self.select = value,
+            Register::ColorMathSelect => {
+                self.clip = Region::from_field(value, CLIP_SHIFT);
+                self.prevent = Region::from_field(value, PREVENT_SHIFT);
+                self.select = Select::from_bits_truncate(value);
+            }
             Register::ColorMathDesignation => {
                 self.layers = Layers::from_bits_truncate(value);
                 self.operation = Operation::from_bits_truncate(value);
@@ -163,7 +226,7 @@ impl ColorMath {
     // @source: anomie-regs#2130
     // @source: fullsnes#snesppucolormath
     pub(crate) const fn direct_color(self) -> bool {
-        self.select & DIRECT_COLOR != 0
+        self.select.contains(Select::DIRECT_COLOR)
     }
 
     /// Whether any layer takes math, so the sub screen can matter.
@@ -177,7 +240,7 @@ impl ColorMath {
     // @source: anomie-regs#2130
     // @source: fullsnes#snesppucolormath
     pub(crate) const fn adds_sub_screen(self) -> bool {
-        self.select & ADD_SUB_SCREEN != 0
+        self.select.contains(Select::ADD_SUB_SCREEN)
     }
 
     /// The fixed colour.
@@ -187,26 +250,12 @@ impl ColorMath {
         self.fixed
     }
 
-    /// Whether a region field of `$2130` holds at a place where the colour window's area is
-    /// `area`: never, outside, inside, always (ADR 0035, point 4).
-    // @source: anomie-regs#2130
-    // @source: fullsnes#snesppucolormath
-    // @source: adr-0035
-    const fn region(field: u8, area: bool) -> bool {
-        match field & REGION_MASK {
-            0 => false,
-            1 => !area,
-            2 => area,
-            _ => true,
-        }
-    }
-
     /// Whether the main pixel is clipped to black where the colour window's area is `area`.
     // @source: anomie-regs#2130
     // @source: anomie-regs#windows
     // @source: adr-0035
     pub(crate) const fn clips(self, area: bool) -> bool {
-        Self::region(self.select >> CLIP_SHIFT, area)
+        self.clip.holds(area)
     }
 
     /// Whether math is prevented where the colour window's area is `area`.
@@ -214,7 +263,7 @@ impl ColorMath {
     // @source: anomie-regs#windows
     // @source: adr-0035
     pub(crate) const fn prevents(self, area: bool) -> bool {
-        Self::region(self.select >> PREVENT_SHIFT, area)
+        self.prevent.holds(area)
     }
 
     /// Whether a main pixel from `source` takes math: its layer's bit in `$2131` is set,
