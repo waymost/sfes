@@ -1367,7 +1367,7 @@ fn vram_writes_land_only_in_blanking() {
 
 // @source: anomie-regs#2102
 // @source: anomie-regs#2138
-// @source: anomie-timing#oam-reset
+// @source: anomie-timing#s-ppu/oam-reset
 // @source: fullsnes#snesmemoryoamaccessspriteattributes
 // @source: adr-0029
 #[test]

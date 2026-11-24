@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-11-22
+- **Amended:** 2026-11-24: cites the OAM reset section by its full heading path, `anomie-timing#s-ppu/oam-reset`.
 - **Confidence:**
   - high: the VRAM, CGRAM and OAM port mechanics, the multiplier, and the bits of `$213E` and `$213F` (points 3 to 5, 8 to 10);
   - medium: when the OAM address is reloaded (point 6), and the reset value of `$2100` (point 2);
@@ -31,7 +32,7 @@ The documents agree on the port mechanics. They are silent or disagree on:
 - **anomie-regs#2104**: "the low table of OAM is not affected until the high byte of a word is written (however, the high table is affected immediately)"; the worked example "01 02 01 03". Writing during H-blank is possible, but the byte written "will probably not be what you expect". Flags `wb++--`.
 - **anomie-regs#sprites/oam**: OAM is a 512-byte low table and a 32-byte high table; "only the low 4 bits of $2102 are significant for indexing this table". The internal address has 10 bits, "with bit 9 selecting the table". The reload also occurs "on a 1->0 transition of $2100.7". A second worked example: "Write 1, read, read, Write 2, read, write 3 => OAM is 00 00 01 02 01 03".
 - **anomie-regs#2100**: writing `$2100` on the first line of V-Blank while force blank is active "causes the OAM Address Reset to occur".
-- **anomie-timing#oam-reset**: at the beginning of V-Blank, if force blank is off, the internal OAM address is reset to the value last written to `$2102–$2103`; the doc reports a claim that this occurs at H=10 of line 225 or 240, and on any 1→0 transition of `$2100` bit 7.
+- **anomie-timing#s-ppu/oam-reset**: at the beginning of V-Blank, if force blank is off, the internal OAM address is reset to the value last written to `$2102–$2103`; the doc reports a claim that this occurs at H=10 of line 225 or 240, and on any 1→0 transition of `$2100` bit 7.
 - **fullsnes#snesmemoryoamaccessspriteattributes**: a 9-bit reload value and a 10-bit address register; writing `$2102` or `$2103` copies the reload value to the address "with address Bit0=0". The reload at the beginning of V-Blank happens "only if not in Forced Blank mode", and "also when deactivating forced blank anytime during the first scanline of vblank". A table: a write to an even address sets `OAM_Lsb`; a write to an odd address below `$200` sets the word to `Data*256 + OAM_Lsb`; a write to any address above `$1FF` sets the byte; a read returns the byte. Addresses `$220–$3FF` mirror `$200–$21F`.
 - **anomie-regs#2115**: bit 7 chooses whether the address increments after `$2118`/`$2139` or after `$2119`/`$213A`; bits 1–0 the step, 1, 32, 128, 128; bits 3–2 remap `aaaaaaaaBBBccccc` to `aaaaaaaacccccBBB` and the 9- and 10-bit forms. "If $2116/7 are set to #$0003, then word address #$0018 will be written instead, and $2116/7 will be incremented to $0004." Flags `wb++?-`.
 - **anomie-regs#2116, #2117**: a word address for `$2118/9` and `$2139/a`. Flags `wl++?-`, `wh++?-`.
@@ -84,7 +85,7 @@ No test ROM or oracle output settles the open questions yet.
    - at the start of vertical blank, if forced blank is off;
    - on a write to `$2100` that clears bit 7 while it was set, at any time.
 
-   The second rule is anomie's (`#sprites/oam`, `anomie-timing#oam-reset`); it includes fullsnes's narrower case, deactivating forced blank on the first line of vertical blank. Not modelled:
+   The second rule is anomie's (`#sprites/oam`, `anomie-timing#s-ppu/oam-reset`); it includes fullsnes's narrower case, deactivating forced blank on the first line of vertical blank. Not modelled:
    - the reported H=10 for the first rule; the reload happens at H=0, with the frame's other vertical-blank events;
    - anomie-regs#2100's reload on any write to `$2100` during that line while forced blank is on;
    - the address's invalidation during rendering, which no source describes.

@@ -97,9 +97,11 @@ const fn clip(difference: i32) -> i32 {
 }
 
 impl Mode7 {
-    /// The registers at power-on: all `$FF` (ADR 0029, point 8). Reset keeps them.
+    /// The registers at power-on: the latch `$FF` and M7A and M7B `$FFFF` (ADR 0029,
+    /// point 8), every other register 0 (ADR 0032, point 1). Reset keeps them.
     // @source: fullsnes#snesiomap
     // @source: adr-0029
+    // @source: adr-0032
     pub(crate) const fn power_on() -> Self {
         let word = u16::from_le_bytes([POWER_ON, POWER_ON]);
         Self {

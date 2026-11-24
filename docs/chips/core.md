@@ -129,7 +129,6 @@ In emulation mode a read-modify-write instruction writes twice: first the value 
 Until M4 (ADR 0018, point 6):
 
 - **Watches.** `Stop::Watch` runs to its frame limit, since watches arrive in M4.
-- **Video.** The PPU draws only the backdrop until the layers arrive, so a frame is one colour, CGRAM entry 0 (ADR 0028, point 7).
 
 ### Test cartridge
 
@@ -506,7 +505,7 @@ The bus draws the PPU's lines and presents its frames ([`video.rs`](../../crates
   - it is 512 wide if any line was, and a 256-pixel line then has each pixel twice;
   - it is as many rows high as it has lines, or twice that if any line was interlaced, each line then filling two rows;
   - an interlaced frame shows only its own field and names it in `field`.
-- **The OAM address.** When vertical blank begins, the PPU reloads its OAM address unless forced blank is on (`anomie-timing#oam-reset`; ADR 0029, point 6).
+- **The OAM address.** When vertical blank begins, the PPU reloads its OAM address unless forced blank is on (`anomie-timing#s-ppu/oam-reset`; ADR 0029, point 6).
 - **Outputs.** The lines and the presented frame are outputs, not state. They live in the bus; `Video` is not `Clone`, and the bus's own clone starts it empty. A frame is presented only if every line was drawn into this machine's outputs, so a clone taken after some lines were drawn, or a reset, presents nothing for that frame, and `video()` keeps the frame before (point 10). A clone keeps the two settings below and starts with empty buffers (ADR 0037).
 - **Render skip and layers.** With `set_render_skip(true)` each line only evaluates its sprites, so its frame is incomplete and nothing is presented. With `set_layer_output(true)` each drawn line also fills a `LayerLine`, and `layers()` returns those of the last whole frame, empty unless layer output was on for all of its lines ([`ppu.md`](ppu.md#render-skip-and-layer-output); ADR 0037).
 

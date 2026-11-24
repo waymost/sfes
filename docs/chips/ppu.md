@@ -43,7 +43,7 @@ The crate models both chips as one `Ppu`. It holds no reference to the machine: 
 - **The memories.** Each is a heap-allocated byte slice, never built on the stack (technical design section 5). No source says what they hold at power-on, so they are filled from the machine's power-on stream, continuing after WRAM: VRAM, then CGRAM, then OAM (FND-02; ADR 0028, point 1). The machine exposes them as `RegionId::Vram`, `Cgram` and `Oam`.
 - **The registers.** fullsnes's I/O map gives each register's value at reset, and in brackets the ones reset leaves unchanged, with their power-on value (`fullsnes#snesiomap`). `$2105` is "(xFh)", kept on reset; its unknown high nibble is taken as 0. `$2133` is "00h?" (ADR 0028, point 5).
 - **The ports' values.** fullsnes gives `$2100` as "8xh", `$2115` as "(?Fh)" and `$211B/$211C` as "(FFh)(w2)"; the unknown nibbles are taken as 0. The other port values are "(?)": 0 at power-on, a project choice, and kept on reset (ADR 0029, points 2, 3, 8 and 12).
-- **What is kept so far.** Besides the ports, the PPU keeps `$2100`, `$2105`, `$2133`, `$2101` and the registers of the backgrounds and mode 7. `$2106`, `$212C–$212F` and `$2130–$2132` are kept too (ADR 0035). Writes to the other registers have no effect until their issues.
+- **What is kept.** Besides the ports, the PPU keeps every register it has: `$2100`, `$2101`, `$2105` and `$2133`, the backgrounds' and Mode 7's, mosaic's `$2106`, the windows' `$2123–$212B`, `$212E` and `$212F`, `$212C` and `$212D` (their low 5 bits), and `$2130–$2132` (ADR 0030 to ADR 0035). Writes to the read-only registers `$2134–$213F` are ignored.
 
 ## Registers
 
@@ -126,8 +126,8 @@ A write outside those periods changes no memory, but the port still runs: the ad
 
 The OAM address is reloaded from the reload value (ADR 0029, point 6):
 
-- when vertical blank begins, unless forced blank is on (`anomie-regs#2102`, `anomie-timing#oam-reset`);
-- when a `$2100` write clears forced blank (`anomie-regs#sprites/oam`, `anomie-timing#oam-reset`).
+- when vertical blank begins, unless forced blank is on (`anomie-regs#2102`, `anomie-timing#s-ppu/oam-reset`);
+- when a `$2100` write clears forced blank (`anomie-regs#sprites/oam`, `anomie-timing#s-ppu/oam-reset`).
 
 fullsnes limits the second case to the first line of vertical blank (`fullsnes#snesmemoryoamaccessspriteattributes`); anomie does not. Not modelled: the reported H=10 of the first case, anomie-regs#2100's reload on any `$2100` write during that line, and the scrambling of the address during rendering, which no source describes.
 
@@ -229,7 +229,7 @@ In modes 2 and 4 BG3 is not drawn: its tilemap holds the scrolls of BG1 and BG2 
 - **Sizes.** `$2101 OBSEL` bits 7–5 pick the small and large sizes: 8×8 and 16×16, 8×8 and 32×32, 8×8 and 64×64, 16×16 and 32×32, 16×16 and 64×64, 32×32 and 64×64, and the undocumented 16×32 and 32×64, and 16×32 and 32×32 (`anomie-regs#2101`).
 - **Which lines.** A sprite is on line `L` when `(L − 1 − Y) mod 256` is below its height, so Y 0 starts on line 1 and a tall sprite wraps from the bottom edge to the top. This rests on fullsnes setting the flag at `YLOC + 1` and anomie's line 0 that is not output.
 - **Tiles.** Characters are in two 16×16 tables that wrap without carries. The first word of a sprite's first tile is `((base << 13) + (tile << 4) + (N ? (name + 1) << 12 : 0)) & $7FFF`. A flip turns the whole sprite; a rectangular sprite flips vertically as two squares (`anomie-regs#sprites`). A pixel is 4 bits, 0 is transparent, and the colour is CGRAM `128 + palette × 16 + pixel`.
-- **Per line.** Evaluation takes the first 32 sprites in range from the front sprite, wrapping at 127, and sets range over for a 33rd. It then loads up to 34 of their tiles, from the last sprite to the first, left to right, counting only tiles with X above −8 and below 256, and sets time over beyond that. An X of −256 counts as 0 for both but keeps its true place for drawing. Evaluation always runs; the pixels are drawn only when `$212C` bit 4 is set (`anomie-regs#sprites/drawing-the-sprites`).
+- **Per line.** Evaluation takes the first 32 sprites in range from the front sprite, wrapping at 127, and sets range over for a 33rd. It then loads up to 34 of their tiles, from the last sprite to the first, left to right, counting only tiles with X above −8 and below 256, and sets time over beyond that. An X of −256 counts as 0 for both but keeps its true place for drawing. Evaluation always runs; the pixels are drawn only when `$212C` or `$212D` bit 4 puts the sprites on a screen that is looked at (`anomie-regs#sprites/drawing-the-sprites`).
 - **Priority.** The front sprite is sprite 0, or with `$2103` bit 7 the sprite `(OAM byte address >> 2) & 127`. Among the loaded tiles the sprite nearer the front covers the others, and its OAM priority picks the sprite's place in the mode's order.
 - The line a sprite starts on, which tiles time over drops, evaluation in forced blank and the power-on values are the least certain points; see the ADR. anomie's "major oddity" of the rotation is not modelled.
 
@@ -247,7 +247,7 @@ In modes 2 and 4 BG3 is not drawn: its tilemap holds the scrolls of BG1 and BG2 
 
 [`color_math.rs`](../../crates/sfes-snes-ppu/src/color_math.rs) and [`mosaic.rs`](../../crates/sfes-snes-ppu/src/mosaic.rs) hold the registers, and `render_line` puts them to use (ADR 0035).
 
-- **Two screens.** The main screen's pixel is the front one of `$212C`'s layers, the sub screen's of `$212D`'s, each with its own window mask (`$212E`, `$212F`); the main backdrop is CGRAM entry 0 and the sub backdrop the fixed colour of `$2132`. The sub screen is only looked at when `$2130` bit 1 and `$2131` ask for it.
+- **Two screens.** The main screen's pixel is the front one of `$212C`'s layers, the sub screen's of `$212D`'s, each with its own window mask (`$212E`, `$212F`); the main backdrop is CGRAM entry 0 and the sub backdrop the fixed colour of `$2132`. The sub screen is looked at when `$2130` bit 1 and `$2131` ask for it, and on every wide line (ADR 0036).
 - **The colour window.** Its area, from `$2125` and `$212B`, picks where `$2130` bits 7 to 6 clip the main pixel to black and bits 5 to 4 prevent math: never, outside, inside or always (`anomie-regs#2130`). fullsnes numbers the math field the other way round, to the same effect.
 - **Math.** A pixel of BG1 to BG4, the sprites or the backdrop takes math when its bit in `$2131` is set; a sprite with palette 0 to 3 never does. The other operand is the fixed colour, or the sub screen's pixel with `$2130` bit 1. Per channel it adds or subtracts, halves (rounding down) if asked, and clamps to 0 to 31. A clipped pixel, and the fixed colour standing in for the sub backdrop, are not halved.
 - **Brightness and forced blank.** Forced blank makes the line black; otherwise each channel is scaled by `(N + 1) / 16` for brightness `N`, and 0 is black. Power-on forced blank means a PPU draws black until a game turns the screen on.

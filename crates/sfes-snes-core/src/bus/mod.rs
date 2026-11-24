@@ -708,7 +708,7 @@ impl Bus {
     /// (ADR 0028, points 6 and 8), and the OAM address is reloaded unless forced blank is
     /// on (ADR 0029, point 6).
     // @source: anomie-regs#213f
-    // @source: anomie-timing#oam-reset
+    // @source: anomie-timing#s-ppu/oam-reset
     // @source: anomie-timing#s-ppu/blanking-periods
     // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0028
