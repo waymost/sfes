@@ -18,6 +18,7 @@
 //! area is read by colour math.
 
 use crate::{
+    background::HalfPixel,
     layer::{LayerKind, Layers},
     register::Register,
 };
@@ -45,6 +46,17 @@ pub(crate) enum Screen {
     Main,
     /// The sub screen, with `$212F`.
     Sub,
+}
+
+impl From<Screen> for HalfPixel {
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: adr-0036
+    fn from(screen: Screen) -> Self {
+        match screen {
+            Screen::Main => Self::Odd,
+            Screen::Sub => Self::Even,
+        }
+    }
 }
 
 /// How two windows combine; each variant's value is the register's field.

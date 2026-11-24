@@ -324,6 +324,18 @@ pub(crate) struct Sample {
     pub(crate) high: bool,
 }
 
+/// Which half-pixel of each pair a hi-res tile's column shows: the main screen shows the
+/// odd ones and the sub screen the even ones (ADR 0036, point 3). Each variant's value is
+/// the half-pixel's place in its pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub(crate) enum HalfPixel {
+    /// The left half-pixel, the sub screen's.
+    Even = 0,
+    /// The right half-pixel, the main screen's.
+    Odd = 1,
+}
+
 /// Where a pixel's colour comes from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Color {
@@ -566,9 +578,8 @@ impl Backgrounds {
     /// What `background` shows at column `x` of `line`, or `None` where it is transparent
     /// or not drawn in this mode: scrolled by its registers, wrapped at its edges. In
     /// modes 5 and 6 a tile is 16 half-pixels wide and `half` picks the column of each
-    /// pair the pixel shows, 1 for the main screen and 0 for the sub screen (ADR 0036,
-    /// point 3); `line` is then a row in half-lines if interlace says so. Other modes
-    /// ignore `half`.
+    /// pair the pixel shows (ADR 0036, point 3); `line` is then a row in half-lines if
+    /// interlace says so. Other modes ignore `half`.
     // @source: anomie-regs#backgrounds/bg-scrolling
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: anomie-regs#backgrounds/direct-color-mode
@@ -586,7 +597,7 @@ impl Backgrounds {
         background: Background,
         x: u16,
         line: u16,
-        half: u16,
+        half: HalfPixel,
     ) -> Option<Sample> {
         let mode = setup.background_mode.mode;
         let depth = depth(mode, background)?;
@@ -605,7 +616,7 @@ impl Backgrounds {
 
         let entry = self.entry(vram, background, across / width, down / height);
         let mut column = if hires {
-            across % width * 2 + half % 2
+            across % width * 2 + half as u16
         } else {
             across % width
         };
@@ -732,7 +743,8 @@ mod tests {
         vram[0x801] = 0x08;
         // Pixels 0 to 3 are colours 1, 2, 3, 0 and the rest 0.
         two_bit_row(&mut vram, 1, 0, 0b1010_0000, 0b0110_0000);
-        let sample = |x| backgrounds.sample(&vram, setup(0), Background::One, x, 0, 0);
+        let sample =
+            |x| backgrounds.sample(&vram, setup(0), Background::One, x, 0, HalfPixel::Even);
         assert_eq!(sample(0).map(|s| s.color), Some(Color::Palette(8 + 1)));
         assert_eq!(sample(1).map(|s| s.color), Some(Color::Palette(8 + 2)));
         assert_eq!(sample(2).map(|s| s.color), Some(Color::Palette(8 + 3)));
@@ -765,7 +777,7 @@ mod tests {
         }
         let color = |mode, background| {
             backgrounds
-                .sample(&vram, setup(mode), background, 0, 0, 0)
+                .sample(&vram, setup(mode), background, 0, 0, HalfPixel::Even)
                 .map(|s| s.color)
         };
         // Mode 0: palette * 4 and 32 for each background before (data 3 = both planes).
@@ -817,7 +829,7 @@ mod tests {
             background_mode: BackgroundMode::from(3),
             direct_color: true,
         };
-        let sample = backgrounds.sample(&vram, direct, Background::One, 0, 0, 0);
+        let sample = backgrounds.sample(&vram, direct, Background::One, 0, 0, HalfPixel::Even);
         assert_eq!(
             sample.map(|s| s.color),
             Some(Color::Direct(Rgb555::from_bits_truncate(0x73DE)))
@@ -878,7 +890,7 @@ mod tests {
         backgrounds.write(Register::Background1HorizontalScroll, 0xFF);
         backgrounds.write(Register::Background1HorizontalScroll, 0x01);
         // HOFS 511: pixel 0 is column 511, the last of the map; pixel 1 wraps to 0.
-        let at = |x| backgrounds.sample(&vram, setup(0), Background::One, x, 0, 0);
+        let at = |x| backgrounds.sample(&vram, setup(0), Background::One, x, 0, HalfPixel::Even);
         assert_eq!(at(1).map(|s| s.color), Some(Color::Palette(1)));
         assert_eq!(at(0), None);
     }
@@ -900,7 +912,7 @@ mod tests {
         let large = setup(0x10);
         let at = |x, line| {
             backgrounds
-                .sample(&vram, large, Background::One, x, line, 0)
+                .sample(&vram, large, Background::One, x, line, HalfPixel::Even)
                 .map(|s| s.color)
         };
         assert_eq!(at(0, 0), Some(Color::Palette(1)));
@@ -912,7 +924,7 @@ mod tests {
         vram[0x801] = 0xC0;
         let at = |x, line| {
             backgrounds
-                .sample(&vram, large, Background::One, x, line, 0)
+                .sample(&vram, large, Background::One, x, line, HalfPixel::Even)
                 .map(|s| s.color)
         };
         assert_eq!(at(15, 15), Some(Color::Palette(1)));
@@ -959,7 +971,7 @@ mod tests {
         let large = setup(2);
         let at = |backgrounds: &Backgrounds, background, x, line| {
             backgrounds
-                .sample(&vram, large, background, x, line, 0)
+                .sample(&vram, large, background, x, line, HalfPixel::Even)
                 .map(|s| s.color)
         };
         // Tile 0 is as normal; tile 1 of BG1: column 3 of the row below.
@@ -996,7 +1008,7 @@ mod tests {
         backgrounds.horizontal[0] = 3;
         let at = |x| {
             backgrounds
-                .sample(&vram, large, Background::One, x, 0, 0)
+                .sample(&vram, large, Background::One, x, 0, HalfPixel::Even)
                 .map(|s| s.color)
         };
         assert_eq!(at(4), Some(Color::Palette(1)));
@@ -1026,7 +1038,7 @@ mod tests {
         put(&mut vram, 0x801, 0xC000 | 8);
         let at = |x| {
             backgrounds
-                .sample(&vram, setup(4), Background::Two, x, 0, 0)
+                .sample(&vram, setup(4), Background::Two, x, 0, HalfPixel::Even)
                 .map(|s| s.color)
         };
         assert_eq!(at(0), Some(Color::Palette(1)));
@@ -1035,7 +1047,7 @@ mod tests {
         assert_eq!(at(16), Some(Color::Palette(2 * 4 + 2)));
         // BG3 only supplies offsets in mode 4 and shows nothing itself.
         assert_eq!(
-            backgrounds.sample(&vram, setup(4), Background::Three, 8, 0, 0),
+            backgrounds.sample(&vram, setup(4), Background::Three, 8, 0, HalfPixel::Even),
             None
         );
     }
@@ -1101,13 +1113,21 @@ mod tests {
         // The sub screen shows the even half-pixels, 0 to 14: pixels 0 to 3 are the left
         // character's even columns, and 4 to 7 the right's, which are clear.
         for x in 0..4 {
-            assert_eq!(at(&backgrounds, x, 0), Some(Color::Palette(1)), "sub {x}");
-            assert_eq!(at(&backgrounds, x, 1), None, "main {x}");
+            assert_eq!(
+                at(&backgrounds, x, HalfPixel::Even),
+                Some(Color::Palette(1)),
+                "sub {x}"
+            );
+            assert_eq!(at(&backgrounds, x, HalfPixel::Odd), None, "main {x}");
         }
         // The main screen shows the odd ones: the right character's odd columns.
         for x in 4..8 {
-            assert_eq!(at(&backgrounds, x, 0), None, "sub {x}");
-            assert_eq!(at(&backgrounds, x, 1), Some(Color::Palette(2)), "main {x}");
+            assert_eq!(at(&backgrounds, x, HalfPixel::Even), None, "sub {x}");
+            assert_eq!(
+                at(&backgrounds, x, HalfPixel::Odd),
+                Some(Color::Palette(2)),
+                "main {x}"
+            );
         }
         // A horizontal flip turns the 16 half-pixels, so the screens swap columns.
         vram[0x801] = 0x40;
@@ -1116,10 +1136,10 @@ mod tests {
                 .sample(&vram, setup(5), Background::Two, x, 0, half)
                 .map(|s| s.color)
         };
-        assert_eq!(at(0, 0), Some(Color::Palette(2)));
-        assert_eq!(at(4, 0), None);
-        assert_eq!(at(0, 1), None);
-        assert_eq!(at(4, 1), Some(Color::Palette(1)));
+        assert_eq!(at(0, HalfPixel::Even), Some(Color::Palette(2)));
+        assert_eq!(at(4, HalfPixel::Even), None);
+        assert_eq!(at(0, HalfPixel::Odd), None);
+        assert_eq!(at(4, HalfPixel::Odd), Some(Color::Palette(1)));
     }
 
     // @source: anomie-regs#backgrounds/mode-5
@@ -1140,7 +1160,7 @@ mod tests {
         let at = |control, x, line| {
             let setup = setup(control);
             backgrounds
-                .sample(&vram, setup, Background::Two, x, line, 0)
+                .sample(&vram, setup, Background::Two, x, line, HalfPixel::Even)
                 .map(|s| s.color)
         };
         // 8x8 characters: a tile is 16x8 half-pixels, so the next entry starts at pixel 8.
@@ -1187,18 +1207,18 @@ mod tests {
                 .map(|s| s.color)
         };
         // Pixel 0 is tile 0, which takes no offset.
-        assert_eq!(at(0, 1), Some(Color::Palette(1)));
+        assert_eq!(at(0, HalfPixel::Odd), Some(Color::Palette(1)));
         // Pixel 8 is BG1's tile 1, with BG3's column 0 entry: 8 right, map column 2.
-        assert_eq!(at(8, 0), Some(Color::Palette(2 * 16 + 1)));
+        assert_eq!(at(8, HalfPixel::Even), Some(Color::Palette(2 * 16 + 1)));
         // Pixel 16 uses BG3's column 1 entry, one 8-pixel column on whatever BG3's size bit
         // says: 16 right, map column 4.
-        assert_eq!(at(16, 0), Some(Color::Palette(4 * 16 + 1)));
+        assert_eq!(at(16, HalfPixel::Even), Some(Color::Palette(4 * 16 + 1)));
         // Half-pixels 8 to 15 of a tile are the right character.
-        assert_eq!(at(4, 0), Some(Color::Palette(2)));
+        assert_eq!(at(4, HalfPixel::Even), Some(Color::Palette(2)));
         // BG3 itself is not drawn.
         let setup = setup(control);
         assert_eq!(
-            backgrounds.sample(&vram, setup, Background::Three, 0, 0, 0),
+            backgrounds.sample(&vram, setup, Background::Three, 0, 0, HalfPixel::Even),
             None
         );
     }

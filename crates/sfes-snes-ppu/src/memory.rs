@@ -33,7 +33,7 @@ const VRAM_CONTROL_POWER_ON: u8 = 0x0F;
 
 /// One byte of a 16-bit port.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Half {
+pub(crate) enum PortByte {
     /// The low byte: `$2118` or `$2139`.
     Low,
     /// The high byte: `$2119` or `$213A`.
@@ -112,7 +112,7 @@ impl Step {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct VramControl {
     /// The byte whose access increments the address.
-    increment_on: Half,
+    increment_on: PortByte,
     /// The address translation.
     translation: Translation,
     /// The increment.
@@ -125,9 +125,9 @@ impl VramControl {
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     const fn from_byte(control: u8) -> Self {
         let increment_on = if control & INCREMENT_ON_HIGH == 0 {
-            Half::Low
+            PortByte::Low
         } else {
-            Half::High
+            PortByte::High
         };
         Self {
             increment_on,
@@ -173,11 +173,11 @@ impl VramPort {
     // @source: anomie-regs#2117
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     // @source: adr-0029
-    pub(crate) fn write_address(&mut self, vram: &[u8], half: Half, value: u8) {
+    pub(crate) fn write_address(&mut self, vram: &[u8], byte: PortByte, value: u8) {
         let [low, high] = self.address.to_le_bytes();
-        self.address = match half {
-            Half::Low => u16::from_le_bytes([value, high]),
-            Half::High => u16::from_le_bytes([low, value]),
+        self.address = match byte {
+            PortByte::Low => u16::from_le_bytes([value, high]),
+            PortByte::High => u16::from_le_bytes([low, value]),
         };
         self.prefetch = self.load(vram);
     }
@@ -188,11 +188,11 @@ impl VramPort {
     // @source: anomie-regs#2119
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     // @source: adr-0029
-    pub(crate) fn write_data(&mut self, vram: &mut [u8], half: Half, value: u8, allowed: bool) {
-        if allowed && let Some(byte) = vram.get_mut(self.index(half)) {
-            *byte = value;
+    pub(crate) fn write_data(&mut self, vram: &mut [u8], byte: PortByte, value: u8, allowed: bool) {
+        if allowed && let Some(slot) = vram.get_mut(self.index(byte)) {
+            *slot = value;
         }
-        if self.control.increment_on == half {
+        if self.control.increment_on == byte {
             self.increment();
         }
     }
@@ -201,22 +201,22 @@ impl VramPort {
     // @source: anomie-regs#2139
     // @source: anomie-regs#213a
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
-    pub(crate) const fn peek(&self, half: Half) -> u8 {
+    pub(crate) const fn peek(&self, byte: PortByte) -> u8 {
         let [low, high] = self.prefetch.to_le_bytes();
-        match half {
-            Half::Low => low,
-            Half::High => high,
+        match byte {
+            PortByte::Low => low,
+            PortByte::High => high,
         }
     }
 
-    /// After a read of `half`: if `$2115` names it, the prefetch loads from the address and
+    /// After a read of `byte`: if `$2115` names it, the prefetch loads from the address and
     /// then the address increments.
     // @source: anomie-regs#2139
     // @source: anomie-regs#213a
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     // @source: adr-0029
-    pub(crate) fn after_read(&mut self, vram: &[u8], half: Half) {
-        if self.control.increment_on == half {
+    pub(crate) fn after_read(&mut self, vram: &[u8], byte: PortByte) {
+        if self.control.increment_on == byte {
             self.prefetch = self.load(vram);
             self.increment();
         }
@@ -225,20 +225,23 @@ impl VramPort {
     /// The word at the translated address.
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     fn load(&self, vram: &[u8]) -> u16 {
-        let low = vram.get(self.index(Half::Low)).copied().unwrap_or_default();
+        let low = vram
+            .get(self.index(PortByte::Low))
+            .copied()
+            .unwrap_or_default();
         let high = vram
-            .get(self.index(Half::High))
+            .get(self.index(PortByte::High))
             .copied()
             .unwrap_or_default();
         u16::from_le_bytes([low, high])
     }
 
-    /// The byte offset of `half` of the addressed word: translated, bit 15 dropped.
+    /// The byte offset of `byte` of the addressed word: translated, bit 15 dropped.
     // @source: anomie-regs#2115
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
-    fn index(&self, half: Half) -> usize {
+    fn index(&self, byte: PortByte) -> usize {
         let word = self.control.translation.apply(self.address) & VRAM_WORD_MASK;
-        usize::from(word) * 2 + usize::from(half == Half::High)
+        usize::from(word) * 2 + usize::from(byte == PortByte::High)
     }
 
     /// Steps the address on, wrapping at 16 bits.
@@ -481,35 +484,35 @@ mod tests {
         let mut vram = vec![0; 0x1_0000];
         let mut port = VramPort::power_on();
         port.write_control(0x80);
-        port.write_address(&vram, Half::Low, 0x10);
-        port.write_address(&vram, Half::High, 0x00);
-        port.write_data(&mut vram, Half::Low, 0x34, true);
+        port.write_address(&vram, PortByte::Low, 0x10);
+        port.write_address(&vram, PortByte::High, 0x00);
+        port.write_data(&mut vram, PortByte::Low, 0x34, true);
         assert_eq!(port.address(), 0x0010);
-        port.write_data(&mut vram, Half::High, 0x12, true);
+        port.write_data(&mut vram, PortByte::High, 0x12, true);
         assert_eq!(port.address(), 0x0011);
         assert_eq!(vram[0x20..0x22], [0x34, 0x12]);
         // Low-byte increments of 32; a refused write still increments.
         port.write_control(0x01);
-        port.write_data(&mut vram, Half::Low, 0x56, false);
+        port.write_data(&mut vram, PortByte::Low, 0x56, false);
         assert_eq!(port.address(), 0x0031);
         assert_eq!(vram[0x22], 0);
-        port.write_data(&mut vram, Half::Low, 0x78, true);
+        port.write_data(&mut vram, PortByte::Low, 0x78, true);
         assert_eq!(vram[0x62], 0x78);
         assert_eq!(port.address(), 0x0051);
         // Steps of 128; bit 15 is not connected, so $8051 is word $0051.
         port.write_control(0x02);
-        port.write_address(&vram, Half::High, 0x80);
-        port.write_data(&mut vram, Half::Low, 0x9A, true);
+        port.write_address(&vram, PortByte::High, 0x80);
+        port.write_data(&mut vram, PortByte::Low, 0x9A, true);
         assert_eq!(vram[0xA2], 0x9A);
         assert_eq!(port.address(), 0x80D1);
         port.write_control(0x03);
-        port.write_data(&mut vram, Half::Low, 0x00, true);
+        port.write_data(&mut vram, PortByte::Low, 0x00, true);
         assert_eq!(port.address(), 0x8151);
         // The address wraps at 16 bits.
-        port.write_address(&vram, Half::Low, 0xFF);
-        port.write_address(&vram, Half::High, 0xFF);
+        port.write_address(&vram, PortByte::Low, 0xFF);
+        port.write_address(&vram, PortByte::High, 0xFF);
         port.write_control(0x00);
-        port.write_data(&mut vram, Half::Low, 0x00, true);
+        port.write_data(&mut vram, PortByte::Low, 0x00, true);
         assert_eq!(port.address(), 0x0000);
     }
 
@@ -521,9 +524,9 @@ mod tests {
         let mut vram = vec![0; 0x1_0000];
         let mut port = VramPort::power_on();
         port.write_control(0x04);
-        port.write_address(&vram, Half::Low, 0x03);
-        port.write_address(&vram, Half::High, 0x00);
-        port.write_data(&mut vram, Half::Low, 0xAA, true);
+        port.write_address(&vram, PortByte::Low, 0x03);
+        port.write_address(&vram, PortByte::High, 0x00);
+        port.write_data(&mut vram, PortByte::Low, 0xAA, true);
         // Word $0018, and the address register moves on from $0003.
         assert_eq!(vram[0x30], 0xAA);
         assert_eq!(port.address(), 0x0004);
@@ -539,25 +542,25 @@ mod tests {
         vram[0x200..0x206].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         let mut port = VramPort::power_on();
         port.write_control(0x80);
-        port.write_address(&vram, Half::Low, 0x00);
+        port.write_address(&vram, PortByte::Low, 0x00);
         // Each address write prefetches; after the high byte the prefetch holds word $0100.
-        port.write_address(&vram, Half::High, 0x01);
-        let read = |port: &mut VramPort, half| {
-            let value = port.peek(half);
-            port.after_read(&vram, half);
+        port.write_address(&vram, PortByte::High, 0x01);
+        let read = |port: &mut VramPort, byte| {
+            let value = port.peek(byte);
+            port.after_read(&vram, byte);
             value
         };
-        assert_eq!(read(&mut port, Half::Low), 0x11);
-        assert_eq!(read(&mut port, Half::High), 0x22);
+        assert_eq!(read(&mut port, PortByte::Low), 0x11);
+        assert_eq!(read(&mut port, PortByte::High), 0x22);
         // The prefetch was loaded from the old address, $0100, before the increment, so
         // the first word comes twice.
-        assert_eq!(read(&mut port, Half::Low), 0x11);
-        assert_eq!(read(&mut port, Half::High), 0x22);
-        assert_eq!(read(&mut port, Half::High), 0x44);
+        assert_eq!(read(&mut port, PortByte::Low), 0x11);
+        assert_eq!(read(&mut port, PortByte::High), 0x22);
+        assert_eq!(read(&mut port, PortByte::High), 0x44);
         assert_eq!(port.address(), 0x0103);
         // A write does not touch the prefetch.
-        port.write_data(&mut vram, Half::Low, 0xEE, true);
-        assert_eq!(port.peek(Half::Low), 0x55);
+        port.write_data(&mut vram, PortByte::Low, 0xEE, true);
+        assert_eq!(port.peek(PortByte::Low), 0x55);
     }
 
     // @source: anomie-regs#2121
