@@ -10,7 +10,9 @@
 use alloc::{sync::Arc, vec, vec::Vec};
 use core::ops::Range;
 
-use sfes_api::{Buttons, Cycles, Fast, InstrEvent, Interrupt, Observer, RegionId, Rgb555, Stop};
+use sfes_api::{
+    Buttons, Cycles, Fast, Field, InstrEvent, Interrupt, Observer, RegionId, Rgb555, Stop,
+};
 use sfes_snes_cpu::RunState;
 use sfes_snes_ppu::LINE_COLUMNS;
 
@@ -386,7 +388,7 @@ fn runs(list: &[(Rgb555, usize)], fill: Rgb555) -> Vec<Rgb555> {
     row
 }
 
-/// Checks every pixel of the steady picture, `width` pixels by 224 rows (row 0 is line 1):
+/// Checks every pixel of the steady picture, `width` pixels by `height` rows:
 /// - a row in a band of `Some(row)` is that row;
 /// - a row in a band of `None` is not checked;
 /// - every other row is `fill` across.
@@ -394,13 +396,14 @@ fn runs(list: &[(Rgb555, usize)], fill: Rgb555) -> Vec<Rgb555> {
 fn assert_picture(
     snes: &Snes<Fast>,
     width: usize,
+    height: usize,
     bands: &[(Range<usize>, Option<&[Rgb555]>)],
     fill: Rgb555,
 ) {
     let video = snes.video();
     assert_eq!(
         (usize::from(video.width), usize::from(video.height)),
-        (width, PICTURE_ROWS)
+        (width, height)
     );
     let blank = vec![fill; width];
     for (row, pixels) in video.pixels.chunks_exact(width).enumerate() {
@@ -456,6 +459,7 @@ fn bg_mode_7_bands_cart_flips_swaps_axes_fills_outside_and_shows_extbg() {
     assert_picture(
         &snes,
         256,
+        PICTURE_ROWS,
         &[
             (0..16, Some(&straight)),
             (16..32, Some(&flipped)),
@@ -499,7 +503,7 @@ fn bg_mode_7_cart_scales_scrolls_and_wraps_the_playfield() {
     // D = 2.0 too, so lines 1 to 3 are playfield rows 2, 4 and 6, still in the first row of
     // tiles, which are solid colours; line 4 is row 8, in the next tile row, and every
     // line down to 224 (row 448) is in a tilemap row that is all character 0.
-    assert_picture(&snes, 256, &[(0..3, Some(&expected))], WHITE);
+    assert_picture(&snes, 256, PICTURE_ROWS, &[(0..3, Some(&expected))], WHITE);
 }
 
 // @source: anomie-regs#2101
@@ -541,6 +545,7 @@ fn sprites_cart_draws_sprites_in_order_with_flips_and_sets_range_over() {
     assert_picture(
         &snes,
         256,
+        PICTURE_ROWS,
         &[
             (0..8, Some(&top)),
             (8..16, Some(&bottom)),
@@ -589,6 +594,7 @@ fn obj_limits_cart_rotates_priority_flips_by_halves_and_drops_tiles_on_time_over
     assert_picture(
         &snes,
         256,
+        PICTURE_ROWS,
         &[
             (0..32, Some(&rotated)),
             (40..48, Some(&band(RED, GREEN))),
@@ -635,7 +641,7 @@ fn windows_cart_masks_layers_by_window_logic_inversion_and_designation() {
         BLUE,
     );
     // Lines 1 to 7 are rows 1 to 7 of the tiles; line 8 on is the next tile row, empty.
-    assert_picture(&snes, 256, &[(0..7, Some(&expected))], BLUE);
+    assert_picture(&snes, 256, PICTURE_ROWS, &[(0..7, Some(&expected))], BLUE);
 }
 
 // @source: anomie-regs#2105
@@ -657,7 +663,7 @@ fn bg_mode_0_cart_draws_four_2_bit_backgrounds_in_priority_order() {
     let expected = runs(&[(RED, 2), (GREEN, 4), (WHITE, 2), (MAGENTA, 8)], BLUE);
     // Lines 1 to 7 are rows 1 to 7 of the tile, which repeat; line 8 on is the next tile
     // row, which the maps leave empty.
-    assert_picture(&snes, 256, &[(0..7, Some(&expected))], BLUE);
+    assert_picture(&snes, 256, PICTURE_ROWS, &[(0..7, Some(&expected))], BLUE);
 }
 
 // @source: anomie-regs#2105
@@ -676,7 +682,7 @@ fn bg_mode_1_cart_puts_bg3_in_front_when_bit_3_is_set() {
     // BG1's priority-1 tile covers pixels 0-3 and BG3's covers 2-5; with $2105 bit 3 set
     // BG3 is in front of BG1 at 2-3. BG2's priority-0 tile shows behind both at 6-7.
     let expected = runs(&[(RED, 2), (GREEN, 4), (BLUE, 2)], WHITE);
-    assert_picture(&snes, 256, &[(0..7, Some(&expected))], WHITE);
+    assert_picture(&snes, 256, PICTURE_ROWS, &[(0..7, Some(&expected))], WHITE);
 }
 
 // @source: anomie-regs#2105
@@ -723,6 +729,7 @@ fn bg_mode_2_cart_draws_16_by_16_tiles_and_flips_them_whole() {
     assert_picture(
         &snes,
         256,
+        PICTURE_ROWS,
         &[(0..7, Some(&top)), (7..15, Some(&bottom))],
         WHITE,
     );
@@ -747,7 +754,7 @@ fn bg_mode_3_cart_scrolls_a_256_colour_background_across_its_second_screen() {
     // Pixel 255 is map column 63, the last of the 512-pixel playfield, so it does not wrap
     // back to column 0 on this line.
     let expected = runs(&[(GREEN, 4), (RED, 8)], WHITE);
-    assert_picture(&snes, 256, &[(0..7, Some(&expected))], WHITE);
+    assert_picture(&snes, 256, PICTURE_ROWS, &[(0..7, Some(&expected))], WHITE);
 }
 
 // @source: anomie-regs#2105
@@ -768,7 +775,7 @@ fn bg_mode_4_cart_draws_bg1_in_direct_colour_and_bg2_from_the_palette() {
     // Character $B6 with palette bits 101 is blue 10 1, green 110 0, red 110 1: $531A.
     assert_eq!(DIRECT.bits(), 0x531A);
     let expected = runs(&[(DIRECT, 8), (GREEN, 8)], WHITE);
-    assert_picture(&snes, 256, &[(0..7, Some(&expected))], WHITE);
+    assert_picture(&snes, 256, PICTURE_ROWS, &[(0..7, Some(&expected))], WHITE);
 }
 
 // @source: anomie-regs#2105
@@ -796,7 +803,13 @@ fn bg_opt_mode_2_cart_takes_each_columns_offsets_from_bg3() {
     // Lines 1 to 7: rows 1 to 7 of the tile, which repeat. Lines 8 to 15 show the map's
     // second row in palette colours the cart never writes, which power on random (ADR 0028),
     // so they are not checked. Line 16 on is empty.
-    assert_picture(&snes, 256, &[(0..7, Some(&expected)), (7..15, None)], WHITE);
+    assert_picture(
+        &snes,
+        256,
+        PICTURE_ROWS,
+        &[(0..7, Some(&expected)), (7..15, None)],
+        WHITE,
+    );
 }
 
 // @source: anomie-regs#2105
@@ -822,7 +835,13 @@ fn bg_opt_mode_4_cart_takes_one_horizontal_or_vertical_offset_per_column() {
     let expected = runs(&[(RED, 8), (GREEN, 8), (BLUE, 8)], WHITE);
     // Lines 8 to 15 show the map's second row in palette colours the cart never writes,
     // which power on random (ADR 0028), so they are not checked. Line 16 on is empty.
-    assert_picture(&snes, 256, &[(0..7, Some(&expected)), (7..15, None)], WHITE);
+    assert_picture(
+        &snes,
+        256,
+        PICTURE_ROWS,
+        &[(0..7, Some(&expected)), (7..15, None)],
+        WHITE,
+    );
 }
 
 // @source: anomie-regs#2106
@@ -880,6 +899,7 @@ fn color_math_cart_adds_the_sub_screen_or_fixed_colour_clips_in_the_window_and_p
     assert_picture(
         &snes,
         256,
+        PICTURE_ROWS,
         &[
             (0..7, Some(&expected)),
             (7..8, Some(&last_block)),
@@ -937,7 +957,7 @@ fn hires_cart_shows_mode_5_half_pixels_and_maths_the_sub_pixels_after_the_main_p
     // The rest of the line is the backdrop on both screens, which takes no math. Line 8 on
     // is the next tile row, which the map leaves empty.
     expected.resize(512, GREY);
-    assert_picture(&snes, 512, &[(0..7, Some(&expected))], GREY);
+    assert_picture(&snes, 512, PICTURE_ROWS, &[(0..7, Some(&expected))], GREY);
 }
 
 // @source: anomie-regs#2100
@@ -990,6 +1010,7 @@ fn ppu_hdma_cart_changes_mode_scroll_and_brightness_by_band_and_refuses_a_vram_w
     assert_picture(
         &snes,
         256,
+        PICTURE_ROWS,
         &[
             (0..16, Some(&plain)),
             (16..32, Some(&scrolled)),
@@ -1000,6 +1021,85 @@ fn ppu_hdma_cart_changes_mode_scroll_and_brightness_by_band_and_refuses_a_vram_w
         ],
         BLACK,
     );
+}
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2133
+// @source: anomie-regs#212d
+// @source: anomie-regs#backgrounds/bg-scrolling
+// @source: anomie-regs#backgrounds/mode-5
+// @source: anomie-regs#backgrounds/mode-6
+// @source: anomie-regs#dma-and-hdma/hdma
+// @source: fullsnes#snesppuresolution
+// @source: adr-0013
+// @source: adr-0026
+// @source: adr-0028
+// @source: adr-0031
+// @source: adr-0036
+#[test]
+fn hires_bands_cart_interlaces_by_field_shows_pseudo_hires_and_mode_6_offsets() {
+    let mut snes = drawn(include_bytes!(
+        "../../../tests/assets/carts/hires-bands.sfc"
+    ));
+    // Every line is interlaced, so the frame is 448 rows and line L fills rows 2(L - 1) and
+    // 2(L - 1) + 1; every line is wide, so it is 512 pixels (ADR 0028, point 8).
+    //   lines 1-16, mode 5: line L shows BG row 2L + F, F the field (ADR 0036, point 4),
+    //        so tile row L / 4. An even tile row is entry 2: character 2, whose row parity
+    //        is F, colour 1 or 3, then character 3; an odd one is entry 6, colours 4 and 5.
+    //        Elsewhere, entry 0 is the clear characters 0 and 1.
+    //        Both screens show BG1, so output pixel p is half-pixel p (ADR 0036, point 1).
+    //   lines 17-32, mode 1 in pseudo-hi-res: pixel 2x is the sub screen's BG2 (colour 4)
+    //        and 2x + 1 the main screen's BG1 (colour 2), for x 0 to 7.
+    //   line 33 on, mode 6: tile column 1 takes BG3's horizontal offset 16, so pixels 8 to
+    //        15 show map column 3, entry 6, like columns 0 and 3; column 2 is empty (ADR
+    //        0036, point 9; ADR 0031).
+    let pseudo = {
+        let mut row = [YELLOW, GREEN].repeat(8);
+        row.resize(512, WHITE);
+        row
+    };
+    let wide_runs = |list: &[(Rgb555, usize)]| {
+        let mut row = runs(list, WHITE);
+        row.resize(512, WHITE);
+        row
+    };
+    let odd_tile = wide_runs(&[(YELLOW, 8), (MAGENTA, 8)]);
+    let mode_6 = wide_runs(&[
+        (YELLOW, 8),
+        (MAGENTA, 8),
+        (YELLOW, 8),
+        (MAGENTA, 8),
+        (WHITE, 16),
+        (YELLOW, 8),
+        (MAGENTA, 8),
+    ]);
+    for _ in 0..2 {
+        let first = match snes.video().field {
+            Some(Field::First) => RED,
+            Some(Field::Second) => BLUE,
+            None => panic!("an interlaced frame has a field"),
+        };
+        let even_tile = wide_runs(&[(first, 8), (GREEN, 8)]);
+        // Lines 1-3, 4-7, 8-11, 12-15 and 16 are tile rows 0 to 4.
+        let band = |lines: Range<usize>| 2 * (lines.start - 1)..2 * (lines.end - 1);
+        assert_picture(
+            &snes,
+            512,
+            2 * PICTURE_ROWS,
+            &[
+                (band(1..4), Some(&even_tile)),
+                (band(4..8), Some(&odd_tile)),
+                (band(8..12), Some(&even_tile)),
+                (band(12..16), Some(&odd_tile)),
+                (band(16..17), Some(&even_tile)),
+                (band(17..33), Some(&pseudo)),
+                (band(33..225), Some(&mode_6)),
+            ],
+            WHITE,
+        );
+        // The next frame is the other field.
+        snes.run(Stop::Frames(1));
+    }
 }
 
 // @source: anomie-regs#213e
