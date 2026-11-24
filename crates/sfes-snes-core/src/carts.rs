@@ -361,6 +361,16 @@ fn picture_row(snes: &Snes<Fast>, row: usize) -> Vec<Rgb555> {
 }
 
 // @source: adr-0013
+// @source: adr-0036
+/// The first 64 pixels of row `row` of a 512-wide picture, as 15-bit colours.
+fn wide_row(snes: &Snes<Fast>, row: usize) -> Vec<Rgb555> {
+    let video = snes.video();
+    assert_eq!(video.width, 512);
+    let start = row * 512;
+    video.pixels[start..start + PICTURE_PIXELS].to_vec()
+}
+
+// @source: adr-0013
 /// A row of runs `(colour, length)`, then `fill` to the end of the compared pixels.
 fn runs(list: &[(Rgb555, usize)], fill: Rgb555) -> Vec<Rgb555> {
     let mut row = Vec::new();
@@ -764,5 +774,58 @@ fn color_math_cart_adds_the_sub_screen_or_fixed_colour_clips_in_the_window_and_p
     );
     for row in 0..7 {
         assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    }
+}
+
+// @source: anomie-regs#2105
+// @source: anomie-regs#2107
+// @source: anomie-regs#210b
+// @source: anomie-regs#212c
+// @source: anomie-regs#212d
+// @source: anomie-regs#2130
+// @source: anomie-regs#2131
+// @source: anomie-regs#2132
+// @source: anomie-regs#backgrounds/mode-5
+// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+// @source: anomie-regs#rendering-the-screen/color-math
+// @source: fullsnes#snesppucolormath
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: fullsnes#snesppuresolution
+// @source: adr-0013
+// @source: adr-0036
+#[test]
+fn hires_cart_shows_mode_5_half_pixels_and_maths_the_sub_pixels_after_the_main_pixel() {
+    const BACKDROP: Rgb555 = Rgb555::from_bits_truncate(0x294A);
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/hires.sfc"));
+    let backdrop = BACKDROP;
+    // BG1's tile 1 is "1.1.1.1." then ".2.2.2.2" across its 16 half-pixels, colour 1
+    // (20, 4, 0) and colour 2 (3, 6, 9), on both screens; the sub screen shows the even
+    // half-pixels and the main screen the odd, so pixel `2x` is the sub screen's pixel `x`
+    // and `2x + 1` the main screen's (anomie-regs#backgrounds/mode-5). Math adds the fixed
+    // colour (5, 0, 3) to BG1's main pixels, and to a sub pixel whose left main pixel took
+    // it, never to the first (anomie-regs#rendering-the-screen/color-math, ADR 0036).
+    //   x 0-3: the sub pixel is colour 1; the main pixel, an odd column of the left
+    //          character, is clear and shows the backdrop, which takes no math.
+    //   x 4: the sub pixel is clear and shows colour 0, not the fixed colour (fullsnes), and
+    //          the pixel to its left is the backdrop, so no math; the main pixel is colour 2
+    //          plus the fixed colour, (8, 6, 12).
+    //   x 5-7: the same main pixel, and a sub pixel of colour 0 with the math of the one to
+    //          its left: (15, 10, 13).
+    //   x 8: a sub pixel after BG1's last main pixel takes the math too.
+    let one = Rgb555::from_channels(20, 4, 0);
+    let two_math = Rgb555::from_channels(8, 6, 12);
+    let backdrop_math = Rgb555::from_channels(15, 10, 13);
+    let mut expected = Vec::new();
+    for _ in 0..4 {
+        expected.extend([one, backdrop]);
+    }
+    expected.extend([backdrop, two_math]);
+    for _ in 5..8 {
+        expected.extend([backdrop_math, two_math]);
+    }
+    expected.extend([backdrop_math, backdrop]);
+    expected.resize(PICTURE_PIXELS, backdrop);
+    for row in 0..7 {
+        assert_eq!(wide_row(&snes, row), expected, "row {row}");
     }
 }

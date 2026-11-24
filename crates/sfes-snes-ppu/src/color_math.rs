@@ -7,7 +7,8 @@
 // @source: fullsnes#snesppucolormath
 // @source: fullsnes#snesppucontrol
 // @source: adr-0035
-//! Colour math, the fixed colour and brightness (ADR 0035).
+// @source: adr-0036
+//! Colour math, the fixed colour and brightness (ADR 0035; ADR 0036).
 
 use sfes_api::Rgb555;
 
@@ -60,6 +61,30 @@ pub(crate) enum Operand {
     Pixel(Rgb555),
     /// The sub screen's backdrop, which is the fixed colour.
     Backdrop,
+}
+
+/// What the main pixel before a sub pixel of a wide line was given: the sub pixel is
+/// clipped and mathed the same way (ADR 0036, point 7).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Previous {
+    /// The colour window clipped it.
+    pub(crate) clipped: bool,
+    /// What was added or subtracted, with a sub pixel's colour replaced by the main pixel's
+    /// own; `None` where no math was applied.
+    pub(crate) operand: Option<Operand>,
+    /// Its colour after clipping and before math.
+    pub(crate) color: Rgb555,
+}
+
+impl Previous {
+    /// The pixel before column 0: nothing clips and no math is applied.
+    // @source: anomie-regs#rendering-the-screen/color-math
+    // @source: adr-0036
+    pub(crate) const NONE: Self = Self {
+        clipped: false,
+        operand: None,
+        color: Rgb555::BLACK,
+    };
 }
 
 /// `$2130–$2132`: the colour math registers and the fixed colour.
@@ -219,11 +244,32 @@ impl ColorMath {
     }
 }
 
+impl ColorMath {
+    /// The sub pixel `color` of a wide line, given what `previous`, the main pixel to its
+    /// left, was given: black where that was clipped, then blended as it was.
+    // @source: anomie-regs#2133
+    // @source: anomie-regs#windows
+    // @source: anomie-regs#rendering-the-screen/color-math
+    // @source: adr-0036
+    pub(crate) fn apply_previous(self, color: Rgb555, previous: Previous) -> Rgb555 {
+        let color = if previous.clipped {
+            Rgb555::BLACK
+        } else {
+            color
+        };
+        match previous.operand {
+            Some(operand) => self.blend(color, operand, previous.clipped),
+            None => color,
+        }
+    }
+}
+
 /// `color` at the brightness of `$2100`'s low four bits: black at 0, else each channel times
 /// `N + 1` over 16, rounded down (ADR 0035, point 2).
 // @source: anomie-regs#2100
 // @source: fullsnes#snesppucontrol
 // @source: adr-0035
+// @source: adr-0036
 pub(crate) fn dim(color: Rgb555, control: u8) -> Rgb555 {
     let level = control & BRIGHTNESS_MASK;
     if level == 0 {

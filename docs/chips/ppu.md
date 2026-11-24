@@ -163,13 +163,13 @@ Sources: `anomie-regs#213e`, `#213f`, `fullsnes#snespputimersandstatus`; ADR 002
 
 - **Width.** A line's `LineWidth` is `Wide`, 512 pixels, in BG modes 5 and 6 (`$2105` bits 2–0) or with pseudo-hires (`$2133` bit 3), otherwise `Normal`, 256 (`anomie-regs#2105`, `#2133`, `fullsnes#snesppuresolution`).
 - **Interlace.** The line records whether `$2133` bit 0 was set.
-- **Pixels.** A pixel is a CGRAM colour, an `sfes_api::Rgb555`: red in bits 4–0, green in 9–5, blue in 14–10, bit 15 clear (`fullsnes#snesppucolorpalettememorycgramanddirectcolors`). CGRAM does not store bit 15, so the PPU drops it, and `Rgb555` refuses a value with it set. Where no layer shows a pixel it is the backdrop, CGRAM entry 0 (`fullsnes#snesppuresolution`, "Hires Notes"). [The backgrounds](#the-backgrounds) draw the rest in BG modes 0 to 4 and 7; in modes 5 and 6 every pixel is the backdrop until #97.
+- **Pixels.** A pixel is a CGRAM colour, an `sfes_api::Rgb555`: red in bits 4–0, green in 9–5, blue in 14–10, bit 15 clear (`fullsnes#snesppucolorpalettememorycgramanddirectcolors`). CGRAM does not store bit 15, so the PPU drops it, and `Rgb555` refuses a value with it set. Where no layer shows a pixel it is the backdrop, CGRAM entry 0 (`fullsnes#snesppuresolution`, "Hires Notes"). [The backgrounds](#the-backgrounds) draw the rest. In a wide line each column is two pixels, the sub screen's and then the main screen's ([Hi-res and interlace](#hi-res-and-interlace)).
 
 The machine decides when a line is drawn and how lines make a frame ([`core.md`](core.md#drawing-and-presenting-frames)).
 
 ## The backgrounds
 
-[`background.rs`](../../crates/sfes-snes-ppu/src/background.rs) holds BG1 to BG4's registers and finds one pixel of one background; `render_line` puts them in order (ADR 0030). The main screen of BG modes 0 to 4 is drawn; everything else waits for its issue.
+[`background.rs`](../../crates/sfes-snes-ppu/src/background.rs) holds BG1 to BG4's registers and finds one pixel of one background; `render_line` puts them in order (ADR 0030). Modes 0 to 7 are drawn; the sprites, windows, colour math, mosaic and hi-res have sections of their own.
 
 ### Where a pixel comes from
 
@@ -243,12 +243,6 @@ In modes 2 and 4 BG3 is not drawn: its tilemap holds the scrolls of BG1 and BG2 
 - **Masking.** A layer whose `$212E` bit is set has no pixel where its area is true, so the layers behind it show; the backdrop is never masked. The sprite layer is masked as a whole, and sprite evaluation and its flags do not depend on windows.
 - **The sub screen.** `$212F` masks the sub screen's layers the way `$212E` does the main's, and the colour window's area, from its own setting, is read by colour math (ADR 0035).
 
-### Not yet
-
-- Mode 6's offset-per-tile arrives with hi-res (#97).
-- Modes 5 and 6 (#97): sprites over the backdrop, each pixel doubled.
-- Hi-res math, the sub screen's pixels as the even half-pixels of pseudo-hires, and the doubled mosaic block of modes 5 and 6 (#97): a wide line repeats each main-screen pixel.
-
 ## Colour math, brightness and mosaic
 
 [`color_math.rs`](../../crates/sfes-snes-ppu/src/color_math.rs) and [`mosaic.rs`](../../crates/sfes-snes-ppu/src/mosaic.rs) hold the registers, and `render_line` puts them to use (ADR 0035).
@@ -260,6 +254,19 @@ In modes 2 and 4 BG3 is not drawn: its tilemap holds the scrolls of BG1 and BG2 
 - **Mosaic.** A pixelated background shows the pixel at the top-left of its block, before windows and math; block rows count from the first line of the frame, or from the line a changed `$2106` was written. Mode 7's EXTBG layer uses bit 1 for across and bit 0 for down.
 - Rounding in brightness, which writes restart the blocks, and whether the sub pixel must be in front of the main pixel are not settled by the documents; see the ADR.
 
+
+## Hi-res and interlace
+
+The code is in [`background.rs`](../../crates/sfes-snes-ppu/src/background.rs) (the tile), [`mosaic.rs`](../../crates/sfes-snes-ppu/src/mosaic.rs), [`color_math.rs`](../../crates/sfes-snes-ppu/src/color_math.rs) (`Previous`) and `render_line` (ADR 0036).
+
+- **Two pixels a column.** A wide line, BG mode 5 or 6 or `$2133` bit 3, has the sub screen's pixel `x` as output pixel `2x` and the main screen's as `2x + 1` (`anomie-regs#2133`). Bit 3 does nothing in modes 5 and 6. The sub screen is drawn in every wide line, and its backdrop there is CGRAM entry 0, not the fixed colour (`fullsnes#snesppuresolution`).
+- **Modes 5 and 6 tiles.** A tile is 8 pixels, 16 half-pixels, wide whatever the size bit, and 8 or 16 rows high: its tile on the left and the next on the right (`anomie-regs#backgrounds/mode-5`). The main screen shows the odd half-pixels and the sub screen the even, so a game sets `$212C` and `$212D` alike to see the whole picture. Scrolling counts full pixels; a flip turns the 16 half-pixels as one, which swaps what the screens show. Mode 5 has a 16-colour BG1 and a 4-colour BG2; mode 6 only BG1.
+- **Mode 6's offset-per-tile** works as mode 2's, BG3 giving one entry for each 8-pixel column whatever its size bit says (`anomie-regs#backgrounds/mode-6`).
+- **Interlace** matters only in modes 5 and 6: line `L` shows row `2L + F + VOFS`, `F` being the field from `$213F` bit 7, so the vertical scroll counts half-lines and `VOFS = -2` shows row 0 on the first line (`anomie-regs#backgrounds/bg-scrolling`). Which field has the even half-lines is not documented; the first does here. Elsewhere interlace changes no pixel.
+- **Mosaic** in modes 5 and 6 takes the even half-pixel, and with interlace the even half-line, of each block, so size 1 has an effect and anomie's "BRBR" example holds. In pseudo-hires it is as normal (`anomie-regs#rendering-the-screen/mosaic`).
+- **Math on sub pixels.** A sub pixel is clipped, halved or not and given the fixed colour, or the main pixel to its left, as that main pixel was; column 0 has nothing to its left and none of it. The colour window effect is read from that main pixel too (`anomie-regs#rendering-the-screen/color-math`, `#2133`).
+- **Not modelled.** OBJ interlace (`$2133` bit 1) and fullsnes's window glitch in hi-res: the documents give no rule. Sprites are the same on both screens and in both fields.
+
 ## Frame geometry
 
 How lines are presented as a `VideoFrame` and hashed (ADR 0028, points 8 and 9):
@@ -267,7 +274,7 @@ How lines are presented as a `VideoFrame` and hashed (ADR 0028, points 8 and 9):
 | Frame | Size |
 | --- | --- |
 | Plain | 256 × 224, or 256 × 239 with overscan |
-| Any line in BG mode 5 or 6, or with pseudo-hires | 512 wide; a 256-pixel line has each pixel twice |
+| Any line in BG mode 5 or 6, or with pseudo-hires | 512 wide; a 256-pixel line, in the same frame, has each pixel twice |
 | Any line with interlace on | twice as high, 448 or 478; each line fills two rows |
 
 - **Mixed frames.** Games mix line widths in one frame (fullsnes lists BG mode 5 "in lower screen half"), so the width is decided per frame, by its widest line. Doubling loses nothing.
@@ -305,10 +312,10 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
   - each line's width and colour;
   - each port's increments, translation and prefetch, with anomie's OAM examples;
   - which writes land in each period, the OAM reload, the multiplier and the status bits;
-  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, mode 7's matrix, scroll, centre, flips, fills and EXTBG, the sprites' sizes, record, rows, tile addresses, flips, planes, limits and flags, the windows' edges, inversion, logic and designation, `$2132`'s planes, the clip and prevent regions, which layers and sprite palettes take math, add, subtract, half and clamping, the sub screen and its backdrop, brightness, forced blank, mosaic blocks, and a line's composition.
+  - a background's tiles, planes, flips, tilemap sizes, scroll writes and wrap, each mode's palettes and priority order, direct colour, offset-per-tile in modes 2 and 4, mode 7's matrix, scroll, centre, flips, fills and EXTBG, the sprites' sizes, record, rows, tile addresses, flips, planes, limits and flags, the windows' edges, inversion, logic and designation, `$2132`'s planes, the clip and prevent regions, which layers and sprite palettes take math, add, subtract, half and clamping, the sub screen and its backdrop, brightness, forced blank, mosaic blocks, a line's composition, mode 5 and 6 tiles and offsets, the two screens of a wide line, math on its sub pixels, half-pixel mosaic and interlaced rows.
 - **The machine's tests** cover reads through the bus, when lines are drawn, overscan and interlaced frames, the frame geometry, VRAM writes by period, the OAM reload at vertical blank, `$213F` through the bus and a DMA into VRAM ([`core.md`](core.md#testing)).
 
-- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2`, `bg-opt-mode4` and `bg-mode7` (`tests/carts/`) draw each mode, its offset-per-tile and mode 7's scaling, scroll and wrap, `obj-sprites` draws overlapping and flipped sprites and sets range over, `windows` masks backgrounds by window logic, inversion and designation, and `color-math` adds the sub screen or the fixed colour with half-math, clips a tile in the colour window and pixelates a background; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
+- **Test cartridges** `bg-mode0` to `bg-mode4` and `bg-opt-mode2`, `bg-opt-mode4` and `bg-mode7` (`tests/carts/`) draw each mode, its offset-per-tile and mode 7's scaling, scroll and wrap, `hires` draws a mode 5 tile as sub and main half-pixels with colour math on both, `obj-sprites` draws overlapping and flipped sprites and sets range over, `windows` masks backgrounds by window logic, inversion and designation, and `color-math` adds the sub screen or the fixed colour with half-math, clips a tile in the colour window and pixelates a background; `carts.rs` in `sfes-snes-core` compares each picture with values computed from the documents. Goldens follow in #100.
 
 ## Decisions
 
@@ -322,5 +329,6 @@ The crate is `no_std` with `alloc` and depends only on `sfes-api` and `thiserror
 | [0033](../adr/0033-sprites.md) | `$2101` and the OAM record, which lines a sprite is on, the tile addresses and flips, the range and time limits and their flags, the priority rotation, and the sprites' places in each mode's order | high for the formats, limits and order; medium for the first line, which tiles time over drops and when the flags clear; low for forced blank and the rotation's oddity |
 | [0034](../adr/0034-windows.md) | The window registers, a layer's area from the two windows, inversion and logic, and masking by `$212E`, the sprite layer as a whole | high for the registers and logic; medium for masking the whole sprite layer; low for power-on values |
 | [0035](../adr/0035-colour-math-brightness-and-mosaic.md) | The sub screen and its backdrop, the colour window's clip and prevent regions, which pixels take math and how it blends, brightness and forced blank, and mosaic blocks | high for the registers, the blend and the colour window; medium for half and the mosaic geometry; low for brightness rounding, the block restart and power-on values |
+| [0036](../adr/0036-hi-res-pseudo-hi-res-and-interlace.md) | A wide line's two screens, the mode 5 and 6 tile, interlaced rows, half-pixel mosaic, math on sub pixels, and mode 6's offsets | high for the two screens and the tile; medium for mosaic and math; low for the field, the flip and column 0 |
 
 ADR 0021, point 7 covers the counter latch, which moved into the PPU with this issue.
