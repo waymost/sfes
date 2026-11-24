@@ -12,7 +12,10 @@
 //! The Mode 7 registers and their shared write-twice latch, the multiplier read at
 //! `$2134–$2136` (ADR 0029, point 8), and the pixels of BG mode 7 and EXTBG (ADR 0032).
 
-use crate::background::{Color, Sample, direct_color, vram_byte};
+use crate::{
+    background::{Color, Sample, direct_color},
+    memory::Vram,
+};
 
 /// The latch and both M7A and M7B at power-on: fullsnes's "(FFh)(w2)".
 const POWER_ON: u8 = 0xFF;
@@ -231,7 +234,7 @@ impl Mode7 {
     // @source: anomie-regs#backgrounds/mode-7
     // @source: fullsnes#snesppurotationscaling
     // @source: adr-0032
-    fn pixel(&self, vram: &[u8], x: u16, line: u16) -> u8 {
+    fn pixel(&self, vram: &Vram, x: u16, line: u16) -> u8 {
         let (across, down) = self.position(x, line);
         let (across, down) = (across >> FRACTION_BITS, down >> FRACTION_BITS);
         let outside = (across | down) & !PLAYFIELD_MASK != 0;
@@ -244,11 +247,11 @@ impl Mode7 {
             let column = (across & PLAYFIELD_MASK) / 8;
             let row = (down & PLAYFIELD_MASK) / 8;
             let word = u32::try_from(row * MAP_TILES + column).unwrap_or_default();
-            vram_byte(vram, word * 2)
+            vram.byte(word * 2)
         };
         let within =
             u32::try_from((down & TILE_MASK) * 8 + (across & TILE_MASK)).unwrap_or_default();
-        vram_byte(vram, (u32::from(character) * 64 + within) * 2 + 1)
+        vram.byte((u32::from(character) * 64 + within) * 2 + 1)
     }
 
     /// What BG1 to BG4 show at column `x` of line `line`: BG1 the pixel, BG2 the same pixel
@@ -259,7 +262,7 @@ impl Mode7 {
     // @source: adr-0032
     pub(crate) fn samples(
         &self,
-        vram: &[u8],
+        vram: &Vram,
         direct: bool,
         extbg: bool,
         x: u16,
@@ -297,8 +300,6 @@ impl Mode7 {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{vec, vec::Vec};
-
     use sfes_api::Rgb555;
 
     use super::*;
@@ -378,8 +379,8 @@ mod tests {
     /// The playfield of the tests: character 1 at the tilemap's corner and at its last
     /// column, with a dot of `$42` at row 1, column 3 of character 1 and `$99` at row 2,
     /// column 4 of character 0.
-    fn playfield() -> Vec<u8> {
-        let mut vram = vec![0; 0x1_0000];
+    fn playfield() -> Vram {
+        let mut vram = Vram::zeroed();
         map(&mut vram, 0, 0, 1);
         map(&mut vram, 0, 127, 1);
         dot(&mut vram, 1, 1, 3, 0x42);
