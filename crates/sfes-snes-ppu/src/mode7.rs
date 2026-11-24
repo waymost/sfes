@@ -25,9 +25,9 @@ const SCREEN_OVER: u8 = 0x80;
 /// `$211A` bit 6: outside the tilemap is character 0, not transparent.
 const FILL_CHARACTER_0: u8 = 0x40;
 /// `$211A` bit 1: flip the screen vertically.
-const FLIP_VERTICAL: u8 = 0x02;
+const SCREEN_FLIP_VERTICAL: u8 = 0x02;
 /// `$211A` bit 0: flip the screen horizontally.
-const FLIP_HORIZONTAL: u8 = 0x01;
+const SCREEN_FLIP_HORIZONTAL: u8 = 0x01;
 /// A flipped screen coordinate is its exclusive or with this.
 const FLIP_MASK: u16 = 0xFF;
 /// The 13-bit registers (`M7X`, `M7Y`, `M7HOFS` and `M7VOFS`) are sign-extended from bit 12.
@@ -208,8 +208,8 @@ impl Mode7 {
                 value
             })
         };
-        let screen_x = flip(x, FLIP_HORIZONTAL);
-        let screen_y = flip(line, FLIP_VERTICAL);
+        let screen_x = flip(x, SCREEN_FLIP_HORIZONTAL);
+        let screen_y = flip(line, SCREEN_FLIP_VERTICAL);
         let origin_x = clip(i32::from(self.scroll_x) - i32::from(self.center_x));
         let origin_y = clip(i32::from(self.scroll_y) - i32::from(self.center_y));
         let (matrix_a, matrix_b) = (signed(self.matrix_a), signed(self.matrix_b));

@@ -9,7 +9,7 @@
 use crate::background::Background;
 
 /// `$2106` bits 7–4: the block size minus 1.
-const SIZE_SHIFT: u8 = 4;
+const MOSAIC_SIZE_SHIFT: u8 = 4;
 /// `$2106` bit 0 as the mode 7 EXTBG layer's vertical enable.
 const EXTBG_VERTICAL: u8 = 0x01;
 /// `$2106` bit 1 as the mode 7 EXTBG layer's horizontal enable.
@@ -58,7 +58,7 @@ impl Mosaic {
     // @source: anomie-regs#2106
     // @source: adr-0035
     const fn size(self) -> u16 {
-        (self.value >> SIZE_SHIFT) as u16 + 1
+        (self.value >> MOSAIC_SIZE_SHIFT) as u16 + 1
     }
 
     /// The pixel a block of `x` and `line` shows: its top-left one, with the block rows
