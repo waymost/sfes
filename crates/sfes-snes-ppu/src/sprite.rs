@@ -59,10 +59,51 @@ const ROW_MASK: u16 = 0xFF;
 const PALETTE_START: u8 = 128;
 /// The size of a palette.
 const PALETTE_COLORS: u8 = 16;
-/// `$213E` bit 7: more than 34 tiles.
-const TIME_OVER: u8 = 0x80;
-/// `$213E` bit 6: more than 32 sprites.
-const RANGE_OVER: u8 = 0x40;
+/// OAM attribute bits 5–4: the priority.
+const PRIORITY_SHIFT: u8 = 4;
+
+bitflags::bitflags! {
+    /// `$213E STAT77` bits 7 and 6: the sprite overflow flags.
+    // @source: anomie-regs#213e
+    // @source: fullsnes#snespputimersandstatus
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct Overflow: u8 {
+        /// Bit 6: more than 32 sprites were in range on a line.
+        const RANGE_OVER = 0x40;
+        /// Bit 7: more than 34 tiles were to be loaded for a line.
+        const TIME_OVER = 0x80;
+    }
+}
+
+/// A sprite's priority against the backgrounds, OAM attribute bits 5–4. Each variant's
+/// value is the field.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(u8)]
+pub(crate) enum Priority {
+    /// 0, the furthest back.
+    #[default]
+    Zero = 0,
+    /// 1.
+    One = 1,
+    /// 2.
+    Two = 2,
+    /// 3, the furthest forward.
+    Three = 3,
+}
+
+impl Priority {
+    /// The priority in a sprite's attribute byte `vhoopppN`.
+    // @source: anomie-regs#sprites/oam
+    // @source: fullsnes#snesmemoryoamaccessspriteattributes
+    const fn from_attributes(attributes: u8) -> Self {
+        match attributes >> PRIORITY_SHIFT & TWO_BITS {
+            0 => Self::Zero,
+            1 => Self::One,
+            2 => Self::Two,
+            _ => Self::Three,
+        }
+    }
+}
 
 /// The pair of sizes `$2101` bits 7 to 5 choose, as (width, height) of the small and large
 /// sprites.
@@ -176,8 +217,8 @@ struct Tile {
     flip: bool,
     /// The palette, 0 to 7.
     palette: u8,
-    /// The OAM priority, 0 to 3.
-    priority: u8,
+    /// The OAM priority.
+    priority: Priority,
 }
 
 /// A sprite pixel: its CGRAM entry and its priority against the backgrounds.
@@ -185,8 +226,8 @@ struct Tile {
 pub(crate) struct Pixel {
     /// The CGRAM entry, 129 to 255.
     pub(crate) index: u8,
-    /// The OAM priority, 0 to 3.
-    pub(crate) priority: u8,
+    /// The OAM priority.
+    pub(crate) priority: Priority,
 }
 
 /// What evaluation loaded for a line: up to 34 tiles, the last sprite's first.
@@ -245,7 +286,7 @@ pub(crate) struct Sprites {
     /// $2101 OBSEL: the sizes, the name select and the base.
     select: u8,
     /// $213E STAT77 bits 7 and 6: time over and range over.
-    flags: u8,
+    flags: Overflow,
 }
 
 impl Sprites {
@@ -255,7 +296,7 @@ impl Sprites {
     pub(crate) const fn power_on() -> Self {
         Self {
             select: 0,
-            flags: 0,
+            flags: Overflow::empty(),
         }
     }
 
@@ -271,7 +312,7 @@ impl Sprites {
     // @source: fullsnes#snespputimersandstatus
     // @source: adr-0033
     pub(crate) const fn status(self) -> u8 {
-        self.flags
+        self.flags.bits()
     }
 
     /// Clears both flags, as the end of vertical blank does (ADR 0033, point 7).
@@ -279,7 +320,7 @@ impl Sprites {
     // @source: fullsnes#snespputimersandstatus
     // @source: adr-0033
     pub(crate) const fn clear_flags(&mut self) {
-        self.flags = 0;
+        self.flags = Overflow::empty();
     }
 
     /// Evaluates output line `line` with `first` as the front sprite: takes the first 32
@@ -300,7 +341,7 @@ impl Sprites {
                 continue;
             };
             let Some(slot) = kept.get_mut(kept_count) else {
-                self.flags |= RANGE_OVER;
+                self.flags |= Overflow::RANGE_OVER;
                 break;
             };
             *slot = (sprite, row);
@@ -320,7 +361,7 @@ impl Sprites {
                     continue;
                 }
                 let Some(slot) = loaded.tiles.get_mut(loaded.count) else {
-                    self.flags |= TIME_OVER;
+                    self.flags |= Overflow::TIME_OVER;
                     return loaded;
                 };
                 let flip = sprite.attributes & FLIP_HORIZONTAL != 0;
@@ -360,7 +401,7 @@ impl Sprites {
             word: first.wrapping_add(pixel_row),
             flip: sprite.attributes & FLIP_HORIZONTAL != 0,
             palette: (sprite.attributes >> 1) & PALETTE_MASK,
-            priority: (sprite.attributes >> 4) & TWO_BITS,
+            priority: Priority::from_attributes(sprite.attributes),
         }
     }
 }
@@ -569,7 +610,7 @@ mod tests {
         let index = |value: u8| 128 + 2 * 16 + value;
         assert_eq!(pixels[3], None);
         assert_eq!(pixels[4].map(|pixel| pixel.index), Some(index(1)));
-        assert_eq!(pixels[4].map(|pixel| pixel.priority), Some(3));
+        assert_eq!(pixels[4].map(|pixel| pixel.priority), Some(Priority::Three));
         assert_eq!(pixels[5].map(|pixel| pixel.index), Some(index(2)));
         assert_eq!(pixels[6].map(|pixel| pixel.index), Some(index(4)));
         assert_eq!(pixels[7].map(|pixel| pixel.index), Some(index(8)));
@@ -613,7 +654,7 @@ mod tests {
             front[0],
             Some(Pixel {
                 index: 129,
-                priority: 1
+                priority: Priority::One
             })
         );
         // With sprite 3 first it covers sprite 2.
@@ -622,13 +663,13 @@ mod tests {
             rotated[0],
             Some(Pixel {
                 index: 130,
-                priority: 2
+                priority: Priority::Two
             })
         );
         // A transparent pixel in front shows the sprite behind it.
         tile_row(&mut vram, 16, 0, [0, 0, 0, 0]);
         let behind = sprites.evaluate(&oam, 3, 1).pixels(&vram);
-        assert_eq!(behind[0].map(|pixel| pixel.priority), Some(1));
+        assert_eq!(behind[0].map(|pixel| pixel.priority), Some(Priority::One));
     }
 
     // @source: anomie-regs#sprites/drawing-the-sprites
@@ -726,7 +767,7 @@ mod tests {
     fn the_flags_clear_together_and_the_select_is_kept() {
         let mut sprites = Sprites::power_on();
         sprites.write_select(0xA5);
-        sprites.flags = 0xC0;
+        sprites.flags = Overflow::all();
         assert_eq!(sprites.status(), 0xC0);
         sprites.clear_flags();
         assert_eq!(sprites.status(), 0);
