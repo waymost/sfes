@@ -172,18 +172,22 @@ impl Ppu {
         }
     }
 
-    /// The reset button: `$2100` is `$80`, `$2133` is 0 and the frame starts again from
-    /// line 1. The memories and their ports, `$2105`, M7A and M7B, the open-bus latches and
-    /// the counters are kept (ADR 0028, points 1, 4 and 5; ADR 0029, points 2, 8 and 12;
-    /// ADR 0021, point 8).
+    /// The reset button:
+    /// - `$2100` is `$80` and `$2133` is 0;
+    /// - the frame starts again from line 1, and so do the mosaic block rows, as at any
+    ///   frame's start (ADR 0035, point 8);
+    /// - the memories and their ports, `$2105`, `$2106`, M7A and M7B, the open-bus latches
+    ///   and the counters are kept (ADR 0028, points 1, 4 and 5; ADR 0029, points 2, 8 and
+    ///   12; ADR 0021, point 8; ADR 0035, point 1).
     // @source: fullsnes#snesiomap
     // @source: adr-0021
     // @source: adr-0028
     // @source: adr-0029
+    // @source: adr-0035
     pub const fn reset(&mut self) {
         self.display_control = DISPLAY_CONTROL_RESET;
         self.screen_mode = ScreenMode::empty();
-        self.next_line = FIRST_OUTPUT_LINE;
+        self.start_frame();
     }
 
     /// Takes the machine's signals for the access about to happen (ADR 0029, point 1).
@@ -1030,6 +1034,7 @@ mod tests {
 
     // @source: fullsnes#snesiomap
     // @source: adr-0028
+    // @source: adr-0035
     #[test]
     fn reset_clears_setini_and_keeps_the_rest() {
         let mut ppu = ppu();
@@ -1037,10 +1042,17 @@ mod tests {
         ppu.write(Register::ScreenMode, 0x0D);
         ppu.ppu1_open_bus = 0x11;
         ppu.render_line(1, &mut LineOut::default());
+        // A mosaic write before line 2 starts the block rows there.
+        ppu.write(Register::Mosaic, 0x31);
         let before = ppu.clone();
         ppu.reset();
         assert_eq!(ppu.screen_mode, ScreenMode::empty());
         assert_eq!(ppu.next_line(), 1);
+        // The block rows start again at line 1; `$2106` is kept.
+        let mut restarted = before.mosaic;
+        restarted.start_frame(1);
+        assert_ne!(before.mosaic, restarted);
+        assert_eq!(ppu.mosaic, restarted);
         assert_eq!(ppu.background_mode, BackgroundMode::from(0x05));
         assert_eq!(ppu.ppu1_open_bus, 0x11);
         assert_eq!(ppu.vram(), before.vram());
