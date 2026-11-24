@@ -909,6 +909,64 @@ fn color_math_cart_adds_the_sub_screen_or_fixed_colour_clips_in_the_window_and_p
     );
 }
 
+// @source: anomie-regs#2123
+// @source: anomie-regs#2125
+// @source: anomie-regs#212f
+// @source: anomie-regs#2130
+// @source: anomie-regs#2131
+// @source: anomie-regs#2132
+// @source: anomie-regs#rendering-the-screen/color-math
+// @source: anomie-regs#windows
+// @source: fullsnes#snesppucolormath
+// @source: adr-0013
+// @source: adr-0033
+// @source: adr-0034
+// @source: adr-0035
+#[test]
+fn color_math_sub_cart_subtracts_masks_the_sub_screen_and_spares_low_sprite_palettes() {
+    let snes = drawn(include_bytes!(
+        "../../../tests/assets/carts/color-math-sub.sfc"
+    ));
+    // Main: BG1 (20, 20, 20) at 0 to 63, sprites (20, 20, 20) at 64 to 71 (palette 0) and
+    // 80 to 87 (palette 4), the backdrop (10, 10, 10). Sub: BG2 (6, 12, 24) at 0 to 63,
+    // masked by TSW at 32 to 47; where the sub screen shows its backdrop the operand is the
+    // fixed colour (2, 2, 2). `$2131` subtracts, with no half, for BG1, OBJ and the
+    // backdrop; the colour window, 16 to 23, prevents math (ADR 0035, points 4 to 6).
+    let difference = Rgb555::from_channels(14, 8, 0); // blue 20 - 24 clamps to 0
+    let less_fixed = Rgb555::from_channels(18, 18, 18);
+    let plain = Rgb555::from_channels(20, 20, 20);
+    let backdrop = Rgb555::from_channels(8, 8, 8);
+    let prevented = GREY;
+    // Line 8 is past BG1's tile but still on the sprites' lines.
+    let sprites = [(plain, 8), (backdrop, 8), (less_fixed, 8)];
+    let mut tiles = vec![
+        (difference, 16),
+        (plain, 8),
+        (difference, 8),
+        (less_fixed, 16),
+        (difference, 16),
+    ];
+    tiles.extend(sprites);
+    let mut below = vec![(backdrop, 16), (prevented, 8), (backdrop, 40)];
+    below.extend(sprites);
+    let tile_rows = runs(&tiles, backdrop);
+    let sprite_row = runs(&below, backdrop);
+    let rest = runs(&[(backdrop, 16), (prevented, 8)], backdrop);
+    // Lines 1 to 7 hold BG1's and BG2's tiles; line 8 only the sprites (Y 0, 8 rows; ADR
+    // 0033, point 3).
+    assert_picture(
+        &snes,
+        256,
+        PICTURE_ROWS,
+        &[
+            (0..7, Some(&tile_rows)),
+            (7..8, Some(&sprite_row)),
+            (8..PICTURE_ROWS, Some(&rest)),
+        ],
+        backdrop,
+    );
+}
+
 // @source: anomie-regs#2105
 // @source: anomie-regs#2107
 // @source: anomie-regs#210b

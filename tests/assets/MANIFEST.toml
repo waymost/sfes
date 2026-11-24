@@ -186,6 +186,12 @@ sha256 = "9813b8ccc767be292b1bf9006f393e94fcc57c217b06a85afb0830a4139bdd3b"
 notes = "Own test cartridge: Interlace all frame with three HDMA bands: mode 5 rows stepping by two and differing by field, mode 1 pseudo-hi-res with BG2 on the sub screen, and mode 6 with an offset-per-tile column. Built from tests/carts/hires-bands/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/color-math-sub.sfc"
+license = "own"
+sha256 = "f8cc78a60332afd1f40e02a166436004b590399a04413a61719dfc3e86b77e5f"
+notes = "Own test cartridge: Colour math subtracting the sub screen with the clamp at 0, BG2 masked on the sub screen by TSW so the fixed colour is used, math prevented in the colour window, math on the backdrop, and sprites taking math only in palettes 4 to 7. Built from tests/carts/color-math-sub/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
