@@ -317,9 +317,6 @@ impl ColorMath {
             channel
         })
     }
-}
-
-impl ColorMath {
     /// The sub pixel `color` of a wide line, given what `previous`, the main pixel to its
     /// left, was given: black where that was clipped, then blended as it was.
     // @source: anomie-regs#2133
