@@ -410,6 +410,19 @@ mod tests {
     use super::*;
 
     // @source: anomie-regs#sprites/oam
+    // @source: fullsnes#snesmemoryoamaccessspriteattributes
+    #[test]
+    fn every_attribute_byte_names_the_priority_of_its_bits_5_to_4() {
+        for value in 0..=u8::MAX {
+            assert_eq!(
+                Priority::from_attributes(value) as u8,
+                value >> 4 & 0x03,
+                "{value:#04X}"
+            );
+        }
+    }
+
+    // @source: anomie-regs#sprites/oam
     // @source: adr-0033
     /// An OAM image with every sprite at Y 128, which no sprite of up to 64 rows reaches
     /// on the lines the tests use.

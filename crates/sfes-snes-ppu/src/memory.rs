@@ -569,6 +569,34 @@ mod tests {
     // @source: anomie-regs#2115
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     #[test]
+    fn every_2115_byte_names_the_translation_of_bits_3_to_2_and_the_step_of_bits_1_to_0() {
+        let translations = [
+            Translation::None,
+            Translation::Rotate8,
+            Translation::Rotate9,
+            Translation::Rotate10,
+        ];
+        let steps = [
+            Step::One,
+            Step::ThirtyTwo,
+            Step::OneHundredTwentyEight,
+            Step::OneHundredTwentyEight,
+        ];
+        for value in 0..=u8::MAX {
+            let translation = translations[usize::from(value >> 2 & 0x03)];
+            let step = steps[usize::from(value & 0x03)];
+            assert_eq!(
+                Translation::from_control(value),
+                translation,
+                "{value:#04X}"
+            );
+            assert_eq!(Step::from_control(value), step, "{value:#04X}");
+        }
+    }
+
+    // @source: anomie-regs#2115
+    // @source: fullsnes#snesmemoryvramaccesstileandbgmap
+    #[test]
     fn translation_rotates_the_low_bits_left_by_three() {
         // anomie's example: $0003 in the 8-bit mode is word $0018.
         assert_eq!(Translation::Rotate8.apply(0x0003), 0x0018);
