@@ -68,4 +68,4 @@ Do not invent an entry. A new entry needs a licence, a retrieval date and a SHA-
 
 ## Check
 
-`cargo xtask provenance lint` checks that every chip-crate module and function has a known tag, and that each run of tags is in order. Fix what it reports; do not guess more anchors.
+`cargo xtask provenance lint` checks that every chip-crate module and function has a known tag, that each run of tags is in order, and that every anchor matches its entry's `anchor` pattern in `provenance/bibliography.toml` (ADR 0038). An id with no pattern takes no anchor, and a `snesdev-wiki` anchor needs its archived page. When the reading copies are at hand, `cargo xtask provenance lint --documents <dir>` also checks that each anchor exists in its document. Fix what it reports; do not guess more anchors.

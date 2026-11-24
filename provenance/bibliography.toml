@@ -2,7 +2,10 @@
 # `@source:` tags (PROV-03). Checked by `cargo xtask provenance lint`.
 #
 # Fields: id, title, url, license (SPDX id, or "unstated"), redistributable (whether an archived
-# copy may be committed), retrieved (YYYY-MM-DD), version, sha256 (of the retrieved copy), notes.
+# copy may be committed), retrieved (YYYY-MM-DD), version, sha256 (of the retrieved copy),
+# anchor (a regular expression every anchor must match whole; without it the source takes no
+# anchor), file (the reading copy's file name, for `provenance lint --documents`), notes.
+# ADR 0038.
 
 [[source]]
 id = "fullsnes"
@@ -13,6 +16,8 @@ redistributable = false
 retrieved = "2026-11-12"
 version = "HTML page last modified 2021-01-28"
 sha256 = "3853b65a7331bf12eea431ff494a2948a1c78ef22f7e819db4b139fd5a79f6c6"
+anchor = '[a-z0-9]+'
+file = "fullsnes-registered.htm"
 notes = """
 Anchors are the document's own HTML anchor names, as in its table of contents and in links such as fullsnes.htm#snesdmatransfers: \
 fullsnes#snesdmatransfers, fullsnes#snesppucolormath, fullsnes#snestiminghvevents. A browser's "save page" rewrites the HTML (tags, charset \
@@ -35,6 +40,8 @@ redistributable = false
 retrieved = "2026-11-12"
 version = "Revision 1157, 2007-07-12"
 sha256 = "19dfdf3f1c206655b8ede11bcd6dc053e36634f876819e40bb39cfb88a237dfd"
+anchor = '[0-9a-f]{2}[0-9a-fx][0-9a-f]|[a-z0-9]+(-[a-z0-9]+)*(/[a-z0-9]+(-[a-z0-9]+)*)*'
+file = "regs.txt"
 notes = """
 File regs.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors: a register entry is its address as \
 printed at the start of the entry, in lower case (anomie-regs#2100, anomie-regs#210d, anomie-regs#43x0, anomie-regs#43xa). A section is the \
@@ -53,6 +60,8 @@ redistributable = false
 retrieved = "2026-11-12"
 version = "Revision 1160, 2008-12-21"
 sha256 = "955ad18c3336fb4c6c01c54cc4a26d7bf270482d0d11b28ea048ffd7990b4bfe"
+anchor = '[a-z0-9]+(-[a-z0-9]+)*(/[a-z0-9]+(-[a-z0-9]+)*)*'
+file = "memmap.txt"
 notes = """
 File memmap.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors: the path of headings from the \
 top, each in kebab case as for anomie-regs, joined by `/`: anomie-memmap#hardware/data-bus, anomie-memmap#hardware/address-bus-a, \
@@ -67,6 +76,8 @@ redistributable = false
 retrieved = "2026-11-12"
 version = "Revision 1160, 2008-12-21"
 sha256 = "a26b6a8899146601c05be5e79777d7b9ab5857732699e8b78ac2c67080877f9e"
+anchor = 's-(cpu|ppu|apu)(/[a-z0-9]+(-[a-z0-9]+)*)*'
+file = "timing.txt"
 notes = """
 File timing.txt. Retrieved by hand by the project owner (the page refuses automated retrieval). Anchors: the path of headings from the \
 top, each in kebab case as for anomie-regs, joined by `/`. The top level is the chip part (S-CPU (5A22) becomes s-cpu): \
@@ -110,6 +121,7 @@ url = "https://snes.nesdev.org/wiki/SNESdev_Wiki"
 license = "CC0-1.0"
 redistributable = true
 retrieved = "2026-11-12"
+anchor = '[A-Za-z0-9_]+'
 notes = """
 Anchors name the wiki page title as in its URL, e.g. snesdev-wiki#DMA_registers. A page is archived when first cited: its HTML as \
 served, saved as provenance/archive/snesdev-wiki/<page title>.html, with the retrieval date and SHA-256 recorded in the PR. Each page is \
@@ -124,6 +136,8 @@ redistributable = false
 retrieved = "2026-11-12"
 version = "Dated March 13, 2024"
 sha256 = "b9177e1b045d2c8a801d1b23619abb4e5b29b88868fa491df7296dbc0b13447e"
+anchor = '\d+(\.\d+)*|(table|figure)-\d+-\d+|table-5-7-\d+[a-z]?|table-\d+-\d+-note-\d+'
+file = "w65c816s.txt"
 notes = """
 Copyright Western Design Center, all rights reserved: the PDF and any text extracted from it stay outside the repo. Anchor forms, always using the numbers \
 printed in the document: a section is its number (wdc-w65c816s#2.20, wdc-w65c816s#3.5.11); a table or figure is `table-` or `figure-` plus its number \
@@ -140,6 +154,8 @@ redistributable = false
 retrieved = "2026-11-12"
 version = "WDC edition, copyright 2007"
 sha256 = "dbccafcc47d6e53436bdc1c0049b3c54ffacfc9034a4041a7d92b6e6c5d72bb5"
+anchor = 'chapter-\d+(-[a-z0-9]+(-[a-z0-9]+)*)?'
+file = "65816Programmanual.txt"
 notes = """
 File 65816Programmanual.pdf, from the Internet Archive item at the URL. Retrieved by hand by the project owner. Copyright 2007 The Western Design Center, all rights reserved: the PDF and any text \
 extracted from it stay outside the repo. Vetted before registration (2026-11-12): a programming textbook whose listings are 65816 assembly, including the \
@@ -156,6 +172,8 @@ redistributable = false
 retrieved = "2026-11-12"
 version = "Last updated September 28, 2015"
 sha256 = "b8e314d4afa446ee4e65f5899dc54fe469d791c8b5d7801d609d531f71d7d6c3"
+anchor = '\d+(\.\d+)*|appendix'
+file = "6502.org_ Tutorial_ 65C816 Opcodes.html"
 notes = """
 Retrieved by hand by the project owner (the page refused automated retrieval on 2026-11-12); the hash is of the saved HTML page. Vetted before registration (2026-11-12): prose and tables with short 65816 \
 assembly examples; it names no emulator and quotes no emulator source code. Anchors name the section number as printed, e.g. \
@@ -170,6 +188,7 @@ license = "MIT"
 redistributable = true
 retrieved = "2026-11-12"
 version = "Commit 307c63f5673c8c6b861c52f71ddb89212a227480"
+anchor = '[0-9a-f]{2}\.[ne]'
 notes = """
 Fetched by `cargo xtask vectors fetch` and never committed; per-file hashes are in tests/assets/vectors.lock, so the entry has no sha256. Test evidence, \
 not a specification: the README does not say how the vectors were produced, so they confirm or contradict a reading of a document and do not replace \

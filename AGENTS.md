@@ -13,7 +13,7 @@ Working rules for every contributor to sfes, human or coding assistant. Read [`P
   // @source: adr-0012
   ```
 
-  The id is a key in [`provenance/bibliography.toml`](provenance/bibliography.toml) or an ADR number in `docs/adr/`. The anchor after `#` names the section; each entry's `notes` give its anchor forms. Cite the most precise place the document offers: for a 65C816 cycle sequence that is the row of the datasheet's instruction-operation table (`wdc-w65c816s#table-5-7-1a`), not the table or the chapter.
+  The id is a key in [`provenance/bibliography.toml`](provenance/bibliography.toml) or an ADR number in `docs/adr/`. The anchor after `#` names the section; each entry's `notes` give its anchor forms, and its `anchor` pattern is what `provenance lint` checks (ADR 0038). Cite the most precise place the document offers: for a 65C816 cycle sequence that is the row of the datasheet's instruction-operation table (`wdc-w65c816s#table-5-7-1a`), not the table or the chapter.
 - An item's `@source:` lines list documents first, then ADRs in ascending order, each tag once; the order among documents is free. `cargo xtask provenance lint` checks it.
 - An item's doc comment comes first, then its `@source:` lines, then its attributes. A module's tags come before its `//!` doc.
 - Own test cartridges (`tests/carts/`, ADR 0013) are tagged the same way with `; @source:`: each source file in its leading comments, and each `.proc` and `.macro` in the comment lines directly above it. An expected value the cartridge checks itself cites its source beside it.
@@ -42,7 +42,7 @@ cargo +nightly fmt -- --config group_imports=StdExternalCrate,imports_granularit
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
 cargo deny check
-cargo xtask provenance lint
+cargo xtask provenance lint   # --documents <dir> also finds each anchor in the reading copies
 cargo xtask provenance scan
 cargo xtask provenance assets
 cargo xtask deps

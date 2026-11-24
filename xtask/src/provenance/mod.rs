@@ -1,5 +1,6 @@
 //! Provenance checks (PROVENANCE.md, FSD section 4).
 
+pub(crate) mod anchors;
 pub(crate) mod assets;
 pub(crate) mod bibliography;
 pub(crate) mod commits;

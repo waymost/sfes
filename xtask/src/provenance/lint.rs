@@ -8,6 +8,11 @@
 //!   ([`STD_TRAITS`]: conversions, formatting, comparison, operators, …) are exempt;
 //! - every tag names a bibliography id or an existing ADR.
 //!
+//! Every tag's anchor, under `crates/` and in cartridge sources, is in the form its
+//! bibliography entry's `anchor` pattern gives, and an ADR or an entry without a pattern takes
+//! none (ADR 0038). With `--documents <dir>`, each anchor must also be found in the project
+//! owner's reading copy of its document ([`anchors`]).
+//!
 //! In every `crates/` Rust file and every cartridge source, a run of consecutive tag lines lists
 //! documents first, in any order, then ADRs in ascending order, each tag once (AGENTS.md
 //! section 1).
@@ -32,7 +37,10 @@ use crate::{
     carts::CARTS,
     files,
     finding::Finding,
-    provenance::bibliography::{self, KnownIds},
+    provenance::{
+        anchors,
+        bibliography::{self, KnownIds},
+    },
 };
 
 const MARKER: &str = "@source:";
@@ -94,8 +102,18 @@ const STD_TRAITS: &[&str] = &[
     "UpperHex",
 ];
 
-pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
+/// One anchored tag and where it is.
+#[derive(Clone, Debug)]
+pub(crate) struct Cited {
+    pub(crate) display: String,
+    pub(crate) line: usize,
+    pub(crate) id: String,
+    pub(crate) anchor: String,
+}
+
+pub(crate) fn run(root: &Path, documents: Option<&Path>) -> Result<Vec<Finding>> {
     let (known, mut findings) = bibliography::load(root)?;
+    let mut cited = Vec::new();
     for path in files::walk(&root.join("crates"), &|_| false)? {
         if path.extension().is_none_or(|extension| extension != "rs") {
             continue;
@@ -103,6 +121,7 @@ pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
         let display = files::display(root, &path);
         let text = fs::read_to_string(&path).with_context(|| format!("reading {display}"))?;
         findings.extend(check_tag_ids(&display, &text, &known));
+        cited.extend(anchored_tags(&display, &text));
         findings.extend(check_tag_order(&display, &text, "//"));
         if is_chip_crate_file(&display) {
             findings.extend(check_required_tags(&display, &text));
@@ -119,8 +138,12 @@ pub(crate) fn run(root: &Path) -> Result<Vec<Finding>> {
         let display = files::display(root, &path);
         let text = fs::read_to_string(&path).with_context(|| format!("reading {display}"))?;
         findings.extend(check_tag_ids(&display, &text, &known));
+        cited.extend(anchored_tags(&display, &text));
         findings.extend(check_tag_order(&display, &text, ";"));
         findings.extend(check_cart_tags(&display, &text));
+    }
+    if let Some(documents) = documents {
+        findings.extend(anchors::check(documents, &known, &cited)?);
     }
     Ok(findings)
 }
@@ -183,7 +206,14 @@ fn is_chip_crate_file(display: &str) -> bool {
 }
 
 /// The ids named by tags on one line, with an error for each malformed tag.
-fn tags_in_line(line: &str) -> Vec<Result<String, String>> {
+/// A tag's id and its anchor, if it has one.
+#[derive(Debug, Eq, PartialEq)]
+struct Tag {
+    id: String,
+    anchor: Option<String>,
+}
+
+fn tags_in_line(line: &str) -> Vec<Result<Tag, String>> {
     let mut tags = Vec::new();
     let mut rest = line;
     while let Some(position) = rest.find(MARKER) {
@@ -191,13 +221,20 @@ fn tags_in_line(line: &str) -> Vec<Result<String, String>> {
         let list_end = rest.find(MARKER).unwrap_or(rest.len());
         for segment in rest[..list_end].split(',') {
             let token = segment.split_whitespace().next().unwrap_or_default();
-            let id = token.split('#').next().unwrap_or_default();
+            let (id, anchor) = match token.split_once('#') {
+                Some((id, anchor)) => (id, Some(anchor)),
+                None => (token, None),
+            };
             let valid = !id.is_empty()
                 && id.chars().all(|character| {
                     character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-                });
+                })
+                && anchor.is_none_or(|anchor| !anchor.is_empty());
             tags.push(if valid {
-                Ok(String::from(id))
+                Ok(Tag {
+                    id: String::from(id),
+                    anchor: anchor.map(String::from),
+                })
             } else {
                 Err(format!("malformed source tag `{}`", segment.trim()))
             });
@@ -216,17 +253,47 @@ fn check_tag_ids(display: &str, text: &str, known: &KnownIds) -> Vec<Finding> {
     for (index, line) in text.lines().enumerate() {
         for tag in tags_in_line(line) {
             match tag {
-                Ok(id) if !known.contains(&id) => findings.push(Finding::new(
+                Ok(Tag { id, .. }) if !known.contains(&id) => findings.push(Finding::new(
                     display,
                     index + 1,
                     format!("unknown source id `{id}`: add it to provenance/bibliography.toml or cite an existing ADR"),
                 )),
-                Ok(_) => {}
+                Ok(Tag {
+                    id,
+                    anchor: Some(anchor),
+                }) => {
+                    if let Some(message) = known.anchor_problem(&id, &anchor) {
+                        findings.push(Finding::new(display, index + 1, message));
+                    }
+                }
+                Ok(Tag { anchor: None, .. }) => {}
                 Err(message) => findings.push(Finding::new(display, index + 1, message)),
             }
         }
     }
     findings
+}
+
+/// Every well-formed tag with an anchor in `text`, for the documents check.
+fn anchored_tags(display: &str, text: &str) -> Vec<Cited> {
+    let mut cited = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        for tag in tags_in_line(line).into_iter().flatten() {
+            if let Tag {
+                id,
+                anchor: Some(anchor),
+            } = tag
+            {
+                cited.push(Cited {
+                    display: String::from(display),
+                    line: index + 1,
+                    id,
+                    anchor,
+                });
+            }
+        }
+    }
+    cited
 }
 
 /// The full tags (`id#anchor`) on a line that is nothing but a `prefix` comment holding tags,
@@ -413,7 +480,7 @@ mod tests {
     use super::*;
 
     fn messages(text: &str) -> Vec<String> {
-        let known = KnownIds::from_ids(&["fullsnes", "adr-0001"]);
+        let known = KnownIds::with_anchors(&["fullsnes", "adr-0001"], &[("fullsnes", "[a-z0-9]+")]);
         let mut findings = check_tag_ids("crates/sfes-snes-x/src/lib.rs", text, &known);
         findings.extend(check_required_tags("crates/sfes-snes-x/src/lib.rs", text));
         findings
@@ -575,8 +642,34 @@ pub fn read() {}
         assert_eq!(messages(text), ["6: `read` has no `@source:` tag"]);
     }
 
+    #[test]
+    fn anchors_must_be_in_their_sources_form() {
+        let known = KnownIds::with_anchors(
+            &["fullsnes", "anomie-timing", "vigna-splitmix", "adr-0001"],
+            &[
+                ("fullsnes", "[a-z0-9]+"),
+                ("anomie-timing", "s-(cpu|ppu|apu)(/[a-z0-9-]+)*"),
+            ],
+        );
+        let text = "\
+// @source: fullsnes#snesdmatransfers, fullsnes#DMA
+// @source: anomie-timing#s-ppu/oam-reset, anomie-timing#oam-reset
+// @source: vigna-splitmix#x
+// @source: adr-0001#x
+// @source: fullsnes#
+";
+        let lines = check_tag_ids("crates/sfes-snes-x/src/lib.rs", text, &known)
+            .into_iter()
+            .map(|finding| finding.line)
+            .collect::<Vec<_>>();
+        assert_eq!(lines, [1, 2, 3, 4, 5]);
+        let cited = anchored_tags("x", text);
+        assert_eq!(cited.len(), 6);
+        assert_eq!(cited[2].anchor, "s-ppu/oam-reset");
+    }
+
     fn cart_messages(text: &str) -> Vec<String> {
-        let known = KnownIds::from_ids(&["fullsnes", "adr-0013"]);
+        let known = KnownIds::with_anchors(&["fullsnes", "adr-0013"], &[("fullsnes", "[a-z0-9]+")]);
         let mut findings = check_tag_ids("tests/carts/x/x.s", text, &known);
         findings.extend(check_cart_tags("tests/carts/x/x.s", text));
         findings
