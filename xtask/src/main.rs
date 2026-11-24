@@ -12,7 +12,11 @@ mod provenance;
 mod roms;
 mod vectors;
 
-use std::{env, path::PathBuf, process::ExitCode};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use anyhow::{Context, Result};
 
@@ -22,7 +26,10 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  provenance lint      every chip-crate module and function has a known @source: tag (PROV-03)
+  provenance lint [--documents <dir>]
+                       every chip-crate module and function has a known @source: tag, each
+                       anchor in its source's form; with --documents, found in the reading
+                       copies in <dir> (PROV-03, ADR 0038)
   provenance scan      no emulator copyright headers or author names in code (PROV-05)
   provenance assets    every test asset has a licensed manifest entry (PROV-09)
   provenance commits   [--base <rev>] [--pr-body-file <path>]
@@ -55,7 +62,11 @@ fn run() -> Result<bool> {
     let words = arguments.iter().map(String::as_str).collect::<Vec<_>>();
     let root = workspace_root()?;
     let (name, findings) = match words.as_slice() {
-        ["provenance", "lint"] => ("provenance lint", provenance::lint::run(&root)?),
+        ["provenance", "lint"] => ("provenance lint", provenance::lint::run(&root, None)?),
+        ["provenance", "lint", "--documents", documents] => (
+            "provenance lint",
+            provenance::lint::run(&root, Some(Path::new(documents)))?,
+        ),
         ["provenance", "scan"] => ("provenance scan", provenance::scan::run(&root)?),
         ["provenance", "assets"] => ("provenance assets", provenance::assets::run(&root)?),
         ["provenance", "commits", rest @ ..] => {
