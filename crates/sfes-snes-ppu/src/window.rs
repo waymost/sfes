@@ -8,12 +8,14 @@
 // @source: anomie-regs#212a
 // @source: anomie-regs#212b
 // @source: anomie-regs#212e
+// @source: anomie-regs#212f
 // @source: anomie-regs#windows
 // @source: fullsnes#snesppuwindow
 // @source: adr-0034
+// @source: adr-0035
 //! The two windows: their edges, which layers they act on, how the two combine, and which
-//! layers they mask on the main screen (ADR 0034). The colour window's settings are kept
-//! but not read until #96.
+//! layers they mask on the main and sub screens (ADR 0034; ADR 0035). The colour window's
+//! area is read by colour math.
 
 use crate::{background::Background, register::Register};
 
@@ -47,6 +49,17 @@ pub(crate) enum Masked {
     Background4 = 3,
     /// The sprites.
     Object = 4,
+    /// The colour window; it has no designation bit, and `$2130` reads its area.
+    Color = 5,
+}
+
+/// Which screen a layer is on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Screen {
+    /// The main screen, with `$212E`.
+    Main,
+    /// The sub screen, with `$212F`.
+    Sub,
 }
 
 impl From<Background> for Masked {
@@ -116,6 +129,8 @@ pub(crate) struct Windows {
     logic: [u8; 2],
     /// `$212E TMW`: the layers masked on the main screen.
     main: u8,
+    /// `$212F TSW`: the layers masked on the sub screen.
+    sub: u8,
 }
 
 impl Windows {
@@ -129,6 +144,7 @@ impl Windows {
             second: [0; 2],
             logic: [0; 2],
             main: 0,
+            sub: 0,
         }
     }
 
@@ -143,7 +159,9 @@ impl Windows {
     // @source: anomie-regs#212a
     // @source: anomie-regs#212b
     // @source: anomie-regs#212e
+    // @source: anomie-regs#212f
     // @source: adr-0034
+    // @source: adr-0035
     pub(crate) const fn write(&mut self, register: Register, value: u8) {
         match register {
             Register::WindowMaskBackground12 => self.select[0] = value,
@@ -156,6 +174,7 @@ impl Windows {
             Register::WindowLogicBackgrounds => self.logic[0] = value,
             Register::WindowLogicObjectColor => self.logic[1] = value,
             Register::MainScreenWindow => self.main = value & MAIN_SCREEN_MASK,
+            Register::SubScreenWindow => self.sub = value & MAIN_SCREEN_MASK,
             _ => {}
         }
     }
@@ -196,13 +215,20 @@ impl Windows {
         }
     }
 
-    /// Whether `layer` is masked at `column` on the main screen: its `$212E` bit is set and
-    /// its area is true there (ADR 0034, point 5).
+    /// Whether `layer` is masked at `column` on `screen`: its `$212E` (main) or `$212F`
+    /// (sub) bit is set and its area is true there (ADR 0034, point 5; ADR 0035, point 3).
+    /// The colour window has no bit and is never masked.
     // @source: anomie-regs#212e
+    // @source: anomie-regs#212f
     // @source: fullsnes#snesppuwindow
     // @source: adr-0034
-    pub(crate) fn masked_on_main(&self, layer: Masked, column: u16) -> bool {
-        self.main >> (layer as u8) & 1 != 0 && self.area(layer, column)
+    // @source: adr-0035
+    pub(crate) fn masked(&self, screen: Screen, layer: Masked, column: u16) -> bool {
+        let designated = match screen {
+            Screen::Main => self.main,
+            Screen::Sub => self.sub,
+        };
+        designated >> (layer as u8) & 1 != 0 && self.area(layer, column)
     }
 }
 
@@ -380,12 +406,12 @@ mod tests {
         let mut windows = windows([0x02, 0, 0x02], [0, 0]);
         // BG1 and OBJ both have window 1, but only BG1 is designated.
         windows.write(Register::MainScreenWindow, 0x01);
-        assert!(windows.masked_on_main(Masked::Background1, 10));
-        assert!(!windows.masked_on_main(Masked::Background1, 4));
-        assert!(!windows.masked_on_main(Masked::Object, 10));
+        assert!(windows.masked(Screen::Main, Masked::Background1, 10));
+        assert!(!windows.masked(Screen::Main, Masked::Background1, 4));
+        assert!(!windows.masked(Screen::Main, Masked::Object, 10));
         // Bit 4 is OBJ; the colour window has no designation bit.
         windows.write(Register::MainScreenWindow, 0xFF);
-        assert!(windows.masked_on_main(Masked::Object, 10));
+        assert!(windows.masked(Screen::Main, Masked::Object, 10));
     }
 
     // @source: fullsnes#snesiomap
@@ -394,7 +420,28 @@ mod tests {
     fn nothing_is_masked_at_power_on() {
         let windows = Windows::power_on();
         for layer in [Masked::Background1, Masked::Background4, Masked::Object] {
-            assert!(!windows.masked_on_main(layer, 0), "{layer:?}");
+            assert!(!windows.masked(Screen::Main, layer, 0), "{layer:?}");
         }
+    }
+
+    // @source: anomie-regs#212f
+    // @source: anomie-regs#2125
+    // @source: anomie-regs#212b
+    // @source: adr-0035
+    #[test]
+    fn the_sub_screen_has_its_own_designation_and_the_colour_window_an_area() {
+        // The colour window is the high half of $2125: window 2 enabled, bits 3 and 2 of
+        // the setting; with window 1 not enabled it is window 2's value, 16..=31.
+        let mut windows = windows([0x02, 0, 0x80], [0, 0]);
+        windows.write(Register::SubScreenWindow, 0x01);
+        assert!(windows.masked(Screen::Sub, Masked::Background1, 10));
+        assert!(!windows.masked(Screen::Main, Masked::Background1, 10));
+        // Bits 7 and 6 of $212F are not kept, and the colour window is never "masked".
+        windows.write(Register::SubScreenWindow, 0xFF);
+        assert!(!windows.masked(Screen::Sub, Masked::Color, 20));
+        assert_eq!(
+            picture(&windows, Masked::Color),
+            "................################........"
+        );
     }
 }

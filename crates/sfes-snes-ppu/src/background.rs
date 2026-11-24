@@ -11,6 +11,8 @@
 //! BG1 to BG4: their registers, and fetching one pixel of one background in BG modes 0 to
 //! 4 (ADR 0030). The PPU composes the pixels into a line.
 
+use sfes_api::Rgb555;
+
 use crate::register::Register;
 
 /// A VRAM word address has 15 bits (ADR 0029, point 3).
@@ -228,7 +230,7 @@ pub(crate) enum Color {
     /// This CGRAM entry.
     Palette(u8),
     /// This 15-bit colour, from direct colour mode.
-    Direct(u16),
+    Direct(Rgb555),
 }
 
 impl Background {
@@ -533,11 +535,11 @@ const fn index_offset(background: Background) -> u8 {
 /// `BBb00:RRRr0:GGGg0`.
 // @source: anomie-regs#backgrounds/direct-color-mode
 // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
-pub(crate) fn direct_color(value: u8, palette: u8) -> u16 {
-    let red = u16::from(value & 0x07) << 2 | u16::from(palette & 1) << 1;
-    let green = u16::from(value >> 3 & 0x07) << 2 | u16::from(palette >> 1 & 1) << 1;
-    let blue = u16::from(value >> 6) << 3 | u16::from(palette >> 2 & 1) << 2;
-    blue << 10 | green << 5 | red
+pub(crate) fn direct_color(value: u8, palette: u8) -> Rgb555 {
+    let red = (value & 0x07) << 2 | (palette & 1) << 1;
+    let green = (value >> 3 & 0x07) << 2 | (palette >> 1 & 1) << 1;
+    let blue = (value >> 6) << 3 | (palette >> 2 & 1) << 2;
+    Rgb555::from_channels(red, green, blue)
 }
 
 /// VRAM word `address`.
@@ -660,10 +662,10 @@ mod tests {
     #[test]
     fn direct_colour_spreads_the_character_and_palette_bits() {
         // Character data BBGGGRRR = 11 101 110 and palette bgr = 5 (b and r).
-        assert_eq!(direct_color(0b1110_1110, 0b101), 0x729A);
+        assert_eq!(direct_color(0b1110_1110, 0b101).bits(), 0x729A);
         // The least-significant bit of each channel is the palette's, the bottom one 0.
-        assert_eq!(direct_color(0x00, 0b111), 0b00100_00010_00010);
-        assert_eq!(direct_color(0xFF, 0), 0b11000_11100_11100);
+        assert_eq!(direct_color(0x00, 0b111).bits(), 0b00100_00010_00010);
+        assert_eq!(direct_color(0xFF, 0).bits(), 0b11000_11100_11100);
 
         let mut vram = vram();
         let mut backgrounds = Backgrounds::power_on();
@@ -678,7 +680,10 @@ mod tests {
             direct_color: true,
         };
         let sample = backgrounds.sample(&vram, direct, Background::One, 0, 0);
-        assert_eq!(sample.map(|s| s.color), Some(Color::Direct(0x73DE)));
+        assert_eq!(
+            sample.map(|s| s.color),
+            Some(Color::Direct(Rgb555::from_bits_truncate(0x73DE)))
+        );
     }
 
     // @source: anomie-regs#backgrounds/bg-scrolling

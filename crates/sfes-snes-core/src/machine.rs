@@ -952,9 +952,11 @@ mod tests {
         assert_eq!(snes.state.bus.wram_port_address, 0);
     }
 
+    // @source: anomie-regs#2100
     // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0018
     // @source: adr-0028
+    // @source: adr-0035
     #[test]
     fn a_clone_runs_the_same_and_starts_without_outputs() {
         let mut snes = machine(&PROGRAM);
@@ -964,16 +966,12 @@ mod tests {
         copy.run(Stop::Frames(1));
         assert_eq!(copy.cycles(), snes.cycles());
         assert_eq!(copy.region(RegionId::Wram), snes.region(RegionId::Wram));
-        // Taken before line 1, the clone draws the whole first frame: 256 × 224 of the
-        // backdrop, CGRAM entry 0 (ADR 0028, points 7 and 8).
-        let backdrop = Rgb555::new(u16::from_le_bytes([
-            snes.region(RegionId::Cgram)[0],
-            snes.region(RegionId::Cgram)[1] & 0x7F,
-        ]))
-        .unwrap();
+        // Taken before line 1, the clone draws the whole first frame: 256 × 224 pixels, all
+        // black because forced blank is on at power-on (ADR 0028, points 7 and 8; ADR 0035,
+        // point 2).
         let frame = snes.video();
         assert_eq!((frame.width, frame.height), (256, 224));
-        assert!(frame.pixels.iter().all(|&pixel| pixel == backdrop));
+        assert!(frame.pixels.iter().all(|&pixel| pixel == Rgb555::BLACK));
         assert_eq!(copy.video().pixels, frame.pixels);
         // Lines are drawn only when the PPU is synced or the frame ends. This program has
         // stopped, so a clone taken part-way through a frame has nothing drawn yet, and draws

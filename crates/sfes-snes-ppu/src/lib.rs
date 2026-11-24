@@ -23,10 +23,12 @@ extern crate alloc;
 extern crate std;
 
 mod background;
+mod color_math;
 mod counters;
 mod line;
 mod memory;
 mod mode7;
+mod mosaic;
 mod ppu;
 mod register;
 mod signals;

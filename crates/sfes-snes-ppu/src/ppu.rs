@@ -13,14 +13,16 @@ use sfes_api::{Rgb555, SplitMix64};
 
 use crate::{
     background::{Background, Backgrounds, Color, Layer, Sample, Setup, priority_order},
+    color_math::{ColorMath, Operand, Source, dim},
     counters::{CounterLatch, CounterRegister},
     line::{LineOut, LineWidth},
     memory::{CgramPort, Half, OamPort, VramPort},
     mode7::Mode7,
+    mosaic::Mosaic,
     register::{ReadKind, Register},
     signals::{Period, Signals},
-    sprite::Sprites,
-    window::{Masked, Windows},
+    sprite::{Pixel as SpritePixel, Sprites},
+    window::{Masked, Screen, Windows},
 };
 
 /// VRAM: 64 KiB.
@@ -54,12 +56,10 @@ const BACKGROUND_MODE_POWER_ON: u8 = 0x0F;
 const BACKGROUND_MODE_MASK: u8 = 0x07;
 /// `$2105` bit 3: mode 1's BG3 priority bit.
 const BACKGROUND_3_FIRST: u8 = 0x08;
-/// `$2130` bit 0: direct colour.
-const DIRECT_COLOR: u8 = 0x01;
-/// `$212C` bits 3–0: BG4 to BG1 on the main screen.
-const MAIN_SCREEN_BACKGROUNDS: u8 = 0x0F;
-/// `$212C` bit 4: the sprites on the main screen.
-const MAIN_SCREEN_SPRITES: u8 = 0x10;
+/// `$212C` and `$212D` bits 4–0: BG1 to BG4 and the sprites on a screen.
+const SCREEN_LAYERS: u8 = 0x1F;
+/// `$212C` and `$212D` bit 4: the sprites on a screen.
+const SCREEN_SPRITES: u8 = 0x10;
 /// The pixels of a normal line.
 const LINE_PIXELS: u16 = 256;
 /// `$2133` bit 3: pseudo-hires.
@@ -68,8 +68,6 @@ const PSEUDO_HIRES: u8 = 0x08;
 const EXTBG: u8 = 0x40;
 /// `$2133` bit 0: interlace.
 const INTERLACE: u8 = 0x01;
-/// CGRAM bit 15 is not stored; a colour has 15 bits.
-const COLOR_MASK: u16 = 0x7FFF;
 /// The first line a frame outputs (anomie-timing#s-ppu/rendering).
 const FIRST_OUTPUT_LINE: u16 = 1;
 
@@ -102,8 +100,12 @@ pub struct Ppu {
     backgrounds: Backgrounds,
     /// $212C TM: the layers on the main screen.
     main_screen: u8,
-    /// $2130 CGWSEL: colour math control A; only its direct-colour bit is used so far.
-    color_select: u8,
+    /// $212D TS: the layers on the sub screen.
+    sub_screen: u8,
+    /// $2130–$2132 CGWSEL, CGADSUB and COLDATA: colour math and the fixed colour.
+    color_math: ColorMath,
+    /// $2106 MOSAIC: the block size, the backgrounds it acts on and where its rows start.
+    mosaic: Mosaic,
     /// $2133 SETINI: external sync, EXTBG, pseudo-hires, overscan and interlace.
     screen_mode: u8,
     /// The last value read from `$2134–$2136`, `$2138–$213A` or `$213E`.
@@ -153,7 +155,9 @@ impl Ppu {
             background_mode: BACKGROUND_MODE_POWER_ON,
             backgrounds: Backgrounds::power_on(),
             main_screen: 0,
-            color_select: 0,
+            sub_screen: 0,
+            color_math: ColorMath::power_on(),
+            mosaic: Mosaic::power_on(FIRST_OUTPUT_LINE),
             screen_mode: 0,
             ppu1_open_bus: 0,
             ppu2_open_bus: 0,
@@ -440,9 +444,14 @@ impl Ppu {
             | Register::Window2Right
             | Register::WindowLogicBackgrounds
             | Register::WindowLogicObjectColor
-            | Register::MainScreenWindow => self.windows.write(register, value),
+            | Register::MainScreenWindow
+            | Register::SubScreenWindow => self.windows.write(register, value),
             Register::MainScreen => self.main_screen = value,
-            Register::ColorMathSelect => self.color_select = value,
+            Register::SubScreen => self.sub_screen = value,
+            Register::Mosaic => self.mosaic.write(value, self.next_line),
+            Register::ColorMathSelect | Register::ColorMathDesignation | Register::FixedColor => {
+                self.color_math.write(register, value);
+            }
             Register::ScreenMode => self.screen_mode = value,
             _ => {}
         }
@@ -470,34 +479,49 @@ impl Ppu {
     // @source: adr-0028
     pub const fn start_frame(&mut self) {
         self.next_line = FIRST_OUTPUT_LINE;
+        self.mosaic.start_frame(FIRST_OUTPUT_LINE);
     }
 
     /// Renders `line` into `out` from the registers and memories as they stand, and makes
     /// the next line the one after it (technical design section 5; ADR 0028, points 6 and
-    /// 7; ADR 0030):
+    /// 7; ADR 0030; ADR 0035):
     ///
     /// - the line is 512 pixels in BG mode 5 or 6 or with pseudo-hires, else 256;
-    /// - in BG modes 0 to 4 each pixel is the first non-transparent pixel, front to back,
-    ///   of the backgrounds `$212C` puts on the main screen, else the backdrop, CGRAM
-    ///   entry 0;
+    /// - in BG modes 0 to 4 each main-screen pixel is the first non-transparent pixel, front
+    ///   to back, of the backgrounds `$212C` puts on the main screen, else the backdrop,
+    ///   CGRAM entry 0;
     /// - in BG mode 7 the pixel is mode 7's (ADR 0032), BG2 appearing with EXTBG;
     /// - the sprites come in at their places in the order (ADR 0033), their pixels drawn
     ///   only when `$212C` bit 4 is set, and their range and time flags set whatever it is;
+    /// - a background `$2106` pixelates shows the pixel at the top-left of its block;
+    /// - the colour window clips the pixel to black and prevents math as `$2130` says, and a
+    ///   pixel of a layer `$2131` names has the fixed colour or the sub screen's pixel added
+    ///   or subtracted;
+    /// - `$2100` forced blank makes the line black, and its brightness dims every pixel;
     /// - in modes 5 and 6 every pixel is a sprite's or the backdrop, until #97;
-    /// - a wide line writes each main-screen pixel twice, until the sub screen arrives.
+    /// - a wide line writes each pixel twice, until #97.
+    // @source: anomie-regs#2100
     // @source: anomie-regs#2105
+    // @source: anomie-regs#2106
     // @source: anomie-regs#212c
+    // @source: anomie-regs#212d
+    // @source: anomie-regs#2130
+    // @source: anomie-regs#2131
     // @source: anomie-regs#2133
     // @source: anomie-regs#backgrounds/bg-modes
     // @source: anomie-regs#backgrounds/mode-7
+    // @source: anomie-regs#rendering-the-screen/color-math
+    // @source: anomie-regs#rendering-the-screen/mosaic
     // @source: anomie-regs#rendering-the-screen/rendering-the-screen
     // @source: anomie-regs#sprites/sprite-priority
+    // @source: fullsnes#snesppucolormath
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: fullsnes#snesppuresolution
     // @source: adr-0028
     // @source: adr-0030
     // @source: adr-0032
     // @source: adr-0033
+    // @source: adr-0035
     pub fn render_line(&mut self, line: u16, out: &mut LineOut) {
         let mode = self.background_mode & BACKGROUND_MODE_MASK;
         // BG modes 5 and 6 are true hi-res.
@@ -510,60 +534,54 @@ impl Ppu {
         out.fill(line, width, interlaced, self.color(0));
         let setup = Setup {
             control: self.background_mode,
-            direct_color: self.color_select & DIRECT_COLOR != 0,
+            direct_color: self.color_math.direct_color(),
         };
         let extbg = self.screen_mode & EXTBG != 0;
         let order = priority_order(mode, self.background_mode & BACKGROUND_3_FIRST != 0, extbg);
-        let enabled = self.main_screen & MAIN_SCREEN_BACKGROUNDS;
+        let main_layers = self.main_screen & SCREEN_LAYERS;
+        // The sub screen only matters where math adds it.
+        let sub_wanted = self.color_math.adds_sub_screen() && self.color_math.any_layer();
+        let sub_layers = if sub_wanted {
+            self.sub_screen & SCREEN_LAYERS
+        } else {
+            0
+        };
+        let fetched = main_layers | sub_layers;
         // Evaluation always runs: its flags are readable state (EMU-06); the pixels only
-        // when the sprites are on the main screen.
+        // when the sprites are on a screen that is looked at.
         let first = self.oam_port.first_sprite();
         let evaluated = self.sprites.evaluate(&self.oam, first, line);
-        let sprites =
-            (self.main_screen & MAIN_SCREEN_SPRITES != 0).then(|| evaluated.pixels(&self.vram));
+        let sprites = (fetched & SCREEN_SPRITES != 0).then(|| evaluated.pixels(&self.vram));
         let repeat = width.pixels() / usize::from(LINE_PIXELS);
+        let forced_blank = self.forced_blank();
         for x in 0..LINE_PIXELS {
-            // Mode 7's one pixel, which BG1 and EXTBG's BG2 both show.
-            let mode_7 = if mode == 7 {
-                let direct = setup.direct_color;
-                self.mode7.samples(&self.vram, direct, extbg, x, line)
-            } else {
-                [None; 4]
-            };
-            // Each enabled background's pixel here, fetched once however many layers it has.
-            let samples = Background::ALL.map(|background| {
-                let layer = Masked::from(background);
-                if enabled >> background as u8 & 1 == 0 || self.windows.masked_on_main(layer, x) {
-                    return None;
-                }
-                if mode == 7 {
-                    return mode_7[background as usize];
-                }
-                self.backgrounds
-                    .sample(&self.vram, setup, background, x, line)
-            });
+            let samples = self.samples(mode, setup, fetched, x, line);
             let sprite = sprites
                 .as_ref()
-                .filter(|_| !self.windows.masked_on_main(Masked::Object, x))
                 .and_then(|pixels| pixels.get(usize::from(x)).copied().flatten());
-            let shown =
-                order.iter().find_map(|layer| match *layer {
-                    Layer::Background { background, high } => samples
-                        .get(background as usize)
-                        .copied()
-                        .flatten()
-                        .filter(|sample| sample.high == high),
-                    Layer::Sprites(priority) => sprite
-                        .filter(|pixel| pixel.priority == priority)
-                        .map(|pixel| Sample {
-                            color: Color::Palette(pixel.index),
-                            high: false,
-                        }),
-                });
-            let Some(sample) = shown else { continue };
-            let color = match sample.color {
-                Color::Palette(index) => self.color(index),
-                Color::Direct(color) => Rgb555::new(color).unwrap_or_default(),
+            let main = self.front(Screen::Main, main_layers, order, &samples, sprite, x);
+            let source = main.map_or(Source::Backdrop, |(source, _)| source);
+            let mut color = main.map_or_else(|| self.color(0), |(_, sample)| self.resolve(sample));
+            let area = self.windows.area(Masked::Color, x);
+            let clipped = self.color_math.clips(area);
+            if clipped {
+                color = Rgb555::BLACK;
+            }
+            if !self.color_math.prevents(area) && self.color_math.takes_math(source) {
+                let operand = if self.color_math.adds_sub_screen() {
+                    match self.front(Screen::Sub, sub_layers, order, &samples, sprite, x) {
+                        Some((_, sample)) => Operand::Pixel(self.resolve(sample)),
+                        None => Operand::Backdrop,
+                    }
+                } else {
+                    Operand::Fixed
+                };
+                color = self.color_math.blend(color, operand, clipped);
+            }
+            let color = if forced_blank {
+                Rgb555::BLACK
+            } else {
+                dim(color, self.display_control)
             };
             let start = usize::from(x) * repeat;
             if let Some(pixels) = out.pixels_mut().get_mut(start..start + repeat) {
@@ -573,6 +591,106 @@ impl Ppu {
         self.next_line = line + 1;
     }
 
+    /// What each background in `layers` shows at column `x` of `line`, each from the top-left
+    /// of its mosaic block (ADR 0035, point 8); mode 7's EXTBG layer has blocks of its own.
+    // @source: anomie-regs#2106
+    // @source: anomie-regs#backgrounds/mode-7
+    // @source: anomie-regs#rendering-the-screen/mosaic
+    // @source: adr-0030
+    // @source: adr-0032
+    // @source: adr-0035
+    fn samples(
+        &self,
+        mode: u8,
+        setup: Setup,
+        layers: u8,
+        x: u16,
+        line: u16,
+    ) -> [Option<Sample>; 4] {
+        let extbg = self.screen_mode & EXTBG != 0;
+        Background::ALL.map(|background| {
+            if layers >> background as u8 & 1 == 0 {
+                return None;
+            }
+            let (column, row) = self.mosaic.block(background, x, line);
+            if mode == 7 {
+                let (column, row) = if background == Background::Two {
+                    self.mosaic.extbg_block(x, line)
+                } else {
+                    (column, row)
+                };
+                let direct = setup.direct_color;
+                return self
+                    .mode7
+                    .samples(&self.vram, direct, extbg, column, row)
+                    .get(background as usize)
+                    .copied()
+                    .flatten();
+            }
+            self.backgrounds
+                .sample(&self.vram, setup, background, column, row)
+        })
+    }
+
+    /// The front pixel of `screen` at column `x`: the first layer of `order`, front to back,
+    /// that is in `layers`, not masked by the screen's window designation, and not
+    /// transparent; `None` is the backdrop (ADR 0030; ADR 0034, point 5; ADR 0035, point 3).
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#212d
+    // @source: anomie-regs#rendering-the-screen/rendering-the-screen
+    // @source: fullsnes#snesppucolormath
+    // @source: adr-0030
+    // @source: adr-0033
+    // @source: adr-0034
+    // @source: adr-0035
+    fn front(
+        &self,
+        screen: Screen,
+        layers: u8,
+        order: &[Layer],
+        samples: &[Option<Sample>; 4],
+        sprite: Option<SpritePixel>,
+        x: u16,
+    ) -> Option<(Source, Sample)> {
+        order.iter().find_map(|layer| match *layer {
+            Layer::Background { background, high } => {
+                let masked = self.windows.masked(screen, Masked::from(background), x);
+                if layers >> background as u8 & 1 == 0 || masked {
+                    return None;
+                }
+                samples
+                    .get(background as usize)
+                    .copied()
+                    .flatten()
+                    .filter(|sample| sample.high == high)
+                    .map(|sample| (Source::Background(background as u8), sample))
+            }
+            Layer::Sprites(priority) => {
+                if layers & SCREEN_SPRITES == 0 || self.windows.masked(screen, Masked::Object, x) {
+                    return None;
+                }
+                sprite
+                    .filter(|pixel| pixel.priority == priority)
+                    .map(|pixel| {
+                        let sample = Sample {
+                            color: Color::Palette(pixel.index),
+                            high: false,
+                        };
+                        (Source::Object(pixel.index), sample)
+                    })
+            }
+        })
+    }
+
+    /// The 15-bit colour of a sample: its CGRAM entry, or its direct colour.
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    fn resolve(&self, sample: Sample) -> Rgb555 {
+        match sample.color {
+            Color::Palette(index) => self.color(index),
+            Color::Direct(color) => color,
+        }
+    }
+
     /// CGRAM entry `index` as a 15-bit colour, little-endian.
     // @source: anomie-regs#213b
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
@@ -580,8 +698,7 @@ impl Ppu {
         let offset = usize::from(index) * 2;
         let low = self.cgram.get(offset).copied().unwrap_or_default();
         let high = self.cgram.get(offset + 1).copied().unwrap_or_default();
-        // Masked to 15 bits, so it is always a colour.
-        Rgb555::new(u16::from_le_bytes([low, high]) & COLOR_MASK).unwrap_or_default()
+        Rgb555::from_le_bytes([low, high])
     }
 
     /// VRAM, 64 KiB.
@@ -730,6 +847,7 @@ mod tests {
     #[test]
     fn a_line_is_the_backdrop_and_wide_in_modes_5_and_6_or_pseudo_hires() {
         let mut ppu = ppu();
+        ppu.write(Register::DisplayControl, 0x0F);
         ppu.cgram_mut()[..2].copy_from_slice(&[0x1F, 0xFC]);
         let mut out = LineOut::default();
         ppu.write(Register::BackgroundMode, 0x01);
@@ -970,8 +1088,10 @@ mod tests {
     /// and `$0008`.
     fn drawing_ppu() -> Ppu {
         let mut ppu = ppu();
+        // Forced blank is on at power-on, and makes every line black.
+        ppu.write(Register::DisplayControl, 0x0F);
         ppu.vram_mut().fill(0);
-        for (entry, color) in [1u16, 2, 4, 8].into_iter().enumerate() {
+        for (entry, color) in [1, 2, 4, 8].map(raw).into_iter().enumerate() {
             ppu.cgram_mut()[entry * 2..entry * 2 + 2].copy_from_slice(&color.to_le_bytes());
         }
         ppu
@@ -980,8 +1100,8 @@ mod tests {
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0030
     /// The colour of pixel `x` of a rendered line.
-    fn pixel(out: &LineOut, x: usize) -> u16 {
-        out.pixels()[x].bits()
+    fn pixel(out: &LineOut, x: usize) -> Rgb555 {
+        out.pixels()[x]
     }
 
     // @source: anomie-regs#212c
@@ -1008,20 +1128,26 @@ mod tests {
 
         // Nothing on the main screen: the backdrop.
         ppu.render_line(0, &mut out);
-        assert_eq!(pixel(&out, 0), 1);
+        assert_eq!(pixel(&out, 0), raw(1));
         // BG1 alone.
         ppu.write(Register::MainScreen, 0x01);
         ppu.render_line(0, &mut out);
-        assert_eq!([pixel(&out, 0), pixel(&out, 1), pixel(&out, 2)], [2, 2, 1]);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1), pixel(&out, 2)],
+            [raw(2), raw(2), raw(1)]
+        );
         // BG2's priority-1 tile is in front of BG1's priority-0 one; BG1 shows where BG2
         // is transparent.
         ppu.write(Register::MainScreen, 0x03);
         ppu.render_line(0, &mut out);
-        assert_eq!([pixel(&out, 0), pixel(&out, 1), pixel(&out, 2)], [4, 2, 1]);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1), pixel(&out, 2)],
+            [raw(4), raw(2), raw(1)]
+        );
         // The sprite bit is not a background.
         ppu.write(Register::MainScreen, 0x10);
         ppu.render_line(0, &mut out);
-        assert_eq!(pixel(&out, 0), 1);
+        assert_eq!(pixel(&out, 0), raw(1));
     }
 
     // @source: anomie-regs#2133
@@ -1042,12 +1168,12 @@ mod tests {
         ppu.write(Register::Background1VerticalScroll, 0xFE);
         ppu.write(Register::Background1VerticalScroll, 0xFF);
         ppu.render_line(5, &mut out);
-        assert_eq!([pixel(&out, 0), pixel(&out, 1)], [2, 1]);
+        assert_eq!([pixel(&out, 0), pixel(&out, 1)], [raw(2), raw(1)]);
         // Horizontal scroll 1: pixel 0 shows what was pixel 1.
         ppu.write(Register::Background1HorizontalScroll, 0x01);
         ppu.write(Register::Background1HorizontalScroll, 0x00);
         ppu.render_line(5, &mut out);
-        assert_eq!(pixel(&out, 0), 1);
+        assert_eq!(pixel(&out, 0), raw(1));
         // Pseudo-hires: 512 pixels, each written twice until the sub screen arrives.
         ppu.write(Register::Background1HorizontalScroll, 0x00);
         ppu.write(Register::Background1HorizontalScroll, 0x00);
@@ -1055,7 +1181,7 @@ mod tests {
         ppu.render_line(5, &mut out);
         assert_eq!(out.pixels().len(), 512);
         let first = [0, 1, 2, 3].map(|x| pixel(&out, x));
-        assert_eq!(first, [2, 2, 1, 1]);
+        assert_eq!(first, [raw(2), raw(2), raw(1), raw(1)]);
     }
 
     // @source: anomie-regs#2133
@@ -1089,18 +1215,18 @@ mod tests {
 
         // BG1: the pixel as a palette index; 0 is the backdrop.
         ppu.write(Register::MainScreen, 0x01);
-        assert_eq!(row(&mut ppu, &mut out), [2, 16, 1]);
+        assert_eq!(row(&mut ppu, &mut out), [raw(2), raw(16), raw(1)]);
         // BG2 shows nothing without EXTBG.
         ppu.write(Register::MainScreen, 0x02);
-        assert_eq!(row(&mut ppu, &mut out), [1, 1, 1]);
+        assert_eq!(row(&mut ppu, &mut out), [raw(1), raw(1), raw(1)]);
         // With EXTBG BG2's pixels use the low 7 bits, and BG2's priority-1 pixel is in front
         // of BG1, which is in front of BG2's priority-0 pixel.
         ppu.write(Register::ScreenMode, 0x40);
-        assert_eq!(row(&mut ppu, &mut out), [2, 4, 1]);
+        assert_eq!(row(&mut ppu, &mut out), [raw(2), raw(4), raw(1)]);
         ppu.write(Register::MainScreen, 0x03);
-        assert_eq!(row(&mut ppu, &mut out), [2, 4, 1]);
+        assert_eq!(row(&mut ppu, &mut out), [raw(2), raw(4), raw(1)]);
         ppu.write(Register::MainScreen, 0x01);
-        assert_eq!(row(&mut ppu, &mut out), [2, 16, 1]);
+        assert_eq!(row(&mut ppu, &mut out), [raw(2), raw(16), raw(1)]);
     }
 
     /// Hides every sprite at Y 128, where none of up to 64 rows reaches lines 1 to 8, but
@@ -1154,13 +1280,13 @@ mod tests {
         // The sprite is at X 1: over pixels 1 and 2, with priority 0 behind BG1's pixel 1.
         ppu.oam[0] = 1;
         ppu.write(Register::MainScreen, 0x11);
-        assert_eq!(row(&mut ppu, &mut out), [2, 16, 32]);
+        assert_eq!(row(&mut ppu, &mut out), [raw(2), raw(16), raw(32)]);
         // Priority 1 puts it in front of BG1.
         ppu.oam[3] = 0x10;
-        assert_eq!(row(&mut ppu, &mut out), [2, 32, 32]);
+        assert_eq!(row(&mut ppu, &mut out), [raw(2), raw(32), raw(32)]);
         // Not on the main screen, it is not drawn.
         ppu.write(Register::MainScreen, 0x01);
-        assert_eq!(row(&mut ppu, &mut out), [2, 16, 1]);
+        assert_eq!(row(&mut ppu, &mut out), [raw(2), raw(16), raw(1)]);
     }
 
     // @source: anomie-regs#2103
@@ -1176,16 +1302,16 @@ mod tests {
         ppu.vram_mut()[0x8020 + 1] = 0xC0;
         ppu.cgram_mut()[260..262].copy_from_slice(&64u16.to_le_bytes());
         ppu.render_line(1, &mut out);
-        assert_eq!(pixel(&out, 0), 32);
+        assert_eq!(pixel(&out, 0), raw(32));
         // $2102/$2103 = $102 names word 2, byte 4: sprite 1.
         ppu.write(Register::OamAddressLow, 0x02);
         ppu.write(Register::OamAddressHigh, 0x80);
         ppu.render_line(1, &mut out);
-        assert_eq!(pixel(&out, 0), 64);
+        assert_eq!(pixel(&out, 0), raw(64));
         // Without the bit sprite 0 is first again.
         ppu.write(Register::OamAddressHigh, 0x00);
         ppu.render_line(1, &mut out);
-        assert_eq!(pixel(&out, 0), 32);
+        assert_eq!(pixel(&out, 0), raw(32));
     }
 
     // @source: anomie-regs#213e
@@ -1194,6 +1320,8 @@ mod tests {
     #[test]
     fn the_overflow_flags_are_set_whether_or_not_sprites_are_shown_and_clear_at_line_0() {
         let mut ppu = sprite_ppu();
+        // Back to the power-on forced blank, which the fixtures turned off.
+        ppu.write(Register::DisplayControl, 0x80);
         let mut out = LineOut::default();
         // 33 sprites on line 1; the sprites are not on the main screen.
         for record in ppu.oam.chunks_mut(4).take(33) {
@@ -1242,24 +1370,24 @@ mod tests {
         ppu.vram_mut()[32] = 0xC0;
         ppu.write(Register::MainScreen, 0x01);
         ppu.render_line(0, &mut out);
-        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (2, 2));
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (raw(2), raw(2)));
 
         // Window 1 is pixel 0 alone and acts on BG1, but BG1 is not designated: no change.
         ppu.write(Register::Window1Left, 0);
         ppu.write(Register::Window1Right, 0);
         ppu.write(Register::WindowMaskBackground12, 0x02);
         ppu.render_line(0, &mut out);
-        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (2, 2));
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (raw(2), raw(2)));
 
         // Designated: pixel 0 is masked, so the backdrop shows; pixel 1 is outside.
         ppu.write(Register::MainScreenWindow, 0x01);
         ppu.render_line(0, &mut out);
-        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (1, 2));
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (raw(1), raw(2)));
 
         // Inverted, the window is everything but pixel 0.
         ppu.write(Register::WindowMaskBackground12, 0x03);
         ppu.render_line(0, &mut out);
-        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (2, 1));
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (raw(2), raw(1)));
     }
 
     // @source: anomie-regs#212e
@@ -1275,7 +1403,7 @@ mod tests {
         // Sprite 0's first two pixels are colour 32 over mode 7's picture.
         ppu.write(Register::MainScreen, 0x10);
         ppu.render_line(1, &mut out);
-        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (32, 32));
+        assert_eq!((pixel(&out, 0), pixel(&out, 1)), (raw(32), raw(32)));
 
         // Window 2 covers pixel 1 alone, acts on OBJ and is designated.
         ppu.write(Register::Window2Left, 1);
@@ -1283,8 +1411,8 @@ mod tests {
         ppu.write(Register::WindowMaskObjectColor, 0x08);
         ppu.write(Register::MainScreenWindow, 0x10);
         ppu.render_line(1, &mut out);
-        assert_eq!(pixel(&out, 0), 32);
-        assert_ne!(pixel(&out, 1), 32);
+        assert_eq!(pixel(&out, 0), raw(32));
+        assert_ne!(pixel(&out, 1), raw(32));
 
         // The flags are set from the evaluation, whatever the windows hide.
         for record in ppu.oam.chunks_mut(4).take(33) {
@@ -1293,7 +1421,235 @@ mod tests {
         ppu.write(Register::Window2Left, 0);
         ppu.write(Register::Window2Right, 255);
         ppu.render_line(1, &mut out);
-        assert_ne!(pixel(&out, 0), 32);
+        assert_ne!(pixel(&out, 0), raw(32));
         assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x41));
+    }
+
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    // @source: adr-0035
+    /// A 15-bit colour from its channels.
+    const fn rgb(red: u8, green: u8, blue: u8) -> Rgb555 {
+        Rgb555::from_channels(red, green, blue)
+    }
+
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    // @source: adr-0030
+    /// The colour whose bits are `bits`.
+    const fn raw(bits: u16) -> Rgb555 {
+        Rgb555::from_bits_truncate(bits)
+    }
+
+    // @source: anomie-regs#backgrounds/mode-1
+    // @source: anomie-regs#212d
+    // @source: adr-0035
+    /// Mode 1 with BG1's row 0 and row 1 each starting with a colour-1 pixel, then a clear
+    /// one, and BG2 with a colour-2 pixel in row 0. The backdrop is (10, 10, 10), colour 1
+    /// (20, 4, 0) and colour 2 (3, 6, 9).
+    fn math_ppu() -> Ppu {
+        let mut ppu = drawing_ppu();
+        ppu.write(Register::BackgroundMode, 0x01);
+        ppu.write(Register::Background1Tilemap, 0x04);
+        ppu.write(Register::Background2Tilemap, 0x08);
+        ppu.write(Register::Background12Characters, 0x10);
+        ppu.vram_mut()[0x800..0x802].copy_from_slice(&[0x01, 0x00]);
+        ppu.vram_mut()[0x1000..0x1002].copy_from_slice(&[0x01, 0x00]);
+        ppu.vram_mut()[32] = 0x80;
+        ppu.vram_mut()[34] = 0x80;
+        ppu.vram_mut()[0x2000 + 32 + 1] = 0x80;
+        for (entry, color) in [rgb(10, 10, 10), rgb(20, 4, 0), rgb(3, 6, 9)]
+            .into_iter()
+            .enumerate()
+        {
+            ppu.cgram_mut()[entry * 2..entry * 2 + 2].copy_from_slice(&color.to_le_bytes());
+        }
+        ppu
+    }
+
+    // @source: anomie-regs#2132
+    // @source: anomie-regs#2131
+    // @source: anomie-regs#rendering-the-screen/color-math
+    // @source: fullsnes#snesppucolormath
+    // @source: adr-0035
+    #[test]
+    fn the_fixed_colour_is_added_or_subtracted_for_the_layers_2131_names() {
+        let mut ppu = math_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::MainScreen, 0x01);
+        // Fixed colour (5, 0, 3).
+        ppu.write(Register::FixedColor, 0x20 | 5);
+        ppu.write(Register::FixedColor, 0x80 | 3);
+        // No layer designated: no math.
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 2)],
+            [rgb(20, 4, 0), rgb(10, 10, 10)]
+        );
+        // BG1 only, then BG1 and the backdrop.
+        ppu.write(Register::ColorMathDesignation, 0x01);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 2)],
+            [rgb(25, 4, 3), rgb(10, 10, 10)]
+        );
+        ppu.write(Register::ColorMathDesignation, 0x21);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 2)],
+            [rgb(25, 4, 3), rgb(15, 10, 13)]
+        );
+        // Subtract, then half of the sum.
+        ppu.write(Register::ColorMathDesignation, 0x81);
+        ppu.render_line(0, &mut out);
+        assert_eq!(pixel(&out, 0), rgb(15, 4, 0));
+        ppu.write(Register::ColorMathDesignation, 0x41);
+        ppu.render_line(0, &mut out);
+        assert_eq!(pixel(&out, 0), rgb(12, 2, 1));
+    }
+
+    // @source: anomie-regs#212d
+    // @source: anomie-regs#2130
+    // @source: anomie-regs#212f
+    // @source: anomie-regs#rendering-the-screen/color-math
+    // @source: fullsnes#snesppucolormath
+    // @source: adr-0035
+    #[test]
+    fn the_sub_screen_is_added_when_2130_bit_1_is_set_and_its_backdrop_is_the_fixed_colour() {
+        let mut ppu = math_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::MainScreen, 0x01);
+        // BG2 on the sub screen; BG1 and the backdrop take math; fixed colour (5, 0, 3).
+        ppu.write(Register::SubScreen, 0x02);
+        ppu.write(Register::ColorMathDesignation, 0x21);
+        ppu.write(Register::FixedColor, 0x20 | 5);
+        ppu.write(Register::FixedColor, 0x80 | 3);
+        // Bit 1 clear: the fixed colour, whatever the sub screen holds.
+        ppu.render_line(0, &mut out);
+        assert_eq!(pixel(&out, 0), rgb(25, 4, 3));
+        // Bit 1 set: BG2's colour 2 at pixel 0 and the fixed colour (its backdrop) at 1.
+        ppu.write(Register::ColorMathSelect, 0x02);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1)],
+            [rgb(23, 10, 9), rgb(15, 10, 13)]
+        );
+        // Half divides the sub pixel's sum but not the backdrop's.
+        ppu.write(Register::ColorMathDesignation, 0x61);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1)],
+            [rgb(11, 5, 4), rgb(15, 10, 13)]
+        );
+        // A window masking BG2 on the sub screen leaves the backdrop there.
+        ppu.write(Register::Window1Left, 0);
+        ppu.write(Register::Window1Right, 0);
+        ppu.write(Register::WindowMaskBackground12, 0x20);
+        ppu.write(Register::SubScreenWindow, 0x02);
+        ppu.render_line(0, &mut out);
+        assert_eq!(pixel(&out, 0), rgb(25, 4, 3));
+    }
+
+    // @source: anomie-regs#2130
+    // @source: anomie-regs#2125
+    // @source: anomie-regs#windows
+    // @source: anomie-regs#rendering-the-screen/rendering-the-screen
+    // @source: fullsnes#snesppucolormath
+    // @source: adr-0035
+    #[test]
+    fn the_colour_window_clips_the_main_pixel_and_prevents_math() {
+        let mut ppu = math_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.write(Register::ColorMathDesignation, 0x21);
+        ppu.write(Register::FixedColor, 0x20 | 5);
+        // The colour window is window 1, pixel 0 alone.
+        ppu.write(Register::Window1Left, 0);
+        ppu.write(Register::Window1Right, 0);
+        ppu.write(Register::WindowMaskObjectColor, 0x20);
+        // Prevent inside: pixel 0 (BG1) keeps its colour, pixel 1 (the backdrop) gets the math.
+        ppu.write(Register::ColorMathSelect, 0x20);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1)],
+            [rgb(20, 4, 0), rgb(15, 10, 10)]
+        );
+        // Prevent outside: the other way round.
+        ppu.write(Register::ColorMathSelect, 0x10);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1)],
+            [rgb(25, 4, 0), rgb(10, 10, 10)]
+        );
+        // Clip inside: pixel 0 is black before the fixed colour is added.
+        ppu.write(Register::ColorMathSelect, 0x80);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1)],
+            [rgb(5, 0, 0), rgb(15, 10, 10)]
+        );
+        // Clip always with math prevented always: all black.
+        ppu.write(Register::ColorMathSelect, 0xF0);
+        ppu.render_line(0, &mut out);
+        assert_eq!([pixel(&out, 0), pixel(&out, 2)], [raw(0), raw(0)]);
+    }
+
+    // @source: anomie-regs#2100
+    // @source: fullsnes#snesppucontrol
+    // @source: adr-0035
+    #[test]
+    fn forced_blank_makes_the_line_black_and_brightness_dims_it() {
+        let mut ppu = math_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.write(Register::DisplayControl, 0x07);
+        ppu.render_line(0, &mut out);
+        // 8/16 of each channel, rounded down.
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 2)],
+            [rgb(10, 2, 0), rgb(5, 5, 5)]
+        );
+        ppu.write(Register::DisplayControl, 0x00);
+        ppu.render_line(0, &mut out);
+        assert_eq!([pixel(&out, 0), pixel(&out, 2)], [raw(0), raw(0)]);
+        // Forced blank wins over full brightness.
+        ppu.write(Register::DisplayControl, 0x8F);
+        ppu.render_line(0, &mut out);
+        assert_eq!([pixel(&out, 0), pixel(&out, 2)], [raw(0), raw(0)]);
+    }
+
+    // @source: anomie-regs#2106
+    // @source: anomie-regs#rendering-the-screen/mosaic
+    // @source: fullsnes#snesppubgcontrol
+    // @source: adr-0035
+    #[test]
+    fn a_mosaiced_background_shows_the_top_left_pixel_of_each_block() {
+        let mut ppu = math_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.start_frame();
+        // Without mosaic only pixel 0 of line 1 is BG1's colour 1.
+        ppu.render_line(1, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1)],
+            [rgb(20, 4, 0), rgb(10, 10, 10)]
+        );
+        // 2x2 blocks on BG1, rows counted from line 1 (the frame starts again, so the write
+        // is at line 1): pixel 1 takes pixel 0's colour, and so does line 2, which has no
+        // pixels of its own.
+        ppu.start_frame();
+        ppu.write(Register::Mosaic, 0x11);
+        ppu.render_line(1, &mut out);
+        assert_eq!(pixel(&out, 1), rgb(20, 4, 0));
+        ppu.render_line(2, &mut out);
+        assert_eq!(
+            [pixel(&out, 0), pixel(&out, 1), pixel(&out, 2)],
+            [rgb(20, 4, 0), rgb(20, 4, 0), rgb(10, 10, 10)]
+        );
+        // The next block row starts at line 3, which is clear.
+        ppu.render_line(3, &mut out);
+        assert_eq!(pixel(&out, 0), rgb(10, 10, 10));
+        // BG2's bit is clear, so BG1's block does not cover it.
+        ppu.write(Register::MainScreen, 0x02);
+        ppu.render_line(1, &mut out);
+        assert_eq!(pixel(&out, 1), rgb(10, 10, 10));
     }
 }

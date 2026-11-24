@@ -150,6 +150,12 @@ sha256 = "0cb21638ba7dcc77e0e90c9476b1498610bae260887f2641cde556be3a20b9d1"
 notes = "Own test cartridge: BG1 to BG3 behind two windows: XOR of both, one inverted window, and a layer with a window but no TMW designation. Built from tests/carts/windows/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/color-math.sfc"
+license = "own"
+sha256 = "b8018a158b5e42165434f8904e48bf57807dee940f418b727a1dc9602c82ef08"
+notes = "Own test cartridge: Own test cartridge: BG1 half-math with a sub-screen BG2 or the fixed colour, a colour window clipping one tile to black, and BG3 in 4x4 mosaic blocks. Built from tests/carts/color-math/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
