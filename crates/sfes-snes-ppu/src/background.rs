@@ -55,6 +55,8 @@ const OFFSET_VERTICAL: u16 = 0x8000;
 const OFFSET_COLUMN: u16 = 8;
 /// `$2105` bits 2–0: the BG mode.
 const MODE_MASK: u8 = 0x07;
+/// `$2105` bit 3: BG3's high tiles in front in mode 1.
+const BACKGROUND_3_FIRST: u8 = 0x08;
 /// `$2105` bit 4 is BG1's character size; each BG's is the next bit up.
 const BGMODE_SIZE_SHIFT: u8 = 4;
 
@@ -70,6 +72,102 @@ pub(crate) enum Background {
     Three = 2,
     /// BG4.
     Four = 3,
+}
+
+/// A BG mode, `$2105` bits 2–0. Each variant's value is the mode's number.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(crate) enum Mode {
+    /// Four 2-bit backgrounds.
+    Zero = 0,
+    /// Two 4-bit backgrounds and a 2-bit one.
+    One = 1,
+    /// Two 4-bit backgrounds with offset-per-tile.
+    Two = 2,
+    /// An 8-bit and a 4-bit background.
+    Three = 3,
+    /// An 8-bit and a 2-bit background with offset-per-tile.
+    Four = 4,
+    /// Hi-res: a 4-bit and a 2-bit background.
+    Five = 5,
+    /// Hi-res: one 4-bit background with offset-per-tile.
+    Six = 6,
+    /// One rotated and scaled 8-bit background.
+    Seven = 7,
+}
+
+impl Mode {
+    /// The mode `$2105` bits 2–0 name.
+    // @source: anomie-regs#2105
+    const fn from_bits(value: u8) -> Self {
+        match value & MODE_MASK {
+            0 => Self::Zero,
+            1 => Self::One,
+            2 => Self::Two,
+            3 => Self::Three,
+            4 => Self::Four,
+            5 => Self::Five,
+            6 => Self::Six,
+            _ => Self::Seven,
+        }
+    }
+
+    /// Whether the mode is true hi-res: 5 and 6 (ADR 0036, point 1).
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#backgrounds/mode-6
+    // @source: adr-0036
+    pub(crate) const fn hires(self) -> bool {
+        matches!(self, Self::Five | Self::Six)
+    }
+
+    /// Whether BG3 supplies offsets per tile: modes 2, 4 and 6 (ADR 0031; ADR 0036,
+    /// point 9).
+    // @source: anomie-regs#backgrounds/mode-2
+    // @source: anomie-regs#backgrounds/mode-4
+    // @source: anomie-regs#backgrounds/mode-6
+    // @source: adr-0031
+    // @source: adr-0036
+    const fn offset_per_tile(self) -> bool {
+        matches!(self, Self::Two | Self::Four | Self::Six)
+    }
+}
+
+/// `$2105 BGMODE`, decoded: the mode, mode 1's BG3 bit and the four character sizes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BackgroundMode {
+    /// Bits 2–0: the BG mode.
+    pub(crate) mode: Mode,
+    /// Bit 3: in mode 1, BG3's high tiles in front of everything.
+    pub(crate) bg3_first: bool,
+    /// Bits 7–4: BG4 to BG1 have 16×16 characters, indexed by [`Background`].
+    large: [bool; 4],
+}
+
+impl From<u8> for BackgroundMode {
+    // @source: anomie-regs#2105
+    // @source: fullsnes#snesppubgcontrol
+    fn from(value: u8) -> Self {
+        let large = Background::ALL
+            .map(|background| value >> (BGMODE_SIZE_SHIFT + background as u8) & 1 != 0);
+        Self {
+            mode: Mode::from_bits(value),
+            bg3_first: value & BACKGROUND_3_FIRST != 0,
+            large,
+        }
+    }
+}
+
+impl BackgroundMode {
+    /// The character size of `background`: 16 where its bit is set, else 8.
+    // @source: anomie-regs#2105
+    // @source: fullsnes#snesppubgcontrol
+    const fn character_size(self, background: Background) -> u16 {
+        if self.large[background as usize] {
+            16
+        } else {
+            8
+        }
+    }
 }
 
 /// How many bitplanes a background's characters have in a mode; each variant's value is the
@@ -212,7 +310,7 @@ pub(crate) struct Backgrounds {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Setup {
     /// $2105 BGMODE: the mode, the BG3 bit and the character sizes.
-    pub(crate) control: u8,
+    pub(crate) background_mode: BackgroundMode,
     /// $2130 CGWSEL bit 0: direct colour.
     pub(crate) direct_color: bool,
 }
@@ -240,9 +338,9 @@ impl Background {
     pub(crate) const ALL: [Self; 4] = [One, Two, Three, Four];
 }
 
-/// The layers of `mode` from front to back, sprites among them (ADR 0033, point 6);
-/// `bg3_first` is `$2105` bit 3, which moves BG3's high tiles in front in mode 1, and `extbg`
-/// is `$2133` bit 6, which adds mode 7's BG2.
+/// The layers of `background_mode` from front to back, sprites among them (ADR 0033,
+/// point 6): `$2105` bit 3 moves BG3's high tiles in front in mode 1, and `extbg`, `$2133`
+/// bit 6, adds mode 7's BG2.
 // @source: anomie-regs#2105
 // @source: anomie-regs#backgrounds/mode-0
 // @source: anomie-regs#backgrounds/mode-1
@@ -255,16 +353,18 @@ impl Background {
 // @source: adr-0030
 // @source: adr-0032
 // @source: adr-0033
-pub(crate) const fn priority_order(mode: u8, bg3_first: bool, extbg: bool) -> &'static [Layer] {
-    match (mode, bg3_first) {
-        (0, _) => &MODE_0,
-        (1, true) => &MODE_1_BG3_FIRST,
-        (1, false) => &MODE_1,
-        (2..=5, _) => &TWO_BACKGROUNDS,
-        (6, _) => &MODE_6,
-        (7, _) if extbg => &MODE_7_EXTBG,
-        (7, _) => &MODE_7,
-        _ => &[],
+pub(crate) const fn priority_order(
+    background_mode: BackgroundMode,
+    extbg: bool,
+) -> &'static [Layer] {
+    match background_mode.mode {
+        Mode::Zero => &MODE_0,
+        Mode::One if background_mode.bg3_first => &MODE_1_BG3_FIRST,
+        Mode::One => &MODE_1,
+        Mode::Two | Mode::Three | Mode::Four | Mode::Five => &TWO_BACKGROUNDS,
+        Mode::Six => &MODE_6,
+        Mode::Seven if extbg => &MODE_7_EXTBG,
+        Mode::Seven => &MODE_7,
     }
 }
 
@@ -274,11 +374,13 @@ pub(crate) const fn priority_order(mode: u8, bg3_first: bool, extbg: bool) -> &'
 // @source: fullsnes#snesppubgcontrol
 // @source: adr-0030
 // @source: adr-0036
-const fn depth(mode: u8, background: Background) -> Option<Depth> {
+const fn depth(mode: Mode, background: Background) -> Option<Depth> {
     match (mode, background) {
-        (0, _) | (1, Three) | (4 | 5, Two) => Some(Depth::Two),
-        (1 | 2, One | Two) | (3, Two) | (5 | 6, One) => Some(Depth::Four),
-        (3 | 4, One) => Some(Depth::Eight),
+        (Mode::Zero, _) | (Mode::One, Three) | (Mode::Four | Mode::Five, Two) => Some(Depth::Two),
+        (Mode::One | Mode::Two, One | Two) | (Mode::Three, Two) | (Mode::Five | Mode::Six, One) => {
+            Some(Depth::Four)
+        }
+        (Mode::Three | Mode::Four, One) => Some(Depth::Eight),
         _ => None,
     }
 }
@@ -390,21 +492,21 @@ impl Backgrounds {
         let index = background as usize;
         let horizontal = self.horizontal[index] & SCROLL_MASK;
         let vertical = self.vertical[index] & SCROLL_MASK;
-        let mode = setup.control & MODE_MASK;
+        let mode = setup.background_mode.mode;
         let valid = match background {
             Background::One => OFFSET_BACKGROUND_1,
             Background::Two => OFFSET_BACKGROUND_2,
             _ => return (horizontal, vertical),
         };
         let tile = (x + (horizontal & 7)) / OFFSET_COLUMN;
-        if !matches!(mode, 2 | 4 | 6) || tile == 0 {
+        if !mode.offset_per_tile() || tile == 0 {
             return (horizontal, vertical);
         }
         let third = Background::Three as usize;
         let across = (self.horizontal[third] & OFFSET_HORIZONTAL_MASK) + (tile - 1) * OFFSET_COLUMN;
         let down = self.vertical[third] & SCROLL_MASK;
         let first = self.pixel_entry(vram, setup, Background::Three, across, down);
-        let (horizontal_entry, vertical_entry) = if mode == 4 {
+        let (horizontal_entry, vertical_entry) = if mode == Mode::Four {
             if first & OFFSET_VERTICAL != 0 {
                 (0, first)
             } else {
@@ -443,14 +545,10 @@ impl Backgrounds {
         across: u16,
         down: u16,
     ) -> u16 {
-        let size: u16 = if setup.control >> (BGMODE_SIZE_SHIFT + background as u8) & 1 != 0 {
-            16
-        } else {
-            8
-        };
+        let size = setup.background_mode.character_size(background);
         let tilemap = self.tilemaps[background as usize];
         // Mode 6's tiles are 8 pixels wide whatever the size bit says, BG3's too.
-        let width = if setup.control & MODE_MASK == 6 {
+        let width = if setup.background_mode.mode == Mode::Six {
             8
         } else {
             size
@@ -490,15 +588,11 @@ impl Backgrounds {
         line: u16,
         half: u16,
     ) -> Option<Sample> {
-        let mode = setup.control & MODE_MASK;
+        let mode = setup.background_mode.mode;
         let depth = depth(mode, background)?;
         let index = background as usize;
-        let height: u16 = if setup.control >> (BGMODE_SIZE_SHIFT + background as u8) & 1 != 0 {
-            16
-        } else {
-            8
-        };
-        let hires = matches!(mode, 5 | 6);
+        let height = setup.background_mode.character_size(background);
+        let hires = mode.hires();
         // A hi-res tile is 8 pixels of two half-pixels each, 16 half-pixels, whatever the
         // size bit; the other modes' tiles are as wide as high.
         let (width, tile_width) = if hires { (8, 16) } else { (height, height) };
@@ -546,7 +640,7 @@ impl Backgrounds {
             Depth::Eight if setup.direct_color => Color::Direct(direct_color(value, palette)),
             Depth::Eight => Color::Palette(value),
             Depth::Four => Color::Palette(palette * 16 + value),
-            Depth::Two if mode == 0 => {
+            Depth::Two if mode == Mode::Zero => {
                 Color::Palette(index_offset(background) + palette * 4 + value)
             }
             Depth::Two => Color::Palette(palette * 4 + value),
@@ -610,10 +704,10 @@ mod tests {
 
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0030
-    /// The setup for `mode` with `$2105`'s other bits clear.
-    const fn setup(mode: u8) -> Setup {
+    /// The setup for `$2105` = `control`, without direct colour.
+    fn setup(control: u8) -> Setup {
         Setup {
-            control: mode,
+            background_mode: BackgroundMode::from(control),
             direct_color: false,
         }
     }
@@ -720,7 +814,7 @@ mod tests {
             vram[plane / 2 * 16 + plane % 2] = 0x80;
         }
         let direct = Setup {
-            control: 3,
+            background_mode: BackgroundMode::from(3),
             direct_color: true,
         };
         let sample = backgrounds.sample(&vram, direct, Background::One, 0, 0, 0);
@@ -803,10 +897,7 @@ mod tests {
         two_bit_row(&mut vram, 2, 0, 0x00, 0x80); // (8, 0): colour 2
         two_bit_row(&mut vram, 0x11, 0, 0x80, 0x80); // (0, 8): colour 3
         two_bit_row(&mut vram, 0x12, 7, 0x01, 0x00); // (15, 15): colour 1
-        let large = Setup {
-            control: 0x10,
-            direct_color: false,
-        };
+        let large = setup(0x10);
         let at = |x, line| {
             backgrounds
                 .sample(&vram, large, Background::One, x, line, 0)
@@ -963,8 +1054,8 @@ mod tests {
     fn the_priority_order_follows_the_mode_and_mode_1_s_bg3_bit() {
         // `S3` is the sprites of priority 3, `1h` BG1's tiles with the priority bit and
         // `1l` those without; the lists are anomie's, front to back.
-        let names = |mode, bg3_first, extbg| {
-            priority_order(mode, bg3_first, extbg)
+        let names = |control, extbg| {
+            priority_order(BackgroundMode::from(control), extbg)
                 .iter()
                 .map(|layer| match layer {
                     Layer::Sprites(priority) => format!("S{priority}"),
@@ -975,18 +1066,17 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        assert_eq!(
-            names(0, false, false),
-            "S3 1h 2h S2 1l 2l S1 3h 4h S0 3l 4l"
-        );
-        assert_eq!(names(1, false, false), "S3 1h 2h S2 1l 2l S1 3h S0 3l");
-        assert_eq!(names(1, true, false), "3h S3 1h 2h S2 1l 2l S1 S0 3l");
+        assert_eq!(names(0x00, false), "S3 1h 2h S2 1l 2l S1 3h 4h S0 3l 4l");
+        assert_eq!(names(0x01, false), "S3 1h 2h S2 1l 2l S1 3h S0 3l");
+        assert_eq!(names(0x09, false), "3h S3 1h 2h S2 1l 2l S1 S0 3l");
         for mode in 2..=5 {
-            assert_eq!(names(mode, false, false), "S3 1h S2 2h S1 1l S0 2l");
+            assert_eq!(names(mode, false), "S3 1h S2 2h S1 1l S0 2l");
         }
-        assert_eq!(names(6, false, false), "S3 1h S2 S1 1l S0");
-        assert_eq!(names(7, false, false), "S3 S2 S1 1l S0");
-        assert_eq!(names(7, false, true), "S3 S2 2h S1 1l S0 2l");
+        // Bit 3 matters only in mode 1.
+        assert_eq!(names(0x0A, false), "S3 1h S2 2h S1 1l S0 2l");
+        assert_eq!(names(0x06, false), "S3 1h S2 S1 1l S0");
+        assert_eq!(names(0x07, false), "S3 S2 S1 1l S0");
+        assert_eq!(names(0x07, true), "S3 S2 2h S1 1l S0 2l");
     }
 
     // @source: anomie-regs#backgrounds/mode-5
@@ -1048,10 +1138,7 @@ mod tests {
         two_bit_row(&mut vram, 5, 0, 0x00, 0x80); // column 1: colour 2
         two_bit_row(&mut vram, 0x11, 0, 0x80, 0x80); // 16 rows: (0, 8), colour 3
         let at = |control, x, line| {
-            let setup = Setup {
-                control,
-                direct_color: false,
-            };
+            let setup = setup(control);
             backgrounds
                 .sample(&vram, setup, Background::Two, x, line, 0)
                 .map(|s| s.color)
@@ -1094,10 +1181,7 @@ mod tests {
         put(&mut vram, 0x801, 0x2000 | 16);
         let control = 6 | 0x40;
         let at = |x, half| {
-            let setup = Setup {
-                control,
-                direct_color: false,
-            };
+            let setup = setup(control);
             backgrounds
                 .sample(&vram, setup, Background::One, x, 0, half)
                 .map(|s| s.color)
@@ -1112,10 +1196,7 @@ mod tests {
         // Half-pixels 8 to 15 of a tile are the right character.
         assert_eq!(at(4, 0), Some(Color::Palette(2)));
         // BG3 itself is not drawn.
-        let setup = Setup {
-            control,
-            direct_color: false,
-        };
+        let setup = setup(control);
         assert_eq!(
             backgrounds.sample(&vram, setup, Background::Three, 0, 0, 0),
             None
