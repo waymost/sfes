@@ -162,6 +162,12 @@ sha256 = "095059edeb6ec2e488d115cdaefe15d36ca6c18b820f6a5edf9f30e2b02aab89"
 notes = "Own test cartridge: BG mode 5 hi-res: BG1 tiles of two characters shown as even sub and odd main half-pixels, with colour math on the sub pixels. Built from tests/carts/hires/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/ppu-hdma.sfc"
+license = "own"
+sha256 = "dd4424dcb6072e516520a6089c95828568c1e5fa150cd1643d80dee1847cdba1"
+notes = "Own test cartridge: PPU registers changed mid-frame by three HDMA channels (BGMODE, BG1HOFS and INIDISP in 16-line bands, forced blank and brightness 7 included), and a VRAM write outside vertical and forced blank that the PPU refuses. Built from tests/carts/ppu-hdma/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
