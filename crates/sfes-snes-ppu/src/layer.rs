@@ -7,9 +7,12 @@
 
 use sfes_api::Rgb555;
 
-/// One layer of a line's per-layer image.
+use crate::background::Background;
+
+/// BG1 to BG4 or the sprites: a layer of a line's per-layer image, and the layer a bit of
+/// `$212C–$212F` and `$2131` names. Each variant's value is its index and its bit number.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(usize)]
+#[repr(u8)]
 pub enum LayerKind {
     /// BG1.
     Background1 = 0,
@@ -32,6 +35,55 @@ impl LayerKind {
         Self::Background4,
         Self::Sprites,
     ];
+}
+
+impl From<Background> for LayerKind {
+    // @source: anomie-regs#212c
+    fn from(background: Background) -> Self {
+        match background {
+            Background::One => Self::Background1,
+            Background::Two => Self::Background2,
+            Background::Three => Self::Background3,
+            Background::Four => Self::Background4,
+        }
+    }
+}
+
+bitflags::bitflags! {
+    /// A set of layers: `$212C TM`, `$212D TS`, `$212E TMW` and `$212F TSW` bits 4–0, and
+    /// `$2131 CGADSUB` bits 4–0. Bit `n` is the layer whose [`LayerKind`] value is `n`.
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#212d
+    // @source: anomie-regs#212e
+    // @source: anomie-regs#212f
+    // @source: anomie-regs#2131
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub(crate) struct Layers: u8 {
+        /// BG1.
+        const BACKGROUND_1 = 1 << LayerKind::Background1 as u8;
+        /// BG2.
+        const BACKGROUND_2 = 1 << LayerKind::Background2 as u8;
+        /// BG3.
+        const BACKGROUND_3 = 1 << LayerKind::Background3 as u8;
+        /// BG4.
+        const BACKGROUND_4 = 1 << LayerKind::Background4 as u8;
+        /// The sprites.
+        const SPRITES = 1 << LayerKind::Sprites as u8;
+    }
+}
+
+impl From<LayerKind> for Layers {
+    // @source: anomie-regs#212c
+    fn from(kind: LayerKind) -> Self {
+        Self::from_bits_retain(1 << kind as u8)
+    }
+}
+
+impl From<Background> for Layers {
+    // @source: anomie-regs#212c
+    fn from(background: Background) -> Self {
+        Self::from(LayerKind::from(background))
+    }
 }
 
 /// How many layers a line holds.
@@ -104,5 +156,15 @@ mod tests {
         assert_eq!(line.layer(LayerKind::Background2)[5], None);
         line.clear();
         assert_eq!(line.layer(LayerKind::Background3)[5], None);
+    }
+
+    // @source: anomie-regs#212c
+    // @source: anomie-regs#2131
+    #[test]
+    fn a_layer_s_bit_is_its_index_and_a_background_s_its_number_less_one() {
+        assert_eq!(Layers::from(LayerKind::Sprites).bits(), 0x10);
+        assert_eq!(Layers::from(Background::Three), Layers::BACKGROUND_3);
+        assert_eq!(Layers::BACKGROUND_3.bits(), 0x04);
+        assert_eq!(Layers::all().bits(), 0x1F);
     }
 }

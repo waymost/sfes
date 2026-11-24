@@ -12,7 +12,11 @@
 
 use sfes_api::Rgb555;
 
-use crate::register::Register;
+use crate::{
+    background::Background,
+    layer::{LayerKind, Layers},
+    register::Register,
+};
 
 /// `$2130` bits 7–6: clip the main pixel to black where.
 const CLIP_SHIFT: u8 = 6;
@@ -24,12 +28,6 @@ const REGION_MASK: u8 = 0x03;
 const ADD_SUB_SCREEN: u8 = 0x02;
 /// `$2130` bit 0: direct colour.
 const DIRECT_COLOR: u8 = 0x01;
-/// `$2131` bit 7: subtract.
-const SUBTRACT: u8 = 0x80;
-/// `$2131` bit 6: halve the result.
-const HALF: u8 = 0x40;
-/// `$2131` bits 5–0: the layers that take math.
-const LAYERS_MASK: u8 = 0x3F;
 /// The channels of a colour, each 5 bits.
 const CHANNEL_MAX: u8 = 31;
 /// `$2132` bit 5: the intensity goes into red; green and blue are the next bits up.
@@ -41,11 +39,27 @@ const FIRST_MATH_SPRITE_ENTRY: u8 = 192;
 /// `$2100` bits 3–0: the brightness.
 const BRIGHTNESS_MASK: u8 = 0x0F;
 
+bitflags::bitflags! {
+    /// `$2131 CGADSUB` bits 7–5: how math is done, and whether the backdrop takes it. Bits
+    /// 4–0 are [`Layers`].
+    // @source: anomie-regs#2131
+    // @source: fullsnes#snesppucolormath
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct Operation: u8 {
+        /// Bit 5: the backdrop takes math.
+        const BACKDROP = 0x20;
+        /// Bit 6: halve the result.
+        const HALF = 0x40;
+        /// Bit 7: subtract instead of add.
+        const SUBTRACT = 0x80;
+    }
+}
+
 /// Which layer a main-screen pixel came from; `$2131` says which take math.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Source {
-    /// BG1 to BG4, as an index 0 to 3.
-    Background(u8),
+    /// One of BG1 to BG4.
+    Background(Background),
     /// A sprite pixel from this CGRAM entry.
     Object(u8),
     /// The backdrop.
@@ -92,8 +106,10 @@ impl Previous {
 pub(crate) struct ColorMath {
     /// `$2130 CGWSEL`: clip and prevent regions, the sub screen and direct colour.
     select: u8,
-    /// `$2131 CGADSUB`: add or subtract, half, and the layers that take math.
-    designation: u8,
+    /// `$2131 CGADSUB` bits 4–0: the layers that take math.
+    layers: Layers,
+    /// `$2131 CGADSUB` bits 7–5: add or subtract, half, and the backdrop.
+    operation: Operation,
     /// `$2132 COLDATA`: the fixed colour's red, green and blue.
     fixed: Rgb555,
 }
@@ -105,7 +121,8 @@ impl ColorMath {
     pub(crate) const fn power_on() -> Self {
         Self {
             select: 0,
-            designation: 0,
+            layers: Layers::empty(),
+            operation: Operation::empty(),
             fixed: Rgb555::BLACK,
         }
     }
@@ -119,7 +136,10 @@ impl ColorMath {
     pub(crate) fn write(&mut self, register: Register, value: u8) {
         match register {
             Register::ColorMathSelect => self.select = value,
-            Register::ColorMathDesignation => self.designation = value,
+            Register::ColorMathDesignation => {
+                self.layers = Layers::from_bits_truncate(value);
+                self.operation = Operation::from_bits_truncate(value);
+            }
             Register::FixedColor => {
                 let intensity = value & FIXED_INTENSITY;
                 let pick = |plane: u8, current: u8| {
@@ -150,7 +170,7 @@ impl ColorMath {
     // @source: anomie-regs#2131
     // @source: adr-0035
     pub(crate) const fn any_layer(self) -> bool {
-        self.designation & LAYERS_MASK != 0
+        !self.layers.is_empty() || self.operation.contains(Operation::BACKDROP)
     }
 
     /// Whether the other operand is the sub screen rather than the fixed colour.
@@ -203,18 +223,15 @@ impl ColorMath {
     // @source: anomie-regs#rendering-the-screen/color-math
     // @source: fullsnes#snesppucolormath
     // @source: adr-0035
-    pub(crate) const fn takes_math(self, source: Source) -> bool {
-        let bit = match source {
-            Source::Background(index) => index,
+    pub(crate) fn takes_math(self, source: Source) -> bool {
+        match source {
+            Source::Background(background) => self.layers.contains(Layers::from(background)),
             Source::Object(entry) => {
-                if entry < FIRST_MATH_SPRITE_ENTRY {
-                    return false;
-                }
-                4
+                entry >= FIRST_MATH_SPRITE_ENTRY
+                    && self.layers.contains(Layers::from(LayerKind::Sprites))
             }
-            Source::Backdrop => 5,
-        };
-        self.designation >> bit & 1 != 0
+            Source::Backdrop => self.operation.contains(Operation::BACKDROP),
+        }
     }
 
     /// `main` with `operand` added or subtracted, per channel, halved when `$2131` says so
@@ -230,9 +247,10 @@ impl ColorMath {
             Operand::Pixel(pixel) => pixel,
             Operand::Fixed | Operand::Backdrop => self.fixed_color(),
         };
-        let halves = self.designation & HALF != 0 && !clipped && operand != Operand::Backdrop;
+        let halves =
+            self.operation.contains(Operation::HALF) && !clipped && operand != Operand::Backdrop;
         main.zip_map(other, |left, right| {
-            let sum = if self.designation & SUBTRACT != 0 {
+            let sum = if self.operation.contains(Operation::SUBTRACT) {
                 i16::from(left) - i16::from(right)
             } else {
                 i16::from(left) + i16::from(right)
@@ -339,15 +357,15 @@ mod tests {
     fn a_layer_takes_math_by_its_bit_and_a_sprite_only_from_palette_4() {
         let mut math = ColorMath::power_on();
         math.write(Register::ColorMathDesignation, 0x3F);
-        for index in 0..4 {
-            assert!(math.takes_math(Source::Background(index)));
+        for background in Background::ALL {
+            assert!(math.takes_math(Source::Background(background)));
         }
         assert!(math.takes_math(Source::Backdrop));
         assert!(!math.takes_math(Source::Object(191)));
         assert!(math.takes_math(Source::Object(192)));
         math.write(Register::ColorMathDesignation, 0x01);
-        assert!(math.takes_math(Source::Background(0)));
-        assert!(!math.takes_math(Source::Background(1)));
+        assert!(math.takes_math(Source::Background(Background::One)));
+        assert!(!math.takes_math(Source::Background(Background::Two)));
         assert!(!math.takes_math(Source::Backdrop));
         assert!(!math.takes_math(Source::Object(200)));
     }
@@ -361,7 +379,7 @@ mod tests {
         math.write(Register::FixedColor, 0x40 | 16);
         math.write(Register::FixedColor, 0x80 | 16);
         // Anomie's subtraction example: (31, 31, 0) minus the fixed colour (0, 16, 16).
-        math.write(Register::ColorMathDesignation, SUBTRACT);
+        math.write(Register::ColorMathDesignation, Operation::SUBTRACT.bits());
         assert_eq!(
             math.blend(color(31, 31, 0), Operand::Fixed, false),
             color(31, 15, 0)
@@ -382,7 +400,7 @@ mod tests {
     fn half_rounds_down_and_is_skipped_when_clipped_or_for_the_sub_backdrop() {
         let mut math = ColorMath::power_on();
         math.write(Register::FixedColor, 0x20 | 3);
-        math.write(Register::ColorMathDesignation, HALF);
+        math.write(Register::ColorMathDesignation, Operation::HALF.bits());
         let pixel = Operand::Pixel(color(2, 0, 0));
         // (1 + 2) / 2 is 1.
         assert_eq!(math.blend(color(1, 0, 0), pixel, false), color(1, 0, 0));
@@ -401,7 +419,10 @@ mod tests {
             color(4, 0, 0)
         );
         // Subtract and halve never goes below 0.
-        math.write(Register::ColorMathDesignation, SUBTRACT | HALF);
+        math.write(
+            Register::ColorMathDesignation,
+            Operation::SUBTRACT.bits() | Operation::HALF.bits(),
+        );
         assert_eq!(math.blend(color(1, 0, 0), pixel, false), color(0, 0, 0));
     }
 

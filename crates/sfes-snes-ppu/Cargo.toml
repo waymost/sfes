@@ -12,6 +12,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+bitflags.workspace = true
 sfes-api.workspace = true
 thiserror.workspace = true
 

@@ -462,6 +462,7 @@ dependencies = [
 name = "sfes-snes-ppu"
 version = "0.0.0"
 dependencies = [
+ "bitflags",
  "sfes-api",
  "thiserror",
 ]
