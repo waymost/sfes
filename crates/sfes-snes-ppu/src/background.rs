@@ -15,7 +15,7 @@
 
 use sfes_api::Rgb555;
 
-use crate::register::Register;
+use crate::{register::Register, sprite::Priority};
 
 /// A VRAM word address has 15 bits (ADR 0029, point 3).
 const VRAM_WORD_MASK: u16 = 0x7FFF;
@@ -194,8 +194,8 @@ pub(crate) enum Layer {
         /// Whether it is its high-priority tiles.
         high: bool,
     },
-    /// The sprites whose OAM priority bits are this, 0 to 3.
-    Sprites(u8),
+    /// The sprites whose OAM priority bits are this.
+    Sprites(Priority),
 }
 
 // @source: anomie-regs#2105
@@ -210,82 +210,82 @@ use Layer::Sprites;
 
 /// Mode 0, front to back (anomie-regs#backgrounds/mode-0).
 const MODE_0: [Layer; 12] = [
-    Sprites(3),
+    Sprites(Priority::Three),
     layer(One, true),
     layer(Two, true),
-    Sprites(2),
+    Sprites(Priority::Two),
     layer(One, false),
     layer(Two, false),
-    Sprites(1),
+    Sprites(Priority::One),
     layer(Three, true),
     layer(Four, true),
-    Sprites(0),
+    Sprites(Priority::Zero),
     layer(Three, false),
     layer(Four, false),
 ];
 /// Mode 1 with `$2105` bit 3 clear.
 const MODE_1: [Layer; 10] = [
-    Sprites(3),
+    Sprites(Priority::Three),
     layer(One, true),
     layer(Two, true),
-    Sprites(2),
+    Sprites(Priority::Two),
     layer(One, false),
     layer(Two, false),
-    Sprites(1),
+    Sprites(Priority::One),
     layer(Three, true),
-    Sprites(0),
+    Sprites(Priority::Zero),
     layer(Three, false),
 ];
 /// Mode 1 with `$2105` bit 3 set: BG3's high tiles in front.
 const MODE_1_BG3_FIRST: [Layer; 10] = [
     layer(Three, true),
-    Sprites(3),
+    Sprites(Priority::Three),
     layer(One, true),
     layer(Two, true),
-    Sprites(2),
+    Sprites(Priority::Two),
     layer(One, false),
     layer(Two, false),
-    Sprites(1),
-    Sprites(0),
+    Sprites(Priority::One),
+    Sprites(Priority::Zero),
     layer(Three, false),
 ];
 /// Modes 2 to 5.
 const TWO_BACKGROUNDS: [Layer; 8] = [
-    Sprites(3),
+    Sprites(Priority::Three),
     layer(One, true),
-    Sprites(2),
+    Sprites(Priority::Two),
     layer(Two, true),
-    Sprites(1),
+    Sprites(Priority::One),
     layer(One, false),
-    Sprites(0),
+    Sprites(Priority::Zero),
     layer(Two, false),
 ];
 /// Mode 6: BG1 alone.
 const MODE_6: [Layer; 6] = [
-    Sprites(3),
+    Sprites(Priority::Three),
     layer(One, true),
-    Sprites(2),
-    Sprites(1),
+    Sprites(Priority::Two),
+    Sprites(Priority::One),
     layer(One, false),
-    Sprites(0),
+    Sprites(Priority::Zero),
 ];
 
 /// Mode 7: BG1 alone.
 const MODE_7: [Layer; 5] = [
-    Sprites(3),
-    Sprites(2),
-    Sprites(1),
+    Sprites(Priority::Three),
+    Sprites(Priority::Two),
+    Sprites(Priority::One),
     layer(One, false),
-    Sprites(0),
+    Sprites(Priority::Zero),
 ];
 /// Mode 7 with EXTBG: BG2's high pixels, BG1, then BG2's low pixels.
 const MODE_7_EXTBG: [Layer; 7] = [
-    Sprites(3),
-    Sprites(2),
+    Sprites(Priority::Three),
+    Sprites(Priority::Two),
     layer(Two, true),
-    Sprites(1),
+    Sprites(Priority::One),
     layer(One, false),
-    Sprites(0),
+    Sprites(Priority::Zero),
     layer(Two, false),
 ];
 
@@ -1070,7 +1070,7 @@ mod tests {
             priority_order(BackgroundMode::from(control), extbg)
                 .iter()
                 .map(|layer| match layer {
-                    Layer::Sprites(priority) => format!("S{priority}"),
+                    Layer::Sprites(priority) => format!("S{}", *priority as u8),
                     Layer::Background { background, high } => {
                         format!("{}{}", *background as u8 + 1, if *high { 'h' } else { 'l' })
                     }
