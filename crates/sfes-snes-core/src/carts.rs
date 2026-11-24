@@ -7,10 +7,12 @@
 //! Runs the project's own test cartridges (ADR 0013) and checks what they leave against
 //! values computed from the documents.
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec, vec::Vec};
+use core::ops::Range;
 
 use sfes_api::{Buttons, Cycles, Fast, InstrEvent, Interrupt, Observer, RegionId, Rgb555, Stop};
 use sfes_snes_cpu::RunState;
+use sfes_snes_ppu::LINE_COLUMNS;
 
 use crate::{LayerKind, Snes};
 
@@ -339,6 +341,8 @@ fn hdma_cart_runs_a_direct_and_an_indirect_table_into_the_wram_port() {
 // The colours the drawing cartridges put in CGRAM, as 15-bit `0bbbbbgggggrrrrr` words
 // (fullsnes#snesppucolorpalettememorycgramanddirectcolors).
 
+/// Black, as the colour window clips to.
+const BLACK: Rgb555 = Rgb555::from_bits_truncate(0x0000);
 /// Full white.
 const WHITE: Rgb555 = Rgb555::from_bits_truncate(0x7FFF);
 /// Full red.
@@ -356,8 +360,8 @@ const CYAN: Rgb555 = Rgb555::from_bits_truncate(0x7FE0);
 /// The grey (10, 10, 10) the colour-math and hi-res carts give the backdrop.
 const GREY: Rgb555 = Rgb555::from_channels(10, 10, 10);
 
-/// How many pixels of a row the background carts' tests compare.
-const PICTURE_PIXELS: usize = 64;
+/// The rows of a picture: lines 1 to 224, in the order drawn (ADR 0028, point 8).
+const PICTURE_ROWS: usize = 224;
 
 /// Runs a drawing cartridge until its picture is steady: its setup, which clears VRAM by DMA,
 /// takes more than a frame, and the frame after is whole.
@@ -371,34 +375,42 @@ fn drawn(rom: &[u8]) -> Snes<Fast> {
     snes
 }
 
-/// The first 64 pixels of picture row `row`, as 15-bit colours. Row 0 is line 1.
-// @source: adr-0013
-fn picture_row(snes: &Snes<Fast>, row: usize) -> Vec<Rgb555> {
-    let video = snes.video();
-    assert_eq!(video.width, 256);
-    let start = row * 256;
-    video.pixels[start..start + PICTURE_PIXELS].to_vec()
-}
-
-/// The first 64 pixels of row `row` of a 512-wide picture, as 15-bit colours.
-// @source: adr-0013
-// @source: adr-0036
-fn wide_row(snes: &Snes<Fast>, row: usize) -> Vec<Rgb555> {
-    let video = snes.video();
-    assert_eq!(video.width, 512);
-    let start = row * 512;
-    video.pixels[start..start + PICTURE_PIXELS].to_vec()
-}
-
-/// A row of runs `(colour, length)`, then `fill` to the end of the compared pixels.
+/// A 256-pixel row of runs `(colour, length)`, then `fill` to the end.
 // @source: adr-0013
 fn runs(list: &[(Rgb555, usize)], fill: Rgb555) -> Vec<Rgb555> {
     let mut row = Vec::new();
     for &(color, length) in list {
         row.extend(core::iter::repeat_n(color, length));
     }
-    row.resize(PICTURE_PIXELS, fill);
+    row.resize(LINE_COLUMNS, fill);
     row
+}
+
+/// Checks every pixel of the steady picture, `width` pixels by 224 rows (row 0 is line 1):
+/// - a row in a band of `Some(row)` is that row;
+/// - a row in a band of `None` is not checked;
+/// - every other row is `fill` across.
+// @source: adr-0013
+fn assert_picture(
+    snes: &Snes<Fast>,
+    width: usize,
+    bands: &[(Range<usize>, Option<&[Rgb555]>)],
+    fill: Rgb555,
+) {
+    let video = snes.video();
+    assert_eq!(
+        (usize::from(video.width), usize::from(video.height)),
+        (width, PICTURE_ROWS)
+    );
+    let blank = vec![fill; width];
+    for (row, pixels) in video.pixels.chunks_exact(width).enumerate() {
+        let expected = match bands.iter().find(|(rows, _)| rows.contains(&row)) {
+            Some((_, Some(expected))) => expected,
+            Some((_, None)) => continue,
+            None => blank.as_slice(),
+        };
+        assert_eq!(pixels, expected, "row {row}");
+    }
 }
 
 // @source: anomie-regs#2105
@@ -424,12 +436,11 @@ fn bg_mode_7_cart_scales_scrolls_and_wraps_the_playfield() {
         &[(WHITE, 4), (MAGENTA, 4), (RED, 4), (BLUE, 4), (GREEN, 4)],
         WHITE,
     );
+    // Columns 20 to 255 are playfield 24 to 494, tilemap columns 3 to 61: character 0.
     // D = 2.0 too, so lines 1 to 3 are playfield rows 2, 4 and 6, still in the first row of
-    // tiles, which are solid colours; line 4 is row 8, in the next tile row (character 0).
-    for row in 0..3 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
-    }
-    assert_eq!(picture_row(&snes, 3), runs(&[], WHITE));
+    // tiles, which are solid colours; line 4 is row 8, in the next tile row, and every
+    // line down to 224 (row 448) is in a tilemap row that is all character 0.
+    assert_picture(&snes, 256, &[(0..3, Some(&expected))], WHITE);
 }
 
 // @source: anomie-regs#2101
@@ -465,14 +476,20 @@ fn sprites_cart_draws_sprites_in_order_with_flips_and_sets_range_over() {
     );
     let bottom = runs(&[(WHITE, 32), (MAGENTA, 8), (GREEN, 8)], WHITE);
     // Sprites at Y 0 are on lines 1 to 8 (rows 0 to 7) for the small ones, to line 16 (row
-    // 15) for the large one.
-    for row in 0..8 {
-        assert_eq!(picture_row(&snes, row), top, "row {row}");
-    }
-    for row in 8..16 {
-        assert_eq!(picture_row(&snes, row), bottom, "row {row}");
-    }
-    assert_eq!(picture_row(&snes, 16), runs(&[], WHITE));
+    // 15) for the large one. Sprites 3 to 35, 8x8 at X 0 and Y 100, are on lines 101 to 108,
+    // and sprites 36 to 127 at Y 128 on lines 129 to 136: tile 0, palette 0, red.
+    let corner = runs(&[(RED, 8)], WHITE);
+    assert_picture(
+        &snes,
+        256,
+        &[
+            (0..8, Some(&top)),
+            (8..16, Some(&bottom)),
+            (100..108, Some(&corner)),
+            (128..136, Some(&corner)),
+        ],
+        WHITE,
+    );
     // 33 sprites on one line set range over (bit 6) but not time over (33 tiles); the
     // version is 1.
     let status = snes.peek_bus(0x00_213E).value;
@@ -510,9 +527,8 @@ fn windows_cart_masks_layers_by_window_logic_inversion_and_designation() {
         ],
         BLUE,
     );
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
-    }
+    // Lines 1 to 7 are rows 1 to 7 of the tiles; line 8 on is the next tile row, empty.
+    assert_picture(&snes, 256, &[(0..7, Some(&expected))], BLUE);
 }
 
 // @source: anomie-regs#2105
@@ -532,11 +548,9 @@ fn bg_mode_0_cart_draws_four_2_bit_backgrounds_in_priority_order() {
     // priority-0 one, and of BG3's priority-1 tile at 4-5, since BG2 comes first at the
     // same priority. 6-7: BG3 (white). 8-15: BG4 (magenta). Then the backdrop (blue).
     let expected = runs(&[(RED, 2), (GREEN, 4), (WHITE, 2), (MAGENTA, 8)], BLUE);
-    // Lines 1 to 7 are rows 1 to 7 of the tile, which repeat; line 8 is the next tile row.
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
-    }
-    assert_eq!(picture_row(&snes, 7), runs(&[], BLUE));
+    // Lines 1 to 7 are rows 1 to 7 of the tile, which repeat; line 8 on is the next tile
+    // row, which the maps leave empty.
+    assert_picture(&snes, 256, &[(0..7, Some(&expected))], BLUE);
 }
 
 // @source: anomie-regs#2105
@@ -555,9 +569,7 @@ fn bg_mode_1_cart_puts_bg3_in_front_when_bit_3_is_set() {
     // BG1's priority-1 tile covers pixels 0-3 and BG3's covers 2-5; with $2105 bit 3 set
     // BG3 is in front of BG1 at 2-3. BG2's priority-0 tile shows behind both at 6-7.
     let expected = runs(&[(RED, 2), (GREEN, 4), (BLUE, 2)], WHITE);
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
-    }
+    assert_picture(&snes, 256, &[(0..7, Some(&expected))], WHITE);
 }
 
 // @source: anomie-regs#2105
@@ -598,15 +610,15 @@ fn bg_mode_2_cart_draws_16_by_16_tiles_and_flips_them_whole() {
         ],
         WHITE,
     );
-    // Lines 1 to 7 are the top half; line 8 is the tile's row 8, the bottom half.
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), top, "row {row}");
-    }
-    for row in 7..15 {
-        assert_eq!(picture_row(&snes, row), bottom, "row {row}");
-    }
-    // Line 16 is the second row of tiles, which the map leaves empty.
-    assert_eq!(picture_row(&snes, 15), runs(&[], WHITE));
+    // Lines 1 to 7 are the top half; line 8 is the tile's row 8, the bottom half. Line 16
+    // on is the second row of tiles, which the map leaves empty. BG3's entries are all
+    // clear, so offset-per-tile changes nothing.
+    assert_picture(
+        &snes,
+        256,
+        &[(0..7, Some(&top)), (7..15, Some(&bottom))],
+        WHITE,
+    );
 }
 
 // @source: anomie-regs#2105
@@ -625,10 +637,10 @@ fn bg_mode_3_cart_scrolls_a_256_colour_background_across_its_second_screen() {
     let snes = drawn(include_bytes!("../../../tests/assets/carts/bg-mode3.sfc"));
     // BG1HOFS = 252 puts map column 32 at pixel 4: BG1's priority-0 tile (red, entry $A5)
     // covers 4-11 and is in front of BG2's tile (green) at 4-7, which shows at 0-3.
+    // Pixel 255 is map column 63, the last of the 512-pixel playfield, so it does not wrap
+    // back to column 0 on this line.
     let expected = runs(&[(GREEN, 4), (RED, 8)], WHITE);
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
-    }
+    assert_picture(&snes, 256, &[(0..7, Some(&expected))], WHITE);
 }
 
 // @source: anomie-regs#2105
@@ -649,9 +661,7 @@ fn bg_mode_4_cart_draws_bg1_in_direct_colour_and_bg2_from_the_palette() {
     // Character $B6 with palette bits 101 is blue 10 1, green 110 0, red 110 1: $531A.
     assert_eq!(DIRECT.bits(), 0x531A);
     let expected = runs(&[(DIRECT, 8), (GREEN, 8)], WHITE);
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
-    }
+    assert_picture(&snes, 256, &[(0..7, Some(&expected))], WHITE);
 }
 
 // @source: anomie-regs#2105
@@ -674,11 +684,12 @@ fn bg_opt_mode_2_cart_takes_each_columns_offsets_from_bg3() {
     // 16 right and 8 down: column 3 of the second row, palette 3 colour 2 (green). Tile 2's
     // entry is empty: column 2 (blue). Tile 3 is 1016 right, which wraps the 256-pixel
     // playfield to 16: column 2 again.
+    // Tiles 4 to 31 take BG3's clear entries: no offset, and empty map columns.
     let expected = runs(&[(RED, 8), (GREEN, 8), (BLUE, 8), (BLUE, 8)], WHITE);
-    // Lines 1 to 7: rows 1 to 7 of the tile, which repeat.
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
-    }
+    // Lines 1 to 7: rows 1 to 7 of the tile, which repeat. Lines 8 to 15 show the map's
+    // second row in palette colours the cart never writes, which power on random (ADR 0028),
+    // so they are not checked. Line 16 on is empty.
+    assert_picture(&snes, 256, &[(0..7, Some(&expected)), (7..15, None)], WHITE);
 }
 
 // @source: anomie-regs#2105
@@ -700,10 +711,11 @@ fn bg_opt_mode_4_cart_takes_one_horizontal_or_vertical_offset_per_column() {
     // Tile 0 is as normal (red). Tile 1: a horizontal 16, column 3 (green). Tile 2: a
     // vertical 8, whose bit 15 leaves the horizontal scroll alone: column 2 of the second
     // row (blue). Tile 3: a horizontal 8, column 4, which is empty (the backdrop).
+    // Tiles 4 to 31 take BG3's clear entries, whose valid bit is clear: no offset.
     let expected = runs(&[(RED, 8), (GREEN, 8), (BLUE, 8)], WHITE);
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
-    }
+    // Lines 8 to 15 show the map's second row in palette colours the cart never writes,
+    // which power on random (ADR 0028), so they are not checked. Line 16 on is empty.
+    assert_picture(&snes, 256, &[(0..7, Some(&expected)), (7..15, None)], WHITE);
 }
 
 // @source: anomie-regs#2106
@@ -747,9 +759,27 @@ fn color_math_cart_adds_the_sub_screen_or_fixed_colour_clips_in_the_window_and_p
         ],
         GREY,
     );
-    for row in 0..7 {
-        assert_eq!(picture_row(&snes, row), expected, "row {row}");
+    // Below the tiles, the main screen is the backdrop, which takes no math ($2131 bit 5 is
+    // clear), and the colour window still clips it to black at 24 to 31. BG3's blocks are 4
+    // lines high from line 1 (ADR 0035, point 8), so line 8 is in the block that shows line
+    // 5's row: BG3 shows there once more.
+    let clipped = runs(&[(GREY, 24), (BLACK, 8)], GREY);
+    let mut last_block = clipped.clone();
+    for (index, pixel) in last_block[40..64].iter_mut().enumerate() {
+        if index % 8 < 4 {
+            *pixel = WHITE;
+        }
     }
+    assert_picture(
+        &snes,
+        256,
+        &[
+            (0..7, Some(&expected)),
+            (7..8, Some(&last_block)),
+            (8..PICTURE_ROWS, Some(&clipped)),
+        ],
+        GREY,
+    );
 }
 
 // @source: anomie-regs#2105
@@ -797,10 +827,10 @@ fn hires_cart_shows_mode_5_half_pixels_and_maths_the_sub_pixels_after_the_main_p
         expected.extend([backdrop_math, two_math]);
     }
     expected.extend([backdrop_math, GREY]);
-    expected.resize(PICTURE_PIXELS, GREY);
-    for row in 0..7 {
-        assert_eq!(wide_row(&snes, row), expected, "row {row}");
-    }
+    // The rest of the line is the backdrop on both screens, which takes no math. Line 8 on
+    // is the next tile row, which the map leaves empty.
+    expected.resize(512, GREY);
+    assert_picture(&snes, 512, &[(0..7, Some(&expected))], GREY);
 }
 
 // @source: anomie-regs#213e

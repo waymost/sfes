@@ -46,9 +46,9 @@ cart_vectors reset, halt, halt, halt
 ; (a 16x16 sprite is the tile, the next, and those 16 later, anomie-regs#sprites) are
 ; colours 1 to 4. Sprite 0 is 8x8 at X 8, Y 0 with palette 0; sprite 1 is 8x8 at X 12 with
 ; palette 1; sprite 2 is the large sprite at X 32, with both flips (vh = 11) and palette 2.
-; Sprites 3 to 35 are 8x8 at Y 100 and the other 92 are hidden at Y 128. The high table is
-; all zero except sprite 2's size bit, which is bit 1 of the table's first byte shifted by
-; 2 * 2 = bit 5 (anomie-regs#sprites/oam).
+; Sprites 3 to 35 are 8x8 at Y 100 and the other 92 at Y 128, below the rows the first three
+; cover. The high table is all zero except sprite 2's size bit, which is bit 1 of the
+; table's first byte shifted by 2 * 2 = bit 5 (anomie-regs#sprites/oam).
 ; @source: wdc-w65c816s#2.25, anomie-regs#2101, anomie-regs#2102, anomie-regs#2103
 ; @source: anomie-regs#2104, anomie-regs#2105, anomie-regs#212c, anomie-regs#sprites
 ; @source: anomie-regs#sprites/oam, anomie-regs#sprites/palettes
@@ -85,7 +85,7 @@ cart_vectors reset, halt, halt, halt
         sprite 0, 100, 0, $00   ; sprites 3 to 35
     .endrepeat
     .repeat 92
-        sprite 0, 128, 0, $00   ; sprites 36 to 127: out of the way
+        sprite 0, 128, 0, $00   ; sprites 36 to 127: lines 129 to 136
     .endrepeat
     ppu_write $2104, $20        ; the high table: sprite 2 is large
     .repeat 31
