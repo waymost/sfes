@@ -16,6 +16,7 @@ use crate::{
     background::Background,
     layer::{LayerKind, Layers},
     register::Register,
+    sprite::{PALETTE_COLORS, PALETTE_START},
 };
 
 /// `$2130` bits 7–6: clip the main pixel to black where.
@@ -30,8 +31,10 @@ const CHANNEL_MAX: u8 = 31;
 const FIXED_RED: u8 = 0x20;
 /// `$2132` bits 4–0: the intensity.
 const FIXED_INTENSITY: u8 = 0x1F;
-/// A sprite palette below this CGRAM entry (palettes 0 to 3) never takes math.
-const FIRST_MATH_SPRITE_ENTRY: u8 = 192;
+/// The first sprite palette that can take math; palettes 0 to 3 never do.
+const FIRST_MATH_SPRITE_PALETTE: u8 = 4;
+/// The CGRAM entry of the first sprite palette that can take math.
+const FIRST_MATH_SPRITE_ENTRY: u8 = PALETTE_START + FIRST_MATH_SPRITE_PALETTE * PALETTE_COLORS;
 /// `$2100` bits 3–0: the brightness.
 const BRIGHTNESS_MASK: u8 = 0x0F;
 
