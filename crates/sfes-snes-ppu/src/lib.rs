@@ -39,8 +39,8 @@ mod sprite;
 mod window;
 
 pub use crate::{
-    layer::{LAYER_COLUMNS, LayerKind, LayerLine},
-    line::{LineOut, LineWidth},
+    layer::{LayerKind, LayerLine},
+    line::{LINE_COLUMNS, LineOut, LineWidth},
     memory::{CGRAM_SIZE, OAM_SIZE, VRAM_SIZE},
     ppu::Ppu,
     register::{NotAPpuRegister, ReadKind, Register},

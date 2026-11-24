@@ -6,15 +6,18 @@
 
 use sfes_api::Rgb555;
 
+/// The pixels of a normal line, and the columns every line's layers and sprites have.
+pub const LINE_COLUMNS: usize = 256;
+
 /// How many pixels a line has; each variant's value is its width.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(usize)]
 pub enum LineWidth {
     /// 256 pixels.
     #[default]
-    Normal = 256,
+    Normal = LINE_COLUMNS,
     /// 512 pixels: BG mode 5 or 6, or pseudo-hires.
-    Wide = 512,
+    Wide = 2 * LINE_COLUMNS,
 }
 
 impl LineWidth {

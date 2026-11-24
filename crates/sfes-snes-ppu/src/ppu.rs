@@ -19,7 +19,7 @@ use crate::{
     color_math::{ColorMath, Operand, Previous, Source, dim},
     counters::{CounterLatch, CounterRegister},
     layer::{LayerKind, LayerLine, Layers},
-    line::{LineOut, LineWidth},
+    line::{LINE_COLUMNS, LineOut, LineWidth},
     memory::{Cgram, CgramPort, OAM_SIZE, OamPort, PortByte, Vram, VramPort},
     mode7::Mode7,
     mosaic::Mosaic,
@@ -50,7 +50,8 @@ const PPU2_VERSION: u8 = 3;
 /// (ADR 0028, point 5).
 const BACKGROUND_MODE_POWER_ON: u8 = 0x0F;
 /// The pixels of a normal line.
-const LINE_PIXELS: u16 = 256;
+#[expect(clippy::cast_possible_truncation, reason = "256 fits in a u16")]
+const LINE_PIXELS: u16 = LINE_COLUMNS as u16;
 /// The first line a frame outputs (anomie-timing#s-ppu/rendering).
 const FIRST_OUTPUT_LINE: u16 = 1;
 
@@ -642,7 +643,7 @@ impl Ppu {
             let sprite = sprites
                 .as_ref()
                 .and_then(|pixels| pixels.get(usize::from(x)).copied().flatten());
-            let column = usize::from(x) * width.pixels() / usize::from(LINE_PIXELS);
+            let column = usize::from(x) * width.pixels() / LINE_COLUMNS;
             if wide {
                 let sub = self.front(Screen::Sub, sub_layers, order, &sub_samples, sprite, x);
                 let color = sub.map_or_else(|| self.color(0), |(_, sample)| self.resolve(sample));
@@ -702,7 +703,7 @@ impl Ppu {
         setup: Setup,
         screens: Layers,
         line: u16,
-        sprites: Option<&[Option<SpritePixel>; 256]>,
+        sprites: Option<&[Option<SpritePixel>; LINE_COLUMNS]>,
     ) {
         out.clear();
         for x in 0..LINE_PIXELS {
