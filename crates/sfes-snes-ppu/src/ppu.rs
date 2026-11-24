@@ -13,13 +13,14 @@ use sfes_api::{Rgb555, SplitMix64};
 
 use crate::{
     background::{
-        Background, BackgroundMode, Backgrounds, Color, Layer, Mode, Sample, Setup, priority_order,
+        Background, BackgroundMode, Backgrounds, Color, HalfPixel, Layer, Mode, Sample, Setup,
+        priority_order,
     },
     color_math::{ColorMath, Operand, Previous, Source, dim},
     counters::{CounterLatch, CounterRegister},
     layer::{LayerKind, LayerLine, Layers},
     line::{LineOut, LineWidth},
-    memory::{CgramPort, Half, OamPort, VramPort},
+    memory::{CgramPort, OamPort, PortByte, VramPort},
     mode7::Mode7,
     mosaic::Mosaic,
     register::{ReadKind, Register},
@@ -257,8 +258,8 @@ impl Ppu {
             Register::MultiplyMiddle => Some(middle),
             Register::MultiplyHigh => Some(high),
             Register::OamDataRead => Some(self.oam_port.peek(&self.oam)),
-            Register::VramDataReadLow => Some(self.vram_port.peek(Half::Low)),
-            Register::VramDataReadHigh => Some(self.vram_port.peek(Half::High)),
+            Register::VramDataReadLow => Some(self.vram_port.peek(PortByte::Low)),
+            Register::VramDataReadHigh => Some(self.vram_port.peek(PortByte::High)),
             Register::CgramDataRead => Some(self.cgram_port.peek(&self.cgram, self.ppu2_open_bus)),
             Register::Ppu1Status => Some(self.ppu1_status()),
             Register::Ppu2Status => Some(self.ppu2_status(signals)),
@@ -337,8 +338,8 @@ impl Ppu {
         }
         match register {
             Register::OamDataRead => self.oam_port.step(),
-            Register::VramDataReadLow => self.vram_port.after_read(&self.vram, Half::Low),
-            Register::VramDataReadHigh => self.vram_port.after_read(&self.vram, Half::High),
+            Register::VramDataReadLow => self.vram_port.after_read(&self.vram, PortByte::Low),
+            Register::VramDataReadHigh => self.vram_port.after_read(&self.vram, PortByte::High),
             Register::CgramDataRead => self.cgram_port.step(),
             Register::Ppu2Status => self.counters.read_status(self.signals.external_latch),
             _ => {
@@ -447,17 +448,21 @@ impl Ppu {
             Register::Mode7MatrixA => self.mode7.write_matrix_a(value),
             Register::Mode7MatrixB => self.mode7.write_matrix_b(value),
             Register::VramControl => self.vram_port.write_control(value),
-            Register::VramAddressLow => self.vram_port.write_address(&self.vram, Half::Low, value),
+            Register::VramAddressLow => {
+                self.vram_port
+                    .write_address(&self.vram, PortByte::Low, value);
+            }
             Register::VramAddressHigh => {
-                self.vram_port.write_address(&self.vram, Half::High, value);
+                self.vram_port
+                    .write_address(&self.vram, PortByte::High, value);
             }
             Register::VramDataLow => {
                 self.vram_port
-                    .write_data(&mut self.vram, Half::Low, value, blank);
+                    .write_data(&mut self.vram, PortByte::Low, value, blank);
             }
             Register::VramDataHigh => {
                 self.vram_port
-                    .write_data(&mut self.vram, Half::High, value, blank);
+                    .write_data(&mut self.vram, PortByte::High, value, blank);
             }
             Register::CgramAddress => self.cgram_port.write_address(value),
             Register::CgramData => {
@@ -635,9 +640,9 @@ impl Ppu {
         };
         let mut previous = Previous::NONE;
         for x in 0..LINE_PIXELS {
-            let main_samples = self.samples(mode, setup, fetched, x, line, 1);
+            let main_samples = self.samples(mode, setup, fetched, x, line, Screen::Main);
             let sub_samples = if hires_mode {
-                self.samples(mode, setup, sub_layers, x, line, 0)
+                self.samples(mode, setup, sub_layers, x, line, Screen::Sub)
             } else {
                 main_samples
             };
@@ -709,7 +714,7 @@ impl Ppu {
         out.clear();
         for x in 0..LINE_PIXELS {
             let column = usize::from(x);
-            let samples = self.samples(mode, setup, screens, x, line, 1);
+            let samples = self.samples(mode, setup, screens, x, line, Screen::Main);
             for (background, sample) in Background::ALL.into_iter().zip(samples) {
                 if let Some(slot) = out.layer_mut(LayerKind::from(background)).get_mut(column) {
                     *slot = sample.map(|sample| self.resolve(sample));
@@ -726,9 +731,9 @@ impl Ppu {
 
     /// What each background in `layers` shows at column `x` of `line`, each from the top-left
     /// of its mosaic block (ADR 0035, point 8); mode 7's EXTBG layer has blocks of its own.
-    /// In modes 5 and 6 `half` is the half-pixel of the tile's pair a screen shows, and
-    /// both a pixelated background's half-pixel and half-line are the even one; with
-    /// interlace the row is in half-lines (ADR 0036, points 3 to 5).
+    /// In modes 5 and 6 each `screen` shows its half-pixel of the tile's pair, and both a
+    /// pixelated background's half-pixel and half-line are the even one; with interlace the
+    /// row is in half-lines (ADR 0036, points 3 to 5).
     // @source: anomie-regs#2106
     // @source: anomie-regs#backgrounds/mode-5
     // @source: anomie-regs#backgrounds/mode-6
@@ -745,7 +750,7 @@ impl Ppu {
         layers: Layers,
         x: u16,
         line: u16,
-        half: u16,
+        screen: Screen,
     ) -> [Option<Sample>; 4] {
         let extbg = self.screen_mode.contains(ScreenMode::EXTBG);
         let interlaced = self.screen_mode.contains(ScreenMode::INTERLACE);
@@ -769,9 +774,9 @@ impl Ppu {
                     .flatten();
             }
             let (half, field) = if self.mosaic.pixelates(background) {
-                (0, 0)
+                (HalfPixel::Even, 0)
             } else {
-                (half, self.signals.field as u16)
+                (HalfPixel::from(screen), self.signals.field as u16)
             };
             let row = if interlaced && mode.hires() {
                 2 * row + field
@@ -1689,7 +1694,7 @@ mod tests {
             [pixel(&out, 0), pixel(&out, 1)],
             [rgb(23, 10, 9), rgb(15, 10, 13)]
         );
-        // Half divides the sub pixel's sum but not the backdrop's.
+        // PortByte divides the sub pixel's sum but not the backdrop's.
         ppu.write(Register::ColorMathDesignation, 0x61);
         ppu.render_line(0, &mut out);
         assert_eq!(
