@@ -69,3 +69,11 @@
     ppu_write $2100, $0F
     stp
 .endmacro
+
+; One zero byte in RODATA for clear_vram's fixed-address DMA (ADR 0013).
+; @source: adr-0013
+.pushseg
+.segment "RODATA"
+zero:
+    .byte $00
+.popseg

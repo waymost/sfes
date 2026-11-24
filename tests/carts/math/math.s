@@ -123,8 +123,4 @@ cart_vectors reset, halt, halt, halt
     stp
 .endproc
 
-; No interrupt is enabled: stop if one is taken.
-; @source: wdc-w65c816s#7.14
-.proc halt
-    stp
-.endproc
+.include "halt.inc"
