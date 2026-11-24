@@ -352,6 +352,23 @@ pub(crate) fn dim(color: Rgb555, control: u8) -> Rgb555 {
 mod tests {
     use super::*;
 
+    // @source: anomie-regs#2130
+    #[test]
+    fn every_2130_byte_names_the_regions_of_its_bits_7_to_6_and_5_to_4() {
+        for value in 0..=u8::MAX {
+            assert_eq!(
+                Region::from_field(value, 6) as u8,
+                value >> 6,
+                "{value:#04X}"
+            );
+            assert_eq!(
+                Region::from_field(value, 4) as u8,
+                value >> 4 & 0x03,
+                "{value:#04X}"
+            );
+        }
+    }
+
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0035
     fn color(red: u8, green: u8, blue: u8) -> Rgb555 {

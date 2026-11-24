@@ -364,7 +364,7 @@ pub(crate) struct Sample {
 /// odd ones and the sub screen the even ones (ADR 0036, point 3). Each variant's value is
 /// the half-pixel's place in its pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u16)]
+#[repr(u8)]
 pub(crate) enum HalfPixel {
     /// The left half-pixel, the sub screen's.
     Even = 0,
@@ -652,7 +652,7 @@ impl Backgrounds {
 
         let entry = TilemapEntry(self.entry(vram, background, across / width, down / height));
         let mut column = if hires {
-            across % width * 2 + half as u16
+            across % width * 2 + u16::from(half as u8)
         } else {
             across % width
         };
@@ -722,6 +722,14 @@ mod tests {
     use alloc::{format, vec::Vec};
 
     use super::*;
+
+    // @source: anomie-regs#2105
+    #[test]
+    fn every_2105_byte_names_the_mode_of_its_bits_2_to_0() {
+        for value in 0..=u8::MAX {
+            assert_eq!(Mode::from_bits(value) as u8, value & 0x07, "{value:#04X}");
+        }
+    }
 
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0030

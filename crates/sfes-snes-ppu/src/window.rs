@@ -240,6 +240,15 @@ mod tests {
 
     use super::*;
 
+    // @source: anomie-regs#212a
+    // @source: anomie-regs#212b
+    #[test]
+    fn every_byte_names_the_logic_of_its_bits_1_to_0() {
+        for value in 0..=u8::MAX {
+            assert_eq!(Logic::from_field(value) as u8, value & 0x03, "{value:#04X}");
+        }
+    }
+
     /// Windows 1 and 2 at 8..=23 and 16..=31, and the three `$2123`-`$2125` registers and
     /// two logic registers as given.
     // @source: anomie-regs#2126
