@@ -69,15 +69,4 @@ cart_vectors reset, halt, halt, halt
     display_on
 .endproc
 
-; Every other vector stops the CPU too, so an unexpected interrupt is visible as a stop.
-; @source: wdc-w65c816s#7.14
-.proc halt
-    stp
-.endproc
-
-.segment "RODATA"
-
-; One zero byte for the fixed-address VRAM clear (ADR 0013).
-; @source: adr-0013
-zero:
-    .byte $00
+.include "halt.inc"

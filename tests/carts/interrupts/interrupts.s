@@ -71,8 +71,4 @@ cart_vectors reset, nmi, irq, halt
     rti
 .endproc
 
-; COP, BRK and ABORT are not used: stop if one is taken.
-; @source: wdc-w65c816s#7.14
-.proc halt
-    stp
-.endproc
+.include "halt.inc"

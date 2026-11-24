@@ -23,7 +23,4 @@ cart_vectors reset, halt, halt, halt
 
 ; Every other vector stops the CPU too, so an unexpected interrupt is visible as a stop
 ; without the marker.
-; @source: wdc-w65c816s#7.14
-.proc halt
-    stp
-.endproc
+.include "halt.inc"

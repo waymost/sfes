@@ -21,7 +21,7 @@ $S golden <name> [--frame N]             # create the golden file and fill in it
 
 ## Flow
 
-1. **`new`.** The skeleton has the header include, `cart_header`, `cart_vectors reset, halt, halt, halt`, a `reset` proc ending in `stp`, and `TODO(cite)` markers. The title is at most 21 characters.
+1. **`new`.** The skeleton has the header include, `cart_header`, `cart_vectors reset, halt, halt, halt`, a `reset` proc ending in `stp`, `.include "halt.inc"` (the shared `halt` proc, last in CODE) and `TODO(cite)` markers. A cart that draws also includes `ppu.inc`, which brings the setup macros and the `zero` byte `clear_vram` reads. The title is at most 21 characters.
 2. **Write the assembly.** Conventions the existing carts follow (`halt`, `bus-timing`, `interrupts`):
    - It starts in emulation mode with `D = $0000`, `DBR = $00`, `M = X = 1`, `I` set. Use `a:` absolute addressing and 8-bit accesses until you leave emulation mode.
    - **A cart checks nothing itself unless it must.** It leaves results in WRAM (bank `$00:0000–1FFF` mirrors `$7E:0000`) or in registers and ends with `stp`. A Rust test in the consuming crate does `include_bytes!("../../../tests/assets/carts/<name>.sfc")`, runs `Snes::<Fast>::builder(...)`, and compares with expected values. See `crates/sfes-snes-core/src/carts.rs`.
