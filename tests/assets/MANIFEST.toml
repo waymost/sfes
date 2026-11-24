@@ -180,6 +180,12 @@ sha256 = "a6f8f5f852d173c51b0db633c7420ecac403d6cb5c12acf0102c8144258781a6"
 notes = "Own test cartridge: Sprites at 16x32 with the priority rotation of $2103, a vertical flip by square halves, time over dropping the first sprite's tiles, and a sprite at X -256 that uses time but draws nothing. Built from tests/carts/obj-limits/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/hires-bands.sfc"
+license = "own"
+sha256 = "9813b8ccc767be292b1bf9006f393e94fcc57c217b06a85afb0830a4139bdd3b"
+notes = "Own test cartridge: Interlace all frame with three HDMA bands: mode 5 rows stepping by two and differing by field, mode 1 pseudo-hi-res with BG2 on the sub screen, and mode 6 with an offset-per-tile column. Built from tests/carts/hires-bands/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
