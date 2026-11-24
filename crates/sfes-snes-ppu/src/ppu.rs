@@ -13,7 +13,7 @@ use sfes_api::{Rgb555, SplitMix64};
 
 use crate::{
     background::{Background, Backgrounds, Color, Layer, Sample, Setup, priority_order},
-    color_math::{ColorMath, Operand, Source, dim},
+    color_math::{ColorMath, Operand, Previous, Source, dim},
     counters::{CounterLatch, CounterRegister},
     line::{LineOut, LineWidth},
     memory::{CgramPort, Half, OamPort, VramPort},
@@ -484,12 +484,11 @@ impl Ppu {
 
     /// Renders `line` into `out` from the registers and memories as they stand, and makes
     /// the next line the one after it (technical design section 5; ADR 0028, points 6 and
-    /// 7; ADR 0030; ADR 0035):
+    /// 7; ADR 0030; ADR 0035; ADR 0036):
     ///
     /// - the line is 512 pixels in BG mode 5 or 6 or with pseudo-hires, else 256;
-    /// - in BG modes 0 to 4 each main-screen pixel is the first non-transparent pixel, front
-    ///   to back, of the backgrounds `$212C` puts on the main screen, else the backdrop,
-    ///   CGRAM entry 0;
+    /// - each main-screen pixel is the first non-transparent pixel, front to back, of the
+    ///   layers `$212C` puts on the main screen, else the backdrop, CGRAM entry 0;
     /// - in BG mode 7 the pixel is mode 7's (ADR 0032), BG2 appearing with EXTBG;
     /// - the sprites come in at their places in the order (ADR 0033), their pixels drawn
     ///   only when `$212C` bit 4 is set, and their range and time flags set whatever it is;
@@ -497,9 +496,11 @@ impl Ppu {
     /// - the colour window clips the pixel to black and prevents math as `$2130` says, and a
     ///   pixel of a layer `$2131` names has the fixed colour or the sub screen's pixel added
     ///   or subtracted;
-    /// - `$2100` forced blank makes the line black, and its brightness dims every pixel;
-    /// - in modes 5 and 6 every pixel is a sprite's or the backdrop, until #97;
-    /// - a wide line writes each pixel twice, until #97.
+    /// - in a wide line each column is two pixels: the sub screen's, which takes the math of
+    ///   the main pixel to its left, then the main screen's (ADR 0036);
+    /// - in modes 5 and 6 each screen shows its half of every 16-half-pixel tile, and with
+    ///   interlace a line is a half-line of the field `$213F` names;
+    /// - `$2100` forced blank makes the line black, and its brightness dims every pixel.
     // @source: anomie-regs#2100
     // @source: anomie-regs#2105
     // @source: anomie-regs#2106
@@ -509,6 +510,8 @@ impl Ppu {
     // @source: anomie-regs#2131
     // @source: anomie-regs#2133
     // @source: anomie-regs#backgrounds/bg-modes
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#backgrounds/mode-6
     // @source: anomie-regs#backgrounds/mode-7
     // @source: anomie-regs#rendering-the-screen/color-math
     // @source: anomie-regs#rendering-the-screen/mosaic
@@ -522,14 +525,17 @@ impl Ppu {
     // @source: adr-0032
     // @source: adr-0033
     // @source: adr-0035
+    // @source: adr-0036
     pub fn render_line(&mut self, line: u16, out: &mut LineOut) {
         let mode = self.background_mode & BACKGROUND_MODE_MASK;
         // BG modes 5 and 6 are true hi-res.
-        let width = if self.screen_mode & PSEUDO_HIRES != 0 || matches!(mode, 5 | 6) {
+        let hires_mode = matches!(mode, 5 | 6);
+        let width = if self.screen_mode & PSEUDO_HIRES != 0 || hires_mode {
             LineWidth::Wide
         } else {
             LineWidth::Normal
         };
+        let wide = width == LineWidth::Wide;
         let interlaced = self.screen_mode & INTERLACE != 0;
         out.fill(line, width, interlaced, self.color(0));
         let setup = Setup {
@@ -539,27 +545,54 @@ impl Ppu {
         let extbg = self.screen_mode & EXTBG != 0;
         let order = priority_order(mode, self.background_mode & BACKGROUND_3_FIRST != 0, extbg);
         let main_layers = self.main_screen & SCREEN_LAYERS;
-        // The sub screen only matters where math adds it.
-        let sub_wanted = self.color_math.adds_sub_screen() && self.color_math.any_layer();
+        // The sub screen matters where math adds it, and in every wide line.
+        let sub_wanted = wide || (self.color_math.adds_sub_screen() && self.color_math.any_layer());
         let sub_layers = if sub_wanted {
             self.sub_screen & SCREEN_LAYERS
         } else {
             0
         };
-        let fetched = main_layers | sub_layers;
+        // Modes 5 and 6 show other half-pixels of a background on each screen.
+        let fetched = if hires_mode {
+            main_layers
+        } else {
+            main_layers | sub_layers
+        };
+        let sprite_layers = main_layers | sub_layers;
         // Evaluation always runs: its flags are readable state (EMU-06); the pixels only
         // when the sprites are on a screen that is looked at.
         let first = self.oam_port.first_sprite();
         let evaluated = self.sprites.evaluate(&self.oam, first, line);
-        let sprites = (fetched & SCREEN_SPRITES != 0).then(|| evaluated.pixels(&self.vram));
-        let repeat = width.pixels() / usize::from(LINE_PIXELS);
+        let sprites = (sprite_layers & SCREEN_SPRITES != 0).then(|| evaluated.pixels(&self.vram));
         let forced_blank = self.forced_blank();
+        let finish = |color: Rgb555| {
+            if forced_blank {
+                Rgb555::BLACK
+            } else {
+                dim(color, self.display_control)
+            }
+        };
+        let mut previous = Previous::NONE;
         for x in 0..LINE_PIXELS {
-            let samples = self.samples(mode, setup, fetched, x, line);
+            let main_samples = self.samples(mode, setup, fetched, x, line, 1);
+            let sub_samples = if hires_mode {
+                self.samples(mode, setup, sub_layers, x, line, 0)
+            } else {
+                main_samples
+            };
             let sprite = sprites
                 .as_ref()
                 .and_then(|pixels| pixels.get(usize::from(x)).copied().flatten());
-            let main = self.front(Screen::Main, main_layers, order, &samples, sprite, x);
+            let column = usize::from(x) * width.pixels() / usize::from(LINE_PIXELS);
+            if wide {
+                let sub = self.front(Screen::Sub, sub_layers, order, &sub_samples, sprite, x);
+                let color = sub.map_or_else(|| self.color(0), |(_, sample)| self.resolve(sample));
+                let color = self.color_math.apply_previous(color, previous);
+                if let Some(pixel) = out.pixels_mut().get_mut(column) {
+                    *pixel = finish(color);
+                }
+            }
+            let main = self.front(Screen::Main, main_layers, order, &main_samples, sprite, x);
             let source = main.map_or(Source::Backdrop, |(source, _)| source);
             let mut color = main.map_or_else(|| self.color(0), |(_, sample)| self.resolve(sample));
             let area = self.windows.area(Masked::Color, x);
@@ -567,9 +600,14 @@ impl Ppu {
             if clipped {
                 color = Rgb555::BLACK;
             }
+            previous = Previous {
+                clipped,
+                operand: None,
+                color,
+            };
             if !self.color_math.prevents(area) && self.color_math.takes_math(source) {
                 let operand = if self.color_math.adds_sub_screen() {
-                    match self.front(Screen::Sub, sub_layers, order, &samples, sprite, x) {
+                    match self.front(Screen::Sub, sub_layers, order, &sub_samples, sprite, x) {
                         Some((_, sample)) => Operand::Pixel(self.resolve(sample)),
                         None => Operand::Backdrop,
                     }
@@ -577,15 +615,15 @@ impl Ppu {
                     Operand::Fixed
                 };
                 color = self.color_math.blend(color, operand, clipped);
+                // A sub pixel takes the main pixel in place of the sub pixel it was given.
+                previous.operand = Some(match operand {
+                    Operand::Pixel(_) => Operand::Pixel(previous.color),
+                    other => other,
+                });
             }
-            let color = if forced_blank {
-                Rgb555::BLACK
-            } else {
-                dim(color, self.display_control)
-            };
-            let start = usize::from(x) * repeat;
-            if let Some(pixels) = out.pixels_mut().get_mut(start..start + repeat) {
-                pixels.fill(color);
+            let main_column = column + usize::from(wide);
+            if let Some(pixel) = out.pixels_mut().get_mut(main_column) {
+                *pixel = finish(color);
             }
         }
         self.next_line = line + 1;
@@ -593,12 +631,18 @@ impl Ppu {
 
     /// What each background in `layers` shows at column `x` of `line`, each from the top-left
     /// of its mosaic block (ADR 0035, point 8); mode 7's EXTBG layer has blocks of its own.
+    /// In modes 5 and 6 `half` is the half-pixel of the tile's pair a screen shows, and
+    /// both a pixelated background's half-pixel and half-line are the even one; with
+    /// interlace the row is in half-lines (ADR 0036, points 3 to 5).
     // @source: anomie-regs#2106
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#backgrounds/mode-6
     // @source: anomie-regs#backgrounds/mode-7
     // @source: anomie-regs#rendering-the-screen/mosaic
     // @source: adr-0030
     // @source: adr-0032
     // @source: adr-0035
+    // @source: adr-0036
     fn samples(
         &self,
         mode: u8,
@@ -606,8 +650,10 @@ impl Ppu {
         layers: u8,
         x: u16,
         line: u16,
+        half: u16,
     ) -> [Option<Sample>; 4] {
         let extbg = self.screen_mode & EXTBG != 0;
+        let interlaced = self.screen_mode & INTERLACE != 0;
         Background::ALL.map(|background| {
             if layers >> background as u8 & 1 == 0 {
                 return None;
@@ -627,8 +673,18 @@ impl Ppu {
                     .copied()
                     .flatten();
             }
+            let (half, field) = if self.mosaic.pixelates(background) {
+                (0, 0)
+            } else {
+                (half, self.signals.field as u16)
+            };
+            let row = if interlaced && matches!(mode, 5 | 6) {
+                2 * row + field
+            } else {
+                row
+            };
             self.backgrounds
-                .sample(&self.vram, setup, background, column, row)
+                .sample(&self.vram, setup, background, column, row, half)
         })
     }
 
@@ -1154,8 +1210,9 @@ mod tests {
     // @source: anomie-regs#backgrounds/bg-scrolling
     // @source: adr-0028
     // @source: adr-0030
+    // @source: adr-0036
     #[test]
-    fn a_line_is_scrolled_by_its_background_and_a_wide_line_repeats_each_pixel() {
+    fn a_line_is_scrolled_by_its_background_and_a_wide_line_puts_the_sub_screen_first() {
         let mut ppu = drawing_ppu();
         let mut out = LineOut::default();
         ppu.write(Register::BackgroundMode, 0x00);
@@ -1174,14 +1231,14 @@ mod tests {
         ppu.write(Register::Background1HorizontalScroll, 0x00);
         ppu.render_line(5, &mut out);
         assert_eq!(pixel(&out, 0), raw(1));
-        // Pseudo-hires: 512 pixels, each written twice until the sub screen arrives.
+        // Pseudo-hires: 512 pixels, the sub screen's (here the backdrop) before each main one.
         ppu.write(Register::Background1HorizontalScroll, 0x00);
         ppu.write(Register::Background1HorizontalScroll, 0x00);
         ppu.write(Register::ScreenMode, 0x08);
         ppu.render_line(5, &mut out);
         assert_eq!(out.pixels().len(), 512);
         let first = [0, 1, 2, 3].map(|x| pixel(&out, x));
-        assert_eq!(first, [raw(2), raw(2), raw(1), raw(1)]);
+        assert_eq!(first, [raw(1), raw(2), raw(1), raw(1)]);
     }
 
     // @source: anomie-regs#2133
@@ -1651,5 +1708,231 @@ mod tests {
         ppu.write(Register::MainScreen, 0x02);
         ppu.render_line(1, &mut out);
         assert_eq!(pixel(&out, 1), rgb(10, 10, 10));
+    }
+
+    // @source: anomie-regs#2133
+    // @source: anomie-regs#212d
+    // @source: fullsnes#snesppuresolution
+    // @source: adr-0036
+    #[test]
+    fn pseudo_hires_puts_the_sub_screen_before_each_main_pixel_with_colour_0_as_its_backdrop() {
+        let mut ppu = math_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::ScreenMode, 0x08);
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.write(Register::SubScreen, 0x02);
+        ppu.write(Register::FixedColor, 0x20 | 5);
+        ppu.render_line(0, &mut out);
+        assert_eq!(out.width(), LineWidth::Wide);
+        // Column 0: BG2's colour 2 on the sub screen, BG1's colour 1 on the main. Column 1:
+        // the backdrops, which is colour 0 on both screens and not the fixed colour.
+        assert_eq!(
+            [0, 1, 2, 3].map(|x| pixel(&out, x)),
+            [
+                rgb(3, 6, 9),
+                rgb(20, 4, 0),
+                rgb(10, 10, 10),
+                rgb(10, 10, 10)
+            ]
+        );
+        // With the sub screen off, every even pixel is the backdrop.
+        ppu.write(Register::SubScreen, 0x00);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            [0, 1].map(|x| pixel(&out, x)),
+            [rgb(10, 10, 10), rgb(20, 4, 0)]
+        );
+    }
+
+    // @source: anomie-regs#2133
+    // @source: anomie-regs#rendering-the-screen/color-math
+    // @source: fullsnes#snesppucolormath
+    // @source: adr-0036
+    #[test]
+    fn a_wide_line_gives_each_sub_pixel_the_math_of_the_main_pixel_to_its_left() {
+        let mut ppu = math_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::ScreenMode, 0x08);
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.write(Register::SubScreen, 0x02);
+        // BG1 and the backdrop take math; the fixed colour is (5, 0, 3).
+        ppu.write(Register::ColorMathDesignation, 0x21);
+        ppu.write(Register::FixedColor, 0x20 | 5);
+        ppu.write(Register::FixedColor, 0x80 | 3);
+        let first = |out: &LineOut| [0, 1, 2, 3].map(|x| pixel(out, x));
+        // The fixed colour: column 0's sub pixel has no pixel before it and is as it is.
+        // Column 1's has BG1's math, so the fixed colour is added to the backdrop.
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            first(&out),
+            [
+                rgb(3, 6, 9),
+                rgb(25, 4, 3),
+                rgb(15, 10, 13),
+                rgb(15, 10, 13)
+            ]
+        );
+        // The sub screen: BG1 plus BG2's colour 2 (23, 10, 9); then the sub pixel of column 1,
+        // the backdrop, takes BG1's colour (20, 4, 0); the backdrop's main pixel takes the
+        // fixed colour, which stands for the sub backdrop.
+        ppu.write(Register::ColorMathSelect, 0x02);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            first(&out),
+            [
+                rgb(3, 6, 9),
+                rgb(23, 10, 9),
+                rgb(30, 14, 10),
+                rgb(15, 10, 13)
+            ]
+        );
+        // Subtract with half: BG1 minus BG2 (17, -2, -9) halved and clamped (8, 0, 0); the
+        // sub pixel of column 1, (10, 10, 10) minus BG1's colour halved (0, 3, 5); the
+        // backdrop minus the fixed colour, not halved (5, 10, 7).
+        ppu.write(Register::ColorMathDesignation, 0xE1);
+        ppu.render_line(0, &mut out);
+        assert_eq!(
+            first(&out),
+            [rgb(3, 6, 9), rgb(8, 0, 0), rgb(0, 3, 5), rgb(5, 10, 7)]
+        );
+    }
+
+    // @source: anomie-regs#2130
+    // @source: anomie-regs#2133
+    // @source: anomie-regs#windows
+    // @source: adr-0036
+    #[test]
+    fn a_sub_pixel_is_clipped_when_the_main_pixel_to_its_left_is() {
+        let mut ppu = math_ppu();
+        let mut out = LineOut::default();
+        ppu.write(Register::ScreenMode, 0x08);
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.write(Register::ColorMathDesignation, 0x21);
+        ppu.write(Register::FixedColor, 0x20 | 5);
+        ppu.write(Register::FixedColor, 0x80 | 3);
+        // The colour window is column 0 alone and clips inside it.
+        ppu.write(Register::Window1Left, 0);
+        ppu.write(Register::Window1Right, 0);
+        ppu.write(Register::WindowMaskObjectColor, 0x20);
+        ppu.write(Register::ColorMathSelect, 0x80);
+        ppu.render_line(0, &mut out);
+        // Column 0: its sub pixel has nothing to its left, its main pixel is black plus the
+        // fixed colour. Column 1 is outside the window, but its sub pixel follows column 0:
+        // black, then the fixed colour, not halved.
+        assert_eq!(
+            [0, 1, 2, 3].map(|x| pixel(&out, x)),
+            [rgb(10, 10, 10), rgb(5, 0, 3), rgb(5, 0, 3), rgb(15, 10, 13)]
+        );
+    }
+
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#rendering-the-screen/mosaic
+    // @source: adr-0036
+    /// Mode 5, with BG1's tile 1 colour 1 in the left character's pixel 0 of row 1 and BG2's
+    /// colour 1 there with palette 1: BG1 is (20, 4, 0) and BG2 (3, 6, 9).
+    fn mode_5_ppu() -> Ppu {
+        let mut ppu = math_ppu();
+        ppu.write(Register::BackgroundMode, 0x05);
+        ppu.vram_mut().fill(0);
+        ppu.write(Register::Background12Characters, 0x10);
+        // BG1: map $0400, tile 1 with row 1 holding colour 1 at column 0. BG2: map $0800
+        // with tile 1 in palette 1, whose colour 1 (entry 5) is (3, 6, 9).
+        ppu.vram_mut()[0x800] = 0x01;
+        ppu.vram_mut()[0x1000..0x1002].copy_from_slice(&[0x01, 0x04]);
+        ppu.vram_mut()[32 + 2] = 0x80;
+        ppu.vram_mut()[0x2000 + 16 + 2] = 0x80;
+        let blue = rgb(3, 6, 9).to_le_bytes();
+        ppu.cgram_mut()[10..12].copy_from_slice(&blue);
+        ppu.write(Register::MainScreen, 0x01);
+        ppu.write(Register::SubScreen, 0x02);
+        ppu.start_frame();
+        ppu
+    }
+
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#rendering-the-screen/mosaic
+    // @source: anomie-regs#2106
+    // @source: adr-0036
+    #[test]
+    fn mode_5_mosaic_acts_on_half_pixels_so_size_1_has_an_effect() {
+        let mut ppu = mode_5_ppu();
+        let mut out = LineOut::default();
+        let backdrop = rgb(10, 10, 10);
+        let (red, blue) = (rgb(20, 4, 0), rgb(3, 6, 9));
+        let row = |out: &LineOut| [0, 1, 2, 3].map(|x| pixel(out, x));
+        // Without mosaic the main screen shows the odd half-pixels, so BG1's pixel 0 is
+        // hidden and only BG2's, on the sub screen, shows.
+        ppu.render_line(1, &mut out);
+        assert_eq!(out.width(), LineWidth::Wide);
+        assert_eq!(row(&out), [blue, backdrop, backdrop, backdrop]);
+        // $03: 1x1 blocks on BG1 and BG2 cover the odd half-pixel with the even: both show.
+        ppu.write(Register::Mosaic, 0x03);
+        ppu.render_line(1, &mut out);
+        assert_eq!(row(&out), [blue, red, backdrop, backdrop]);
+        // $13: 2x2 blocks, counted from line 1, give "BRBR" on two lines.
+        ppu.start_frame();
+        ppu.write(Register::Mosaic, 0x13);
+        ppu.render_line(1, &mut out);
+        assert_eq!(row(&out), [blue, red, blue, red]);
+        ppu.render_line(2, &mut out);
+        assert_eq!(row(&out), [blue, red, blue, red]);
+    }
+
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#backgrounds/bg-scrolling
+    // @source: anomie-regs#2133
+    // @source: anomie-regs#213f
+    // @source: adr-0036
+    #[test]
+    fn interlace_in_mode_5_shows_a_half_line_of_the_field_and_scrolls_in_half_lines() {
+        let mut ppu = mode_5_ppu();
+        let mut out = LineOut::default();
+        // BG1 on the sub screen, so its even half-pixel shows. Rows 0 to 3 of tile 1's left
+        // character at column 0: colours 3, 0, 1 and 2.
+        ppu.write(Register::MainScreen, 0x00);
+        ppu.write(Register::SubScreen, 0x01);
+        ppu.vram_mut()[32] = 0x80;
+        ppu.vram_mut()[33] = 0x80;
+        ppu.vram_mut()[32 + 2] = 0x00;
+        ppu.vram_mut()[32 + 4] = 0x80;
+        ppu.vram_mut()[32 + 7] = 0x80;
+        let backdrop = rgb(10, 10, 10);
+        // Colours: 1 (20, 4, 0), 2 (3, 6, 9) and 3 is entry 3, raw 8.
+        let (one, two, three) = (rgb(20, 4, 0), rgb(3, 6, 9), raw(8));
+        // Not interlaced: line 1 is row 1, which is clear.
+        ppu.render_line(1, &mut out);
+        assert!(!out.interlaced());
+        assert_eq!(pixel(&out, 0), backdrop);
+        // Interlaced, first field: line 1 is half-line 2, colour 1; the second field shows
+        // half-line 3, colour 2.
+        ppu.write(Register::ScreenMode, 0x01);
+        ppu.render_line(1, &mut out);
+        assert!(out.interlaced());
+        assert_eq!(pixel(&out, 0), one);
+        ppu.set_signals(Signals {
+            field: Field::Second,
+            ..Signals::POWER_ON
+        });
+        ppu.render_line(1, &mut out);
+        assert_eq!(pixel(&out, 0), two);
+        // VOFS -2 gives half-line 0 on line 1 of the first field.
+        ppu.set_signals(Signals::POWER_ON);
+        ppu.write(Register::Background1VerticalScroll, 0xFE);
+        ppu.write(Register::Background1VerticalScroll, 0xFF);
+        ppu.render_line(1, &mut out);
+        assert_eq!(pixel(&out, 0), three);
+        // In another mode interlace changes no pixel.
+        ppu.write(Register::BackgroundMode, 0x01);
+        ppu.write(Register::Background1VerticalScroll, 0x00);
+        ppu.write(Register::Background1VerticalScroll, 0x00);
+        let plain = {
+            let mut copy = LineOut::default();
+            ppu.write(Register::ScreenMode, 0x00);
+            ppu.render_line(1, &mut copy);
+            copy
+        };
+        ppu.write(Register::ScreenMode, 0x01);
+        ppu.render_line(1, &mut out);
+        assert_eq!(out.pixels(), plain.pixels());
     }
 }

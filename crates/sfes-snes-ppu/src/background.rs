@@ -271,10 +271,11 @@ pub(crate) const fn priority_order(mode: u8, bg3_first: bool, extbg: bool) -> &'
 // @source: anomie-regs#backgrounds/bg-modes
 // @source: fullsnes#snesppubgcontrol
 // @source: adr-0030
+// @source: adr-0036
 const fn depth(mode: u8, background: Background) -> Option<Depth> {
     match (mode, background) {
-        (0, _) | (1, Three) | (4, Two) => Some(Depth::Two),
-        (1 | 2, One | Two) | (3, Two) => Some(Depth::Four),
+        (0, _) | (1, Three) | (4 | 5, Two) => Some(Depth::Two),
+        (1 | 2, One | Two) | (3, Two) | (5 | 6, One) => Some(Depth::Four),
         (3 | 4, One) => Some(Depth::Eight),
         _ => None,
     }
@@ -375,11 +376,14 @@ impl Backgrounds {
     }
 
     /// The horizontal and vertical scroll `background` has at column `x`: its registers',
-    /// or in modes 2 and 4 what BG3's entry for the column replaces them with (ADR 0031).
+    /// or in modes 2, 4 and 6 what BG3's entry for the column replaces them with (ADR 0031;
+    /// ADR 0036, point 9).
     // @source: anomie-regs#backgrounds/mode-2
     // @source: anomie-regs#backgrounds/mode-4
+    // @source: anomie-regs#backgrounds/mode-6
     // @source: fullsnes#snesppuvideomemoryvram
     // @source: adr-0031
+    // @source: adr-0036
     fn scrolls(&self, vram: &[u8], setup: Setup, background: Background, x: u16) -> (u16, u16) {
         let index = background as usize;
         let horizontal = self.horizontal[index] & SCROLL_MASK;
@@ -391,21 +395,23 @@ impl Backgrounds {
             _ => return (horizontal, vertical),
         };
         let tile = (x + (horizontal & 7)) / OFFSET_COLUMN;
-        if !matches!(mode, 2 | 4) || tile == 0 {
+        if !matches!(mode, 2 | 4 | 6) || tile == 0 {
             return (horizontal, vertical);
         }
         let third = Background::Three as usize;
         let across = (self.horizontal[third] & OFFSET_HORIZONTAL_MASK) + (tile - 1) * OFFSET_COLUMN;
         let down = self.vertical[third] & SCROLL_MASK;
         let first = self.pixel_entry(vram, setup, Background::Three, across, down);
-        let (horizontal_entry, vertical_entry) = if mode == 2 {
+        let (horizontal_entry, vertical_entry) = if mode == 4 {
+            if first & OFFSET_VERTICAL != 0 {
+                (0, first)
+            } else {
+                (first, 0)
+            }
+        } else {
             let second =
                 self.pixel_entry(vram, setup, Background::Three, across, down + OFFSET_COLUMN);
             (first, second)
-        } else if first & OFFSET_VERTICAL != 0 {
-            (0, first)
-        } else {
-            (first, 0)
         };
         let horizontal = if horizontal_entry & valid != 0 {
             (horizontal & 7) | (horizontal_entry & OFFSET_HORIZONTAL_MASK)
@@ -424,7 +430,9 @@ impl Backgrounds {
     /// the playfield's edges.
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: anomie-regs#backgrounds/bg-scrolling
+    // @source: anomie-regs#backgrounds/mode-6
     // @source: adr-0031
+    // @source: adr-0036
     fn pixel_entry(
         &self,
         vram: &[u8],
@@ -439,24 +447,38 @@ impl Backgrounds {
             8
         };
         let tilemap = self.tilemaps[background as usize];
+        // Mode 6's tiles are 8 pixels wide whatever the size bit says, BG3's too.
+        let width = if setup.control & MODE_MASK == 6 {
+            8
+        } else {
+            size
+        };
         let columns = if tilemap & TILEMAP_WIDE != 0 { 64 } else { 32 };
         let rows = if tilemap & TILEMAP_TALL != 0 { 64 } else { 32 };
         self.entry(
             vram,
             background,
-            across % (columns * size) / size,
+            across % (columns * width) / width,
             down % (rows * size) / size,
         )
     }
 
     /// What `background` shows at column `x` of `line`, or `None` where it is transparent
-    /// or not drawn in this mode: scrolled by its registers, wrapped at its edges.
+    /// or not drawn in this mode: scrolled by its registers, wrapped at its edges. In
+    /// modes 5 and 6 a tile is 16 half-pixels wide and `half` picks the column of each
+    /// pair the pixel shows, 1 for the main screen and 0 for the sub screen (ADR 0036,
+    /// point 3); `line` is then a row in half-lines if interlace says so. Other modes
+    /// ignore `half`.
     // @source: anomie-regs#backgrounds/bg-scrolling
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: anomie-regs#backgrounds/direct-color-mode
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#backgrounds/mode-6
+    // @source: fullsnes#snesppubgcontrol
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0030
     // @source: adr-0031
+    // @source: adr-0036
     pub(crate) fn sample(
         &self,
         vram: &[u8],
@@ -464,32 +486,42 @@ impl Backgrounds {
         background: Background,
         x: u16,
         line: u16,
+        half: u16,
     ) -> Option<Sample> {
         let mode = setup.control & MODE_MASK;
         let depth = depth(mode, background)?;
         let index = background as usize;
-        let size: u16 = if setup.control >> (BGMODE_SIZE_SHIFT + background as u8) & 1 != 0 {
+        let height: u16 = if setup.control >> (BGMODE_SIZE_SHIFT + background as u8) & 1 != 0 {
             16
         } else {
             8
         };
+        let hires = matches!(mode, 5 | 6);
+        // A hi-res tile is 8 pixels of two half-pixels each, 16 half-pixels, whatever the
+        // size bit; the other modes' tiles are as wide as high.
+        let (width, tile_width) = if hires { (8, 16) } else { (height, height) };
         let tilemap = self.tilemaps[index];
         let columns = if tilemap & TILEMAP_WIDE != 0 { 64 } else { 32 };
         let rows = if tilemap & TILEMAP_TALL != 0 { 64 } else { 32 };
         let (horizontal, vertical) = self.scrolls(vram, setup, background, x);
-        let across = (x + horizontal) % (columns * size);
-        let down = (line + vertical) % (rows * size);
+        let across = (x + horizontal) % (columns * width);
+        let down = (line + vertical) % (rows * height);
 
-        let entry = self.entry(vram, background, across / size, down / size);
-        let mut column = across % size;
-        let mut row = down % size;
+        let entry = self.entry(vram, background, across / width, down / height);
+        let mut column = if hires {
+            across % width * 2 + half % 2
+        } else {
+            across % width
+        };
+        let mut row = down % height;
         if entry & ENTRY_FLIP_HORIZONTAL != 0 {
-            column = size - 1 - column;
+            column = tile_width - 1 - column;
         }
         if entry & ENTRY_FLIP_VERTICAL != 0 {
-            row = size - 1 - row;
+            row = height - 1 - row;
         }
-        // A 16×16 tile is the tile, the next, and the two a row of 16 on.
+        // A 16×16 tile is the tile, the next, and the two a row of 16 on; a 16×8 one of
+        // modes 5 and 6 is the tile and the next.
         let tile = ((entry & TILE_NUMBER_MASK) + (row / 8) * 16 + column / 8) & TILE_NUMBER_MASK;
 
         let planes = u32::from(depth as u8);
@@ -601,7 +633,7 @@ mod tests {
         vram[0x801] = 0x08;
         // Pixels 0 to 3 are colours 1, 2, 3, 0 and the rest 0.
         two_bit_row(&mut vram, 1, 0, 0b1010_0000, 0b0110_0000);
-        let sample = |x| backgrounds.sample(&vram, setup(0), Background::One, x, 0);
+        let sample = |x| backgrounds.sample(&vram, setup(0), Background::One, x, 0, 0);
         assert_eq!(sample(0).map(|s| s.color), Some(Color::Palette(8 + 1)));
         assert_eq!(sample(1).map(|s| s.color), Some(Color::Palette(8 + 2)));
         assert_eq!(sample(2).map(|s| s.color), Some(Color::Palette(8 + 3)));
@@ -634,7 +666,7 @@ mod tests {
         }
         let color = |mode, background| {
             backgrounds
-                .sample(&vram, setup(mode), background, 0, 0)
+                .sample(&vram, setup(mode), background, 0, 0, 0)
                 .map(|s| s.color)
         };
         // Mode 0: palette * 4 and 32 for each background before (data 3 = both planes).
@@ -652,8 +684,15 @@ mod tests {
         // Mode 4: BG2 has 4 colours; the others are absent.
         assert_eq!(color(4, Background::Two), Some(Color::Palette(12 + 3)));
         assert_eq!(color(4, Background::Three), None);
-        // Modes 5 to 7 are not drawn yet.
-        assert_eq!(color(5, Background::One), None);
+        // Mode 5: BG1 has 16 colours and BG2 four; mode 6 has BG1 alone, and BG3 only in
+        // mode 6 as offsets (ADR 0036, point 3).
+        assert_eq!(color(5, Background::One), Some(Color::Palette(48 + 15)));
+        assert_eq!(color(5, Background::Two), Some(Color::Palette(12 + 3)));
+        assert_eq!(color(6, Background::One), Some(Color::Palette(48 + 15)));
+        assert_eq!(color(6, Background::Two), None);
+        assert_eq!(color(6, Background::Three), None);
+        // Mode 7 has its own renderer.
+        assert_eq!(color(7, Background::One), None);
     }
 
     // @source: anomie-regs#backgrounds/direct-color-mode
@@ -679,7 +718,7 @@ mod tests {
             control: 3,
             direct_color: true,
         };
-        let sample = backgrounds.sample(&vram, direct, Background::One, 0, 0);
+        let sample = backgrounds.sample(&vram, direct, Background::One, 0, 0, 0);
         assert_eq!(
             sample.map(|s| s.color),
             Some(Color::Direct(Rgb555::from_bits_truncate(0x73DE)))
@@ -740,7 +779,7 @@ mod tests {
         backgrounds.write(Register::Background1HorizontalScroll, 0xFF);
         backgrounds.write(Register::Background1HorizontalScroll, 0x01);
         // HOFS 511: pixel 0 is column 511, the last of the map; pixel 1 wraps to 0.
-        let at = |x| backgrounds.sample(&vram, setup(0), Background::One, x, 0);
+        let at = |x| backgrounds.sample(&vram, setup(0), Background::One, x, 0, 0);
         assert_eq!(at(1).map(|s| s.color), Some(Color::Palette(1)));
         assert_eq!(at(0), None);
     }
@@ -765,7 +804,7 @@ mod tests {
         };
         let at = |x, line| {
             backgrounds
-                .sample(&vram, large, Background::One, x, line)
+                .sample(&vram, large, Background::One, x, line, 0)
                 .map(|s| s.color)
         };
         assert_eq!(at(0, 0), Some(Color::Palette(1)));
@@ -777,7 +816,7 @@ mod tests {
         vram[0x801] = 0xC0;
         let at = |x, line| {
             backgrounds
-                .sample(&vram, large, Background::One, x, line)
+                .sample(&vram, large, Background::One, x, line, 0)
                 .map(|s| s.color)
         };
         assert_eq!(at(15, 15), Some(Color::Palette(1)));
@@ -824,7 +863,7 @@ mod tests {
         let large = setup(2);
         let at = |backgrounds: &Backgrounds, background, x, line| {
             backgrounds
-                .sample(&vram, large, background, x, line)
+                .sample(&vram, large, background, x, line, 0)
                 .map(|s| s.color)
         };
         // Tile 0 is as normal; tile 1 of BG1: column 3 of the row below.
@@ -861,7 +900,7 @@ mod tests {
         backgrounds.horizontal[0] = 3;
         let at = |x| {
             backgrounds
-                .sample(&vram, large, Background::One, x, 0)
+                .sample(&vram, large, Background::One, x, 0, 0)
                 .map(|s| s.color)
         };
         assert_eq!(at(4), Some(Color::Palette(1)));
@@ -891,7 +930,7 @@ mod tests {
         put(&mut vram, 0x801, 0xC000 | 8);
         let at = |x| {
             backgrounds
-                .sample(&vram, setup(4), Background::Two, x, 0)
+                .sample(&vram, setup(4), Background::Two, x, 0, 0)
                 .map(|s| s.color)
         };
         assert_eq!(at(0), Some(Color::Palette(1)));
@@ -900,7 +939,7 @@ mod tests {
         assert_eq!(at(16), Some(Color::Palette(2 * 4 + 2)));
         // BG1 has no valid bit anywhere in these entries; BG3 shows nothing in mode 4.
         assert_eq!(
-            backgrounds.sample(&vram, setup(4), Background::Three, 8, 0),
+            backgrounds.sample(&vram, setup(4), Background::Three, 8, 0, 0),
             None
         );
     }
@@ -943,5 +982,138 @@ mod tests {
         assert_eq!(names(6, false, false), "S3 1h S2 S1 1l S0");
         assert_eq!(names(7, false, false), "S3 S2 S1 1l S0");
         assert_eq!(names(7, false, true), "S3 S2 2h S1 1l S0 2l");
+    }
+
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    // @source: fullsnes#snesppubgcontrol
+    // @source: adr-0036
+    #[test]
+    fn a_mode_5_tile_is_two_characters_and_each_screen_shows_half_the_columns() {
+        let mut vram = vram();
+        let mut backgrounds = Backgrounds::power_on();
+        backgrounds.write(Register::Background2Tilemap, 0x04);
+        vram[0x800] = 0x01;
+        // Tile 1, the left character: the even columns colour 1. Tile 2, the right one: the
+        // odd columns colour 2.
+        two_bit_row(&mut vram, 1, 0, 0xAA, 0x00);
+        two_bit_row(&mut vram, 2, 0, 0x00, 0x55);
+        let at = |backgrounds: &Backgrounds, x, half| {
+            backgrounds
+                .sample(&vram, setup(5), Background::Two, x, 0, half)
+                .map(|s| s.color)
+        };
+        // The sub screen shows the even half-pixels, 0 to 14: pixels 0 to 3 are the left
+        // character's even columns, and 4 to 7 the right's, which are clear.
+        for x in 0..4 {
+            assert_eq!(at(&backgrounds, x, 0), Some(Color::Palette(1)), "sub {x}");
+            assert_eq!(at(&backgrounds, x, 1), None, "main {x}");
+        }
+        // The main screen shows the odd ones: the right character's odd columns.
+        for x in 4..8 {
+            assert_eq!(at(&backgrounds, x, 0), None, "sub {x}");
+            assert_eq!(at(&backgrounds, x, 1), Some(Color::Palette(2)), "main {x}");
+        }
+        // A horizontal flip turns the 16 half-pixels, so the screens swap columns.
+        vram[0x801] = 0x40;
+        let at = |x, half| {
+            backgrounds
+                .sample(&vram, setup(5), Background::Two, x, 0, half)
+                .map(|s| s.color)
+        };
+        assert_eq!(at(0, 0), Some(Color::Palette(2)));
+        assert_eq!(at(4, 0), None);
+        assert_eq!(at(0, 1), None);
+        assert_eq!(at(4, 1), Some(Color::Palette(1)));
+    }
+
+    // @source: anomie-regs#backgrounds/mode-5
+    // @source: anomie-regs#2105
+    // @source: fullsnes#snesppubgcontrol
+    // @source: adr-0036
+    #[test]
+    fn a_mode_5_tile_is_8_pixels_across_and_8_or_16_rows_high_by_the_size_bit() {
+        let mut vram = vram();
+        let mut backgrounds = Backgrounds::power_on();
+        backgrounds.write(Register::Background2Tilemap, 0x04);
+        // Tile 1 at map column 0 and tile 5 at column 1.
+        vram[0x800] = 0x01;
+        vram[0x802] = 0x05;
+        two_bit_row(&mut vram, 1, 0, 0x80, 0x00); // 8 rows: (0, 0), colour 1
+        two_bit_row(&mut vram, 5, 0, 0x00, 0x80); // column 1: colour 2
+        two_bit_row(&mut vram, 0x11, 0, 0x80, 0x80); // 16 rows: (0, 8), colour 3
+        let at = |control, x, line| {
+            let setup = Setup {
+                control,
+                direct_color: false,
+            };
+            backgrounds
+                .sample(&vram, setup, Background::Two, x, line, 0)
+                .map(|s| s.color)
+        };
+        // 8x8 characters: a tile is 16x8 half-pixels, so the next entry starts at pixel 8.
+        assert_eq!(at(5, 0, 0), Some(Color::Palette(1)));
+        assert_eq!(at(5, 8, 0), Some(Color::Palette(2)));
+        // Row 8 is the next tile row, a map row of its own, which is clear.
+        assert_eq!(at(5, 0, 8), None);
+        // The size bit gives 16 rows and keeps the width: row 8 is tile $11, and the entry
+        // at pixel 8 is still the second one.
+        assert_eq!(at(5 | 0x20, 0, 8), Some(Color::Palette(3)));
+        assert_eq!(at(5 | 0x20, 8, 0), Some(Color::Palette(2)));
+    }
+
+    // @source: anomie-regs#backgrounds/mode-6
+    // @source: anomie-regs#backgrounds/mode-2
+    // @source: adr-0031
+    // @source: adr-0036
+    #[test]
+    fn mode_6_takes_bg3_offsets_per_8_pixel_column_even_with_a_16_pixel_bg3() {
+        let mut vram = vram();
+        let mut backgrounds = Backgrounds::power_on();
+        backgrounds.write(Register::Background1Tilemap, 0x04); // word $0400
+        backgrounds.write(Register::Background3Tilemap, 0x08); // word $0800
+        // 4-bit tiles at base 0: tile 1 (the left character) colour 1 and tile 2 (the right)
+        // colour 2.
+        vram[32] = 0xFF;
+        vram[64 + 1] = 0xFF;
+        // BG1's rows 0 to 2 show tile 1 with the column number as the palette.
+        for row in 0..3 {
+            for column in 0..32_u16 {
+                let address = 0x400 + row * 32 + usize::from(column);
+                put(&mut vram, address, (column & 7) << 10 | 1);
+            }
+        }
+        // BG3, 16x16 tiles, so one entry serves both offsets: column 0 moves BG1 8 across and
+        // 8 down, column 1 16 across and 16 down.
+        put(&mut vram, 0x800, 0x2000 | 8);
+        put(&mut vram, 0x801, 0x2000 | 16);
+        let control = 6 | 0x40;
+        let at = |x, half| {
+            let setup = Setup {
+                control,
+                direct_color: false,
+            };
+            backgrounds
+                .sample(&vram, setup, Background::One, x, 0, half)
+                .map(|s| s.color)
+        };
+        // Pixel 0 is tile 0, which takes no offset.
+        assert_eq!(at(0, 1), Some(Color::Palette(1)));
+        // Pixel 8 is BG1's tile 1, with BG3's column 0 entry: 8 right, map column 2.
+        assert_eq!(at(8, 0), Some(Color::Palette(2 * 16 + 1)));
+        // Pixel 16 uses BG3's column 1 entry, one 8-pixel column on whatever BG3's size bit
+        // says: 16 right, map column 4.
+        assert_eq!(at(16, 0), Some(Color::Palette(4 * 16 + 1)));
+        // Half-pixels 8 to 15 of a tile are the right character.
+        assert_eq!(at(4, 0), Some(Color::Palette(2)));
+        // BG3 itself is not drawn.
+        let setup = Setup {
+            control,
+            direct_color: false,
+        };
+        assert_eq!(
+            backgrounds.sample(&vram, setup, Background::Three, 0, 0, 0),
+            None
+        );
     }
 }

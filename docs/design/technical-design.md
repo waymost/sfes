@@ -308,7 +308,7 @@ Each chip is a plain struct of its registers and memory with `#[derive(Clone, Se
   3. Build window masks, apply mosaic, then colour math and brightness.
   4. Write the line into the frame buffer; when layer output is requested (WM-02), copy the per-layer buffers too.
 - With render skip, steps 1, 3 and 4 are skipped but step 2 always runs, since its flags are readable state (EMU-06).
-- Lines are 256 pixels wide, or 512 in BG modes 5 and 6 and with pseudo-hi-res; frames have 224 or 239 visible lines, or 448 or 478 when interlaced. Hi-res and interlace are P1 but built in M2, so the frame buffer and `VideoFrame` are sized for them from the start. A frame is 512 wide if any of its lines is, with 256-pixel lines doubled, and twice its line count high if any line is interlaced, each line filling two rows; it shows only its own field, which `VideoFrame::field` names, and goldens hash it as presented (ADR 0028).
+- Lines are 256 pixels wide, or 512 in BG modes 5 and 6 and with pseudo-hi-res; frames have 224 or 239 visible lines, or 448 or 478 when interlaced. Hi-res and interlace are P1 but built in M2, so the frame buffer and `VideoFrame` are sized for them from the start. In a wide line each column is the sub screen's pixel then the main screen's, with math on both and BG modes 5 and 6 showing the even half-pixels on the sub screen (ADR 0036). A frame is 512 wide if any of its lines is, with 256-pixel lines doubled, and twice its line count high if any line is interlaced, each line filling two rows; it shows only its own field, which `VideoFrame::field` names, and goldens hash it as presented (ADR 0028).
 - Mode 7 uses the documented fixed-point matrix arithmetic in integers.
 
 ### SPC700 and S-DSP (`sfes-snes-spc`)

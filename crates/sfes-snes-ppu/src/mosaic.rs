@@ -77,12 +77,19 @@ impl Mosaic {
         (column, row)
     }
 
+    /// Whether `$2106` pixelates `background`.
+    // @source: anomie-regs#2106
+    // @source: adr-0036
+    pub(crate) const fn pixelates(self, background: Background) -> bool {
+        self.value >> background as u8 & 1 != 0
+    }
+
     /// The column and line `background` takes its pixel from at `x` and `line`: those
     /// themselves, or the top-left of the block when its enable bit is set.
     // @source: anomie-regs#2106
     // @source: adr-0035
     pub(crate) const fn block(self, background: Background, x: u16, line: u16) -> (u16, u16) {
-        let enabled = self.value >> background as u8 & 1 != 0;
+        let enabled = self.pixelates(background);
         self.corner(x, line, enabled, enabled)
     }
 
