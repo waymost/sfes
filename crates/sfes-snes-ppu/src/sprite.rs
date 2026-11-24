@@ -9,7 +9,10 @@
 //! Sprites: `$2101 OBSEL`, the per-line evaluation with its 32-sprite and 34-tile limits
 //! and the flags in `$213E`, and the pixels of the tiles that evaluation loads (ADR 0033).
 
-use crate::memory::{OAM_ENTRY_BYTES, OAM_HIGH_TABLE, SPRITE_COUNT, Vram};
+use crate::{
+    line::LINE_COLUMNS,
+    memory::{OAM_ENTRY_BYTES, OAM_HIGH_TABLE, SPRITE_COUNT, Vram},
+};
 
 /// A sprite index has 7 bits.
 const INDEX_MASK: u8 = SPRITE_COUNT - 1;
@@ -44,9 +47,16 @@ const FLIP_HORIZONTAL: u8 = 0x40;
 /// OAM attribute bit 7: flip vertically.
 const FLIP_VERTICAL: u8 = 0x80;
 /// A line is 256 pixels.
-const LINE_PIXELS: i16 = 256;
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "256 fits in an i16"
+)]
+const LINE_PIXELS: i16 = LINE_COLUMNS as i16;
 /// A sprite at this X counts as being at 0 for range and time.
-const WRAPPED_X: i16 = -256;
+const WRAPPED_X: i16 = -LINE_PIXELS;
+/// High-table bit 0 is bit 8 of a 9-bit two's complement X, so it weighs -256.
+const X_BIT_8: i16 = -0x100;
 /// A sprite's Y and a line's row have 8 bits.
 const ROW_MASK: u16 = 0xFF;
 /// The first CGRAM entry of the sprites' palettes.
@@ -142,7 +152,7 @@ impl Sprite {
         let base = usize::from(index) * usize::from(OAM_ENTRY_BYTES);
         let high = at(usize::from(OAM_HIGH_TABLE) + usize::from(index) / 4) >> ((index % 4) * 2);
         // A 9-bit two's complement number: bit 8 weighs -256.
-        let x = i16::from(at(base)) - if high & 1 != 0 { 256 } else { 0 };
+        let x = i16::from(at(base)) + if high & 1 != 0 { X_BIT_8 } else { 0 };
         let large = usize::from(high & 2 != 0);
         let (width, height) = SIZES
             .get(usize::from(select >> SIZE_SHIFT))
@@ -240,8 +250,8 @@ impl Line {
     // @source: anomie-regs#sprites/sprite-priority
     // @source: fullsnes#snesppuvideomemoryvram
     // @source: adr-0033
-    pub(crate) fn pixels(&self, vram: &Vram) -> [Option<Pixel>; 256] {
-        let mut pixels = [None; 256];
+    pub(crate) fn pixels(&self, vram: &Vram) -> [Option<Pixel>; LINE_COLUMNS] {
+        let mut pixels = [None; LINE_COLUMNS];
         for tile in self.tiles.iter().take(self.count) {
             let low = vram.word(tile.word);
             let high = vram.word(tile.word.wrapping_add(PLANE_PAIR_WORDS));

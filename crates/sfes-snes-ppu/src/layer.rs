@@ -7,7 +7,7 @@
 
 use sfes_api::Rgb555;
 
-use crate::background::Background;
+use crate::{background::Background, line::LINE_COLUMNS};
 
 /// BG1 to BG4 or the sprites: a layer of a line's per-layer image, and the layer a bit of
 /// `$212C–$212F` and `$2131` names. Each variant's value is its index and its bit number.
@@ -88,8 +88,6 @@ impl From<Background> for Layers {
 
 /// How many layers a line holds.
 const LAYERS: usize = LayerKind::ALL.len();
-/// How many columns a layer's line holds: the pixels of a normal line.
-pub const LAYER_COLUMNS: usize = 256;
 
 /// The five layers of one output line, 256 columns each (ADR 0037, points 4 and 5). A
 /// column is `None` where the layer is transparent there, absent from the mode or on
@@ -97,13 +95,13 @@ pub const LAYER_COLUMNS: usize = 256;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LayerLine {
     /// Each layer's columns, indexed by [`LayerKind`].
-    layers: [[Option<Rgb555>; LAYER_COLUMNS]; LAYERS],
+    layers: [[Option<Rgb555>; LINE_COLUMNS]; LAYERS],
 }
 
 impl Default for LayerLine {
     fn default() -> Self {
         Self {
-            layers: [[None; LAYER_COLUMNS]; LAYERS],
+            layers: [[None; LINE_COLUMNS]; LAYERS],
         }
     }
 }
@@ -112,7 +110,7 @@ impl LayerLine {
     /// The 256 columns of `kind`.
     // @source: adr-0037
     #[must_use]
-    pub const fn layer(&self, kind: LayerKind) -> &[Option<Rgb555>; LAYER_COLUMNS] {
+    pub const fn layer(&self, kind: LayerKind) -> &[Option<Rgb555>; LINE_COLUMNS] {
         &self.layers[kind as usize]
     }
 
@@ -121,7 +119,7 @@ impl LayerLine {
     pub(crate) const fn layer_mut(
         &mut self,
         kind: LayerKind,
-    ) -> &mut [Option<Rgb555>; LAYER_COLUMNS] {
+    ) -> &mut [Option<Rgb555>; LINE_COLUMNS] {
         &mut self.layers[kind as usize]
     }
 
