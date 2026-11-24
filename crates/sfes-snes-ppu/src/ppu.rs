@@ -57,14 +57,29 @@ const PPU2_VERSION: u8 = 3;
 const BACKGROUND_MODE_POWER_ON: u8 = 0x0F;
 /// The pixels of a normal line.
 const LINE_PIXELS: u16 = 256;
-/// `$2133` bit 3: pseudo-hires.
-const PSEUDO_HIRES: u8 = 0x08;
-/// `$2133` bit 6: EXTBG.
-const EXTBG: u8 = 0x40;
-/// `$2133` bit 0: interlace.
-const INTERLACE: u8 = 0x01;
 /// The first line a frame outputs (anomie-timing#s-ppu/rendering).
 const FIRST_OUTPUT_LINE: u16 = 1;
+
+bitflags::bitflags! {
+    /// `$2133 SETINI`: the screen mode's flags. Bits 5 and 4 are not kept.
+    // @source: anomie-regs#2133
+    // @source: fullsnes#snesppucontrol
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct ScreenMode: u8 {
+        /// Bit 0: interlace.
+        const INTERLACE = 0x01;
+        /// Bit 1: sprite interlace.
+        const OBJECT_INTERLACE = 0x02;
+        /// Bit 2: overscan, 239 lines.
+        const OVERSCAN = 0x04;
+        /// Bit 3: pseudo-hires.
+        const PSEUDO_HIRES = 0x08;
+        /// Bit 6: mode 7's EXTBG.
+        const EXTBG = 0x40;
+        /// Bit 7: external sync.
+        const EXTERNAL_SYNC = 0x80;
+    }
+}
 
 /// The PPU: PPU1 and PPU2 as one unit, as the bus reaches them.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,7 +117,7 @@ pub struct Ppu {
     /// $2106 MOSAIC: the block size, the backgrounds it acts on and where its rows start.
     mosaic: Mosaic,
     /// $2133 SETINI: external sync, EXTBG, pseudo-hires, overscan and interlace.
-    screen_mode: u8,
+    screen_mode: ScreenMode,
     /// The last value read from `$2134–$2136`, `$2138–$213A` or `$213E`.
     ppu1_open_bus: u8,
     /// The last value read from `$213B–$213D` or `$213F`.
@@ -153,7 +168,7 @@ impl Ppu {
             sub_screen: Layers::empty(),
             color_math: ColorMath::power_on(),
             mosaic: Mosaic::power_on(FIRST_OUTPUT_LINE),
-            screen_mode: 0,
+            screen_mode: ScreenMode::empty(),
             ppu1_open_bus: 0,
             ppu2_open_bus: 0,
             counters: CounterLatch::power_on(),
@@ -172,7 +187,7 @@ impl Ppu {
     // @source: adr-0029
     pub const fn reset(&mut self) {
         self.display_control = DISPLAY_CONTROL_RESET;
-        self.screen_mode = 0;
+        self.screen_mode = ScreenMode::empty();
         self.next_line = FIRST_OUTPUT_LINE;
     }
 
@@ -466,7 +481,7 @@ impl Ppu {
             Register::ColorMathSelect | Register::ColorMathDesignation | Register::FixedColor => {
                 self.color_math.write(register, value);
             }
-            Register::ScreenMode => self.screen_mode = value,
+            Register::ScreenMode => self.screen_mode = ScreenMode::from_bits_truncate(value),
             _ => {}
         }
     }
@@ -569,19 +584,19 @@ impl Ppu {
     ) {
         let mode = self.background_mode.mode;
         let hires_mode = mode.hires();
-        let width = if self.screen_mode & PSEUDO_HIRES != 0 || hires_mode {
+        let width = if self.screen_mode.contains(ScreenMode::PSEUDO_HIRES) || hires_mode {
             LineWidth::Wide
         } else {
             LineWidth::Normal
         };
         let wide = width == LineWidth::Wide;
-        let interlaced = self.screen_mode & INTERLACE != 0;
+        let interlaced = self.screen_mode.contains(ScreenMode::INTERLACE);
         out.fill(line, width, interlaced, self.color(0));
         let setup = Setup {
             background_mode: self.background_mode,
             direct_color: self.color_math.direct_color(),
         };
-        let extbg = self.screen_mode & EXTBG != 0;
+        let extbg = self.screen_mode.contains(ScreenMode::EXTBG);
         let order = priority_order(self.background_mode, extbg);
         let main_layers = self.main_screen;
         // The sub screen matters where math adds it, and in every wide line.
@@ -732,8 +747,8 @@ impl Ppu {
         line: u16,
         half: u16,
     ) -> [Option<Sample>; 4] {
-        let extbg = self.screen_mode & EXTBG != 0;
-        let interlaced = self.screen_mode & INTERLACE != 0;
+        let extbg = self.screen_mode.contains(ScreenMode::EXTBG);
+        let interlaced = self.screen_mode.contains(ScreenMode::INTERLACE);
         Background::ALL.map(|background| {
             if !layers.contains(Layers::from(background)) {
                 return None;
@@ -1028,7 +1043,7 @@ mod tests {
         ppu.render_line(1, &mut LineOut::default());
         let before = ppu.clone();
         ppu.reset();
-        assert_eq!(ppu.screen_mode, 0);
+        assert_eq!(ppu.screen_mode, ScreenMode::empty());
         assert_eq!(ppu.next_line(), 1);
         assert_eq!(ppu.background_mode, BackgroundMode::from(0x05));
         assert_eq!(ppu.ppu1_open_bus, 0x11);
