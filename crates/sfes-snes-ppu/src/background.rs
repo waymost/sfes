@@ -1220,11 +1220,12 @@ mod tests {
         // colour 2.
         vram[32] = 0xFF;
         vram[64 + 1] = 0xFF;
-        // BG1's rows 0 to 2 show tile 1 with the column number as the palette.
-        for row in 0..3 {
+        // BG1's rows 0 to 2 show tile 1 with the column number plus the row number as the
+        // palette, so both offsets show in the colour.
+        for row in 0..3_u16 {
             for column in 0..32_u16 {
-                let address = 0x400 + row * 32 + usize::from(column);
-                put(&mut vram, address, (column & 7) << 10 | 1);
+                let address = 0x400 + usize::from(row * 32 + column);
+                put(&mut vram, address, ((column + row) & 7) << 10 | 1);
             }
         }
         // BG3, 16x16 tiles, so one entry serves both offsets: column 0 moves BG1 8 across and
@@ -1240,11 +1241,12 @@ mod tests {
         };
         // Pixel 0 is tile 0, which takes no offset.
         assert_eq!(at(0, HalfPixel::Odd), Some(Color::Palette(1)));
-        // Pixel 8 is BG1's tile 1, with BG3's column 0 entry: 8 right, map column 2.
-        assert_eq!(at(8, HalfPixel::Even), Some(Color::Palette(2 * 16 + 1)));
+        // Pixel 8 is BG1's tile 1, with BG3's column 0 entry: 8 right and 8 down, map column
+        // 2 of map row 1 (BG1's tiles are 8 rows high), palette 2 + 1.
+        assert_eq!(at(8, HalfPixel::Even), Some(Color::Palette(3 * 16 + 1)));
         // Pixel 16 uses BG3's column 1 entry, one 8-pixel column on whatever BG3's size bit
-        // says: 16 right, map column 4.
-        assert_eq!(at(16, HalfPixel::Even), Some(Color::Palette(4 * 16 + 1)));
+        // says: 16 right and 16 down, map column 4 of map row 2, palette 4 + 2.
+        assert_eq!(at(16, HalfPixel::Even), Some(Color::Palette(6 * 16 + 1)));
         // Half-pixels 8 to 15 of a tile are the right character.
         assert_eq!(at(4, HalfPixel::Even), Some(Color::Palette(2)));
         // BG3 itself is not drawn.

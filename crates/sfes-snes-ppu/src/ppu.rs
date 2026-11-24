@@ -2143,30 +2143,40 @@ mod tests {
         assert_eq!(out.pixels()[0], raw(1));
     }
 
+    // @source: anomie-regs#sprites/drawing-the-sprites
+    // @source: anomie-regs#213e
     // @source: fullsnes#snespputimersandstatus
     // @source: adr-0033
     // @source: adr-0037
     #[test]
     fn a_skipped_line_sets_the_overflow_flags_like_a_drawn_one_and_makes_the_next_line_next() {
-        let mut drawn = sprite_ppu();
-        let mut skipped = drawn.clone();
-        let mut out = LineOut::default();
-        // 33 sprites on line 1: range over.
-        for ppu in [&mut drawn, &mut skipped] {
-            for record in ppu.oam.chunks_mut(4).take(33) {
-                record.copy_from_slice(&[0, 0, 0, 0]);
+        for (time_over, status) in [(false, 0x41), (true, 0x81)] {
+            let mut drawn = sprite_ppu();
+            if time_over {
+                // 9 sprites of 32 pixels have 36 tiles: time over.
+                for (x, record) in (0..9).map(|index| index * 8).zip(drawn.oam.chunks_mut(4)) {
+                    record.copy_from_slice(&[x, 0, 0, 0]);
+                }
+                drawn.write(Register::ObjectSelect, 0xA2);
+            } else {
+                // 33 sprites on line 1: range over.
+                for record in drawn.oam.chunks_mut(4).take(33) {
+                    record.copy_from_slice(&[0, 0, 0, 0]);
+                }
             }
+            let mut skipped = drawn.clone();
+            let mut out = LineOut::default();
+            drawn.render_line(1, &mut out);
+            skipped.skip_line(1);
+            assert_eq!(read(&mut skipped, Register::Ppu1Status), Some(status));
+            assert_eq!(
+                read(&mut skipped, Register::Ppu1Status),
+                read(&mut drawn, Register::Ppu1Status)
+            );
+            assert_eq!(skipped.next_line(), 2);
+            assert_eq!(skipped.next_line(), drawn.next_line());
+            // Nothing else about the PPU differs.
+            assert_eq!(skipped, drawn);
         }
-        drawn.render_line(1, &mut out);
-        skipped.skip_line(1);
-        assert_eq!(read(&mut skipped, Register::Ppu1Status), Some(0x41));
-        assert_eq!(
-            read(&mut skipped, Register::Ppu1Status),
-            read(&mut drawn, Register::Ppu1Status)
-        );
-        assert_eq!(skipped.next_line(), 2);
-        assert_eq!(skipped.next_line(), drawn.next_line());
-        // Nothing else about the PPU differs.
-        assert_eq!(skipped, drawn);
     }
 }
