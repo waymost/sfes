@@ -833,6 +833,68 @@ fn hires_cart_shows_mode_5_half_pixels_and_maths_the_sub_pixels_after_the_main_p
     assert_picture(&snes, 512, &[(0..7, Some(&expected))], GREY);
 }
 
+// @source: anomie-regs#2100
+// @source: anomie-regs#2105
+// @source: anomie-regs#210f
+// @source: anomie-regs#2118
+// @source: anomie-regs#backgrounds/mode-0
+// @source: anomie-regs#backgrounds/mode-1
+// @source: anomie-regs#dma-and-hdma/hdma
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0026
+// @source: adr-0028
+// @source: adr-0029
+// @source: adr-0035
+#[test]
+fn ppu_hdma_cart_changes_mode_scroll_and_brightness_by_band_and_refuses_a_vram_write() {
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/ppu-hdma.sfc"));
+    let grey = Rgb555::from_channels(16, 16, 16);
+    let red = Rgb555::from_channels(24, 0, 0);
+    let green = Rgb555::from_channels(0, 24, 0);
+    // A run list repeated across the 256 pixels.
+    let tiled = |list: &[(Rgb555, usize)]| {
+        list.iter()
+            .flat_map(|&(color, length)| core::iter::repeat_n(color, length))
+            .cycle()
+            .take(LINE_COLUMNS)
+            .collect::<Vec<_>>()
+    };
+    // Every map entry is tile 1 and every row of a tile is alike, so a line is its tile row
+    // across the screen (ADR 0030). The HDMA write on line 16n takes effect on line 16n + 1,
+    // picture row 16n (anomie-regs#dma-and-hdma/hdma; ADR 0028, point 6).
+    //   rows 0-15: mode 0, pixels 0-3 of each tile colour 1.
+    //   rows 16-31: BG1HOFS = 2, so screen x shows playfield x + 2: colour 1 at x mod 8 of
+    //        6, 7, 0 and 1. Pixels 254 and 255 wrap to playfield 0 and 1.
+    //   rows 32-47: mode 1, the 4-bit tile 1, all colour 2.
+    //   rows 48-63: forced blank, black (ADR 0035, point 2).
+    //   rows 64-79: as rows 0 to 15.
+    //   rows 80-223: brightness 7, each channel times 8 / 16 (ADR 0035, point 2).
+    // The VRAM write to row 3 of the 2-bit tile, made outside vertical and forced blank, was
+    // refused (ADR 0029, point 7): row 3 of each tile is like the others.
+    let plain = tiled(&[(red, 4), (grey, 4)]);
+    let scrolled = tiled(&[(red, 2), (grey, 4), (red, 2)]);
+    let mode_1 = vec![green; LINE_COLUMNS];
+    let blank = vec![BLACK; LINE_COLUMNS];
+    let dim = tiled(&[
+        (Rgb555::from_channels(12, 0, 0), 4),
+        (Rgb555::from_channels(8, 8, 8), 4),
+    ]);
+    assert_picture(
+        &snes,
+        256,
+        &[
+            (0..16, Some(&plain)),
+            (16..32, Some(&scrolled)),
+            (32..48, Some(&mode_1)),
+            (48..64, Some(&blank)),
+            (64..80, Some(&plain)),
+            (80..PICTURE_ROWS, Some(&dim)),
+        ],
+        BLACK,
+    );
+}
+
 // @source: anomie-regs#213e
 // @source: fullsnes#snespputimersandstatus
 // @source: adr-0013
