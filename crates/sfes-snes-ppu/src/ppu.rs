@@ -1234,10 +1234,10 @@ mod tests {
         assert_eq!(ppu.vram_port.address(), 0x000B);
     }
 
-    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
-    // @source: adr-0030
     /// A PPU with empty VRAM and the colours 0 to 3 distinct: `$0001`, `$0002`, `$0004`
     /// and `$0008`.
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    // @source: adr-0030
     fn drawing_ppu() -> Ppu {
         let mut ppu = ppu();
         // Forced blank is on at power-on, and makes every line black.
@@ -1249,9 +1249,9 @@ mod tests {
         ppu
     }
 
+    /// The colour of pixel `x` of a rendered line.
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0030
-    /// The colour of pixel `x` of a rendered line.
     fn pixel(out: &LineOut, x: usize) -> Rgb555 {
         out.pixels()[x]
     }
@@ -1578,26 +1578,26 @@ mod tests {
         assert_eq!(read(&mut ppu, Register::Ppu1Status), Some(0x41));
     }
 
+    /// A 15-bit colour from its channels.
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0035
-    /// A 15-bit colour from its channels.
     const fn rgb(red: u8, green: u8, blue: u8) -> Rgb555 {
         Rgb555::from_channels(red, green, blue)
     }
 
+    /// The colour whose bits are `bits`.
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0030
-    /// The colour whose bits are `bits`.
     const fn raw(bits: u16) -> Rgb555 {
         Rgb555::from_bits_truncate(bits)
     }
 
-    // @source: anomie-regs#backgrounds/mode-1
-    // @source: anomie-regs#212d
-    // @source: adr-0035
     /// Mode 1 with BG1's row 0 and row 1 each starting with a colour-1 pixel, then a clear
     /// one, and BG2 with a colour-2 pixel in row 0. The backdrop is (10, 10, 10), colour 1
     /// (20, 4, 0) and colour 2 (3, 6, 9).
+    // @source: anomie-regs#backgrounds/mode-1
+    // @source: anomie-regs#212d
+    // @source: adr-0035
     fn math_ppu() -> Ppu {
         let mut ppu = drawing_ppu();
         ppu.write(Register::BackgroundMode, 0x01);
@@ -1921,11 +1921,11 @@ mod tests {
         );
     }
 
+    /// Mode 5, with BG1's tile 1 colour 1 in the left character's pixel 0 of row 1 and BG2's
+    /// colour 1 there with palette 1: BG1 is (20, 4, 0) and BG2 (3, 6, 9).
     // @source: anomie-regs#backgrounds/mode-5
     // @source: anomie-regs#rendering-the-screen/mosaic
     // @source: adr-0036
-    /// Mode 5, with BG1's tile 1 colour 1 in the left character's pixel 0 of row 1 and BG2's
-    /// colour 1 there with palette 1: BG1 is (20, 4, 0) and BG2 (3, 6, 9).
     fn mode_5_ppu() -> Ppu {
         let mut ppu = math_ppu();
         ppu.write(Register::BackgroundMode, 0x05);

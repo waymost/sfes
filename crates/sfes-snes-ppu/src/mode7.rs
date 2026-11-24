@@ -342,10 +342,10 @@ mod tests {
         assert_eq!(mode7.write(0x78), 0x7812);
     }
 
+    /// A Mode 7 whose matrix is the identity: A and D are 1.0, the rest 0.
     // @source: anomie-regs#211b
     // @source: anomie-regs#backgrounds/mode-7
     // @source: adr-0032
-    /// A Mode 7 whose matrix is the identity: A and D are 1.0, the rest 0.
     fn identity() -> Mode7 {
         let mut mode7 = Mode7::power_on();
         write_word(&mut mode7, Mode7::write_matrix_a, 0x0100);
@@ -355,34 +355,34 @@ mod tests {
         mode7
     }
 
+    /// Writes `value` low byte first through `write`.
     // @source: anomie-regs#211b
     // @source: adr-0032
-    /// Writes `value` low byte first through `write`.
     fn write_word(mode7: &mut Mode7, write: fn(&mut Mode7, u8), value: u16) {
         let [low, high] = value.to_le_bytes();
         write(mode7, low);
         write(mode7, high);
     }
 
+    /// A VRAM image with tilemap entry `(row, column)` set to `character`.
     // @source: anomie-regs#backgrounds/mode-7
     // @source: adr-0032
-    /// A VRAM image with tilemap entry `(row, column)` set to `character`.
     fn map(vram: &mut [u8], row: usize, column: usize, character: u8) {
         vram[(row * 128 + column) * 2] = character;
     }
 
+    /// Sets pixel `(row, column)` of `character` to `value`.
     // @source: anomie-regs#backgrounds/mode-7
     // @source: adr-0032
-    /// Sets pixel `(row, column)` of `character` to `value`.
     fn dot(vram: &mut [u8], character: usize, row: usize, column: usize, value: u8) {
         vram[(character * 64 + row * 8 + column) * 2 + 1] = value;
     }
 
-    // @source: anomie-regs#backgrounds/mode-7
-    // @source: adr-0032
     /// The playfield of the tests: character 1 at the tilemap's corner and at its last
     /// column, with a dot of `$42` at row 1, column 3 of character 1 and `$99` at row 2,
     /// column 4 of character 0.
+    // @source: anomie-regs#backgrounds/mode-7
+    // @source: adr-0032
     fn playfield() -> Vram {
         let mut vram = Vram::zeroed();
         map(&mut vram, 0, 0, 1);

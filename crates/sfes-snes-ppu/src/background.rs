@@ -198,9 +198,9 @@ pub(crate) enum Layer {
     Sprites(Priority),
 }
 
+/// A layer of BG1 to BG4.
 // @source: anomie-regs#2105
 // @source: adr-0030
-/// A layer of BG1 to BG4.
 const fn layer(background: Background, high: bool) -> Layer {
     Layer::Background { background, high }
 }
@@ -729,16 +729,16 @@ mod tests {
         }
     }
 
+    /// A VRAM image of 64 KiB.
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0030
-    /// A VRAM image of 64 KiB.
     fn vram() -> Vram {
         Vram::zeroed()
     }
 
+    /// The setup for `$2105` = `control`, without direct colour.
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0030
-    /// The setup for `$2105` = `control`, without direct colour.
     fn setup(control: u8) -> Setup {
         Setup {
             background_mode: BackgroundMode::from(control),
@@ -746,9 +746,9 @@ mod tests {
         }
     }
 
+    /// Writes row `row` of the 2-bit tile `number` at character base 0: `plane0` and `plane1`.
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0030
-    /// Writes row `row` of the 2-bit tile `number` at character base 0: `plane0` and `plane1`.
     fn two_bit_row(vram: &mut [u8], number: usize, row: usize, plane0: u8, plane1: u8) {
         vram[number * 16 + row * 2] = plane0;
         vram[number * 16 + row * 2 + 1] = plane1;
@@ -965,9 +965,9 @@ mod tests {
         assert_eq!(at(0, 0), Some(Color::Palette(1)));
     }
 
+    /// Sets VRAM word `address`.
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0031
-    /// Sets VRAM word `address`.
     fn put(vram: &mut [u8], address: usize, entry: u16) {
         let [low, high] = entry.to_le_bytes();
         vram[address * 2] = low;
