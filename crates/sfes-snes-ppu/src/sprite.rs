@@ -21,7 +21,7 @@ const MAX_SPRITES: usize = 32;
 /// How many tiles a line loads.
 const MAX_TILES: usize = 34;
 /// `$2101` bits 7–5: the size pair.
-const SIZE_SHIFT: u8 = 5;
+const OBSEL_SIZE_SHIFT: u8 = 5;
 /// `$2101` bits 4–3: the gap before the second tile table.
 const NAME_SHIFT: u8 = 3;
 /// A two-bit field.
@@ -43,9 +43,9 @@ const TILE_PIXELS: i16 = 8;
 /// OAM attribute bit 0: the tile's name table.
 const NAME_TABLE: u8 = 0x01;
 /// OAM attribute bit 6: flip horizontally.
-const FLIP_HORIZONTAL: u8 = 0x40;
+const ATTRIBUTE_FLIP_HORIZONTAL: u8 = 0x40;
 /// OAM attribute bit 7: flip vertically.
-const FLIP_VERTICAL: u8 = 0x80;
+const ATTRIBUTE_FLIP_VERTICAL: u8 = 0x80;
 /// A line is 256 pixels.
 #[expect(
     clippy::cast_possible_truncation,
@@ -155,7 +155,7 @@ impl Sprite {
         let x = i16::from(at(base)) + if high & 1 != 0 { X_BIT_8 } else { 0 };
         let large = usize::from(high & 2 != 0);
         let (width, height) = SIZES
-            .get(usize::from(select >> SIZE_SHIFT))
+            .get(usize::from(select >> OBSEL_SIZE_SHIFT))
             .and_then(|pair| pair.get(large))
             .copied()
             .unwrap_or_default();
@@ -198,7 +198,7 @@ impl Sprite {
     // @source: anomie-regs#sprites
     // @source: adr-0033
     const fn source_row(self, row: i16) -> i16 {
-        if self.attributes & FLIP_VERTICAL == 0 {
+        if self.attributes & ATTRIBUTE_FLIP_VERTICAL == 0 {
             return row;
         }
         let square = if self.width < self.height {
@@ -368,7 +368,7 @@ impl Sprites {
                     self.flags |= Overflow::TIME_OVER;
                     return loaded;
                 };
-                let flip = sprite.attributes & FLIP_HORIZONTAL != 0;
+                let flip = sprite.attributes & ATTRIBUTE_FLIP_HORIZONTAL != 0;
                 let source_column = if flip { columns - 1 - column } else { column };
                 *slot = self.tile(sprite, source_column, source_row, column);
                 loaded.count += 1;
@@ -402,7 +402,7 @@ impl Sprites {
         Tile {
             x: sprite.x + column * TILE_PIXELS,
             word: first.wrapping_add(pixel_row),
-            flip: sprite.attributes & FLIP_HORIZONTAL != 0,
+            flip: sprite.attributes & ATTRIBUTE_FLIP_HORIZONTAL != 0,
             palette: (sprite.attributes >> 1) & PALETTE_MASK,
             priority: Priority::from_attributes(sprite.attributes),
         }
@@ -536,7 +536,7 @@ mod tests {
     fn a_rectangular_sprite_flips_each_square_half() {
         let mut oam = oam();
         // 16 by 32 sprite (size 6, small).
-        put(&mut oam, 0, 0, 0, 0, FLIP_VERTICAL, false);
+        put(&mut oam, 0, 0, 0, 0, ATTRIBUTE_FLIP_VERTICAL, false);
         let sprite = Sprite::read(&oam, 6 << 5, 0);
         assert_eq!((sprite.width, sprite.height), (16, 32));
         assert_eq!(sprite.source_row(0), 15);
@@ -640,7 +640,7 @@ mod tests {
     fn a_horizontal_flip_reverses_the_pixels_and_the_tiles() {
         let mut oam = oam();
         // 16 by 16 at X 0, tile 0, flipped horizontally.
-        put(&mut oam, 0, 0, 0, 0, FLIP_HORIZONTAL, true);
+        put(&mut oam, 0, 0, 0, 0, ATTRIBUTE_FLIP_HORIZONTAL, true);
         let mut vram = Vram::zeroed();
         // Tile 0's left pixel is 1 and tile 1's right pixel is 2.
         tile_row(&mut vram, 0, 0, [0b1000_0000, 0, 0, 0]);
