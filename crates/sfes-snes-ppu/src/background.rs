@@ -41,6 +41,10 @@ const ENTRY_PRIORITY: u16 = 0x2000;
 const ENTRY_FLIP_HORIZONTAL: u16 = 0x4000;
 /// A tilemap entry's bit 15: flip vertically.
 const ENTRY_FLIP_VERTICAL: u16 = 0x8000;
+/// A tilemap entry's bits 12–10: the palette.
+const ENTRY_PALETTE_SHIFT: u16 = 10;
+/// A palette number has 3 bits.
+const ENTRY_PALETTE_MASK: u16 = 0x07;
 /// An offset-per-tile entry's bits 9–0: the offset.
 const OFFSET_MASK: u16 = 0x03FF;
 /// A horizontal offset ignores its low 3 bits.
@@ -304,6 +308,42 @@ pub(crate) struct Backgrounds {
     /// The last byte written to any of the eight scroll registers. The Mode 7 registers
     /// have a latch of their own.
     latch: u8,
+}
+
+/// A tilemap entry, `vhopppcc cccccccc`: flips, priority, palette and tile number.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TilemapEntry(u16);
+
+impl TilemapEntry {
+    /// Bits 9–0: the tile number.
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    const fn tile(self) -> u16 {
+        self.0 & TILE_NUMBER_MASK
+    }
+
+    /// Bits 12–10: the palette, 0 to 7.
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    const fn palette(self) -> u8 {
+        (self.0 >> ENTRY_PALETTE_SHIFT & ENTRY_PALETTE_MASK) as u8
+    }
+
+    /// Bit 13: the tile's priority.
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    const fn high(self) -> bool {
+        self.0 & ENTRY_PRIORITY != 0
+    }
+
+    /// Bit 14: flipped horizontally.
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    const fn flip_horizontal(self) -> bool {
+        self.0 & ENTRY_FLIP_HORIZONTAL != 0
+    }
+
+    /// Bit 15: flipped vertically.
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    const fn flip_vertical(self) -> bool {
+        self.0 & ENTRY_FLIP_VERTICAL != 0
+    }
 }
 
 /// What a fetch needs of the registers outside the backgrounds'.
@@ -614,22 +654,22 @@ impl Backgrounds {
         let across = (x + horizontal) % (columns * width);
         let down = (line + vertical) % (rows * height);
 
-        let entry = self.entry(vram, background, across / width, down / height);
+        let entry = TilemapEntry(self.entry(vram, background, across / width, down / height));
         let mut column = if hires {
             across % width * 2 + half as u16
         } else {
             across % width
         };
         let mut row = down % height;
-        if entry & ENTRY_FLIP_HORIZONTAL != 0 {
+        if entry.flip_horizontal() {
             column = tile_width - 1 - column;
         }
-        if entry & ENTRY_FLIP_VERTICAL != 0 {
+        if entry.flip_vertical() {
             row = height - 1 - row;
         }
         // A 16×16 tile is the tile, the next, and the two a row of 16 on; a 16×8 one of
         // modes 5 and 6 is the tile and the next.
-        let tile = ((entry & TILE_NUMBER_MASK) + (row / 8) * 16 + column / 8) & TILE_NUMBER_MASK;
+        let tile = (entry.tile() + (row / 8) * 16 + column / 8) & TILE_NUMBER_MASK;
 
         let planes = u32::from(depth as u8);
         let start = self.character_base(background) + u32::from(tile) * 8 * planes;
@@ -646,7 +686,7 @@ impl Backgrounds {
             return None;
         }
 
-        let palette = u8::try_from(entry >> 10 & 7).unwrap_or_default();
+        let palette = entry.palette();
         let color = match depth {
             Depth::Eight if setup.direct_color => Color::Direct(direct_color(value, palette)),
             Depth::Eight => Color::Palette(value),
@@ -658,7 +698,7 @@ impl Backgrounds {
         };
         Some(Sample {
             color,
-            high: entry & ENTRY_PRIORITY != 0,
+            high: entry.high(),
         })
     }
 }
