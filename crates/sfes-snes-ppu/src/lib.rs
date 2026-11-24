@@ -41,7 +41,8 @@ mod window;
 pub use crate::{
     layer::{LAYER_COLUMNS, LayerKind, LayerLine},
     line::{LineOut, LineWidth},
-    ppu::{CGRAM_SIZE, OAM_SIZE, Ppu, VRAM_SIZE},
+    memory::{CGRAM_SIZE, OAM_SIZE, VRAM_SIZE},
+    ppu::Ppu,
     register::{NotAPpuRegister, ReadKind, Register},
     signals::{Period, Signals},
 };

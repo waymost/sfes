@@ -20,7 +20,7 @@ use crate::{
     counters::{CounterLatch, CounterRegister},
     layer::{LayerKind, LayerLine, Layers},
     line::{LineOut, LineWidth},
-    memory::{CgramPort, OamPort, PortByte, VramPort},
+    memory::{Cgram, CgramPort, OAM_SIZE, OamPort, PortByte, Vram, VramPort},
     mode7::Mode7,
     mosaic::Mosaic,
     register::{ReadKind, Register},
@@ -28,13 +28,6 @@ use crate::{
     sprite::{Pixel as SpritePixel, Sprites},
     window::{Screen, Windows},
 };
-
-/// VRAM: 64 KiB.
-pub const VRAM_SIZE: usize = 0x1_0000;
-/// CGRAM: 256 colours of 2 bytes.
-pub const CGRAM_SIZE: usize = 0x200;
-/// OAM: 512 bytes of sprite entries and a 32-byte high table.
-pub const OAM_SIZE: usize = 0x220;
 
 /// `$2100` at power-on and reset: fullsnes's "8xh", with the unknown brightness taken as 0
 /// (ADR 0029, point 2).
@@ -86,9 +79,9 @@ bitflags::bitflags! {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ppu {
     /// Video RAM, 64 KiB.
-    vram: Box<[u8]>,
+    vram: Vram,
     /// Palette RAM, 512 bytes.
-    cgram: Box<[u8]>,
+    cgram: Cgram,
     /// Sprite attribute RAM, 544 bytes.
     oam: Box<[u8]>,
     /// $2100 INIDISP: forced blank and screen brightness.
@@ -146,8 +139,8 @@ impl Ppu {
     // @source: adr-0029
     #[must_use]
     pub fn power_on(random: &mut SplitMix64) -> Self {
-        let mut vram = vec![0; VRAM_SIZE].into_boxed_slice();
-        let mut cgram = vec![0; CGRAM_SIZE].into_boxed_slice();
+        let mut vram = Vram::zeroed();
+        let mut cgram = Cgram::zeroed();
         let mut oam = vec![0; OAM_SIZE].into_boxed_slice();
         random.fill(&mut vram);
         random.fill(&mut cgram);
@@ -849,14 +842,10 @@ impl Ppu {
         }
     }
 
-    /// CGRAM entry `index` as a 15-bit colour, little-endian.
-    // @source: anomie-regs#213b
+    /// CGRAM entry `index` as a 15-bit colour.
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     fn color(&self, index: u8) -> Rgb555 {
-        let offset = usize::from(index) * 2;
-        let low = self.cgram.get(offset).copied().unwrap_or_default();
-        let high = self.cgram.get(offset + 1).copied().unwrap_or_default();
-        Rgb555::from_le_bytes([low, high])
+        self.cgram.color(index)
     }
 
     /// VRAM, 64 KiB.
@@ -915,6 +904,7 @@ mod tests {
     use sfes_api::Field;
 
     use super::*;
+    use crate::memory::{CGRAM_SIZE, VRAM_SIZE};
 
     // @source: adr-0028
     fn ppu() -> Ppu {

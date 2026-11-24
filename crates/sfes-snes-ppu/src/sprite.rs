@@ -9,7 +9,7 @@
 //! Sprites: `$2101 OBSEL`, the per-line evaluation with its 32-sprite and 34-tile limits
 //! and the flags in `$213E`, and the pixels of the tiles that evaluation loads (ADR 0033).
 
-use crate::background::vram_word;
+use crate::memory::Vram;
 
 /// How many sprites OAM holds.
 const SPRITE_COUNT: u8 = 128;
@@ -35,8 +35,6 @@ const BASE_MASK: u8 = 0x07;
 const BASE_SHIFT: u32 = 13;
 /// The second tile table is `(name + 1) << 12` words after it.
 const NAME_WORDS_SHIFT: u32 = 12;
-/// VRAM is 32K words.
-const WORD_MASK: u16 = 0x7FFF;
 /// A tile is 16 words of 4-bit pixels: planes 0 and 1 in the first eight.
 const TILE_SHIFT: u8 = 4;
 /// The words from a tile's first row of planes 0 and 1 to its first row of planes 2 and 3.
@@ -246,11 +244,11 @@ impl Line {
     // @source: anomie-regs#sprites/sprite-priority
     // @source: fullsnes#snesppuvideomemoryvram
     // @source: adr-0033
-    pub(crate) fn pixels(&self, vram: &[u8]) -> [Option<Pixel>; 256] {
+    pub(crate) fn pixels(&self, vram: &Vram) -> [Option<Pixel>; 256] {
         let mut pixels = [None; 256];
         for tile in self.tiles.iter().take(self.count) {
-            let low = vram_word(vram, tile.word);
-            let high = vram_word(vram, tile.word.wrapping_add(PLANE_PAIR_WORDS));
+            let low = vram.word(tile.word);
+            let high = vram.word(tile.word.wrapping_add(PLANE_PAIR_WORDS));
             for column in 0..TILE_PIXELS {
                 // Bit 7 is the left pixel, unless the tile is flipped.
                 let bit =
@@ -393,8 +391,7 @@ impl Sprites {
         };
         let first = base
             .wrapping_add(u16::from(number) << TILE_SHIFT)
-            .wrapping_add(name)
-            & WORD_MASK;
+            .wrapping_add(name);
         let pixel_row = u16::try_from(source_row % TILE_PIXELS).unwrap_or_default();
         Tile {
             x: sprite.x + column * TILE_PIXELS,
@@ -596,7 +593,7 @@ mod tests {
         let mut oam = oam();
         // Palette 2, priority 3, flips off: attributes `vhoopppN` = 0b0011_0100.
         put(&mut oam, 0, 4, 0, 0, 0b0011_0100, false);
-        let mut vram = vec![0; 0x10000];
+        let mut vram = Vram::zeroed();
         // Left pixel 1 (plane 0), second 2 (plane 1), third 4 (plane 2), fourth 8 (plane 3),
         // the rest 0.
         tile_row(
@@ -624,7 +621,7 @@ mod tests {
         let mut oam = oam();
         // 16 by 16 at X 0, tile 0, flipped horizontally.
         put(&mut oam, 0, 0, 0, 0, FLIP_HORIZONTAL, true);
-        let mut vram = vec![0; 0x10000];
+        let mut vram = Vram::zeroed();
         // Tile 0's left pixel is 1 and tile 1's right pixel is 2.
         tile_row(&mut vram, 0, 0, [0b1000_0000, 0, 0, 0]);
         tile_row(&mut vram, 16, 0, [0, 0b0000_0001, 0, 0]);
@@ -644,7 +641,7 @@ mod tests {
         let mut oam = oam();
         put(&mut oam, 2, 0, 0, 0, 0b0001_0000, false);
         put(&mut oam, 3, 0, 0, 1, 0b0010_0000, false);
-        let mut vram = vec![0; 0x10000];
+        let mut vram = Vram::zeroed();
         tile_row(&mut vram, 0, 0, [0xFF, 0, 0, 0]);
         tile_row(&mut vram, 16, 0, [0, 0xFF, 0, 0]);
         let mut sprites = Sprites::power_on();

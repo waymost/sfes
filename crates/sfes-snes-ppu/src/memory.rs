@@ -7,11 +7,25 @@
 // @source: fullsnes#snesmemoryoamaccessspriteattributes
 // @source: fullsnes#snesmemoryvramaccesstileandbgmap
 // @source: adr-0029
-//! The VRAM, CGRAM and OAM ports: their addresses, latches and increments (ADR 0029,
-//! points 3 to 5). Each port works on its memory as a byte slice, which the PPU owns.
+//! VRAM and CGRAM, and the VRAM, CGRAM and OAM ports: their addresses, latches and
+//! increments (ADR 0029, points 3 to 5). The PPU owns the memories; each port works on its
+//! memory.
 
+use alloc::{boxed::Box, vec};
+use core::ops::{Deref, DerefMut};
+
+use sfes_api::Rgb555;
+
+/// VRAM: 64 KiB.
+pub const VRAM_SIZE: usize = 0x1_0000;
+/// CGRAM: 256 colours of 2 bytes.
+pub const CGRAM_SIZE: usize = 0x200;
+/// OAM: 512 bytes of sprite entries and a 32-byte high table.
+pub const OAM_SIZE: usize = 0x220;
 /// VRAM word addresses have 15 bits: bit 15 is not connected.
 const VRAM_WORD_MASK: u16 = 0x7FFF;
+/// VRAM byte addresses have 16 bits.
+const VRAM_BYTE_MASK: u32 = 0xFFFF;
 /// `$2115` bit 7: increment after the high byte.
 const INCREMENT_ON_HIGH: u8 = 0x80;
 /// CGRAM byte addresses have 9 bits.
@@ -31,13 +45,115 @@ const OAM_RELOAD_HIGH: u8 = 0x01;
 /// `$2115` at power-on: fullsnes's "?Fh" with the unknown high nibble taken as 0.
 const VRAM_CONTROL_POWER_ON: u8 = 0x0F;
 
-/// One byte of a 16-bit port.
+/// One byte of a 16-bit port or VRAM word. Each variant's value is its place in the word.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub(crate) enum PortByte {
     /// The low byte: `$2118` or `$2139`.
-    Low,
+    Low = 0,
     /// The high byte: `$2119` or `$213A`.
-    High,
+    High = 1,
+}
+
+/// VRAM, 64 KiB, read by 15-bit word address or 16-bit byte address (ADR 0029, point 3).
+/// It derefs to its bytes, which the machine reads and writes between steps.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Vram(Box<[u8]>);
+
+impl Vram {
+    /// 64 KiB of zeros.
+    // @source: adr-0028
+    pub(crate) fn zeroed() -> Self {
+        Self(vec![0; VRAM_SIZE].into_boxed_slice())
+    }
+
+    /// The offset of `byte` of word `address`, with bit 15 dropped.
+    // @source: fullsnes#snesmemoryvramaccesstileandbgmap
+    // @source: adr-0029
+    fn offset(address: u16, byte: PortByte) -> usize {
+        usize::from(address & VRAM_WORD_MASK) * 2 + usize::from(byte as u8)
+    }
+
+    /// Word `address`, little-endian, with bit 15 dropped (ADR 0029, point 3).
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    // @source: fullsnes#snesmemoryvramaccesstileandbgmap
+    // @source: adr-0029
+    pub(crate) fn word(&self, address: u16) -> u16 {
+        let at = |byte| {
+            let offset = Self::offset(address, byte);
+            self.0.get(offset).copied().unwrap_or_default()
+        };
+        u16::from_le_bytes([at(PortByte::Low), at(PortByte::High)])
+    }
+
+    /// Byte `address`, wrapped to 64 KiB (ADR 0030, point 3).
+    // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+    // @source: adr-0030
+    pub(crate) fn byte(&self, address: u32) -> u8 {
+        let offset = usize::try_from(address & VRAM_BYTE_MASK).unwrap_or_default();
+        self.0.get(offset).copied().unwrap_or_default()
+    }
+
+    /// Writes `byte` of word `address`, with bit 15 dropped.
+    // @source: anomie-regs#2118
+    // @source: fullsnes#snesmemoryvramaccesstileandbgmap
+    // @source: adr-0029
+    pub(crate) fn write(&mut self, address: u16, byte: PortByte, value: u8) {
+        if let Some(slot) = self.0.get_mut(Self::offset(address, byte)) {
+            *slot = value;
+        }
+    }
+}
+
+impl Deref for Vram {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl DerefMut for Vram {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+/// CGRAM, 256 colours of 2 bytes. It derefs to its bytes, which the port and the machine
+/// read and write.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Cgram(Box<[u8]>);
+
+impl Cgram {
+    /// 512 bytes of zeros.
+    // @source: adr-0028
+    pub(crate) fn zeroed() -> Self {
+        Self(vec![0; CGRAM_SIZE].into_boxed_slice())
+    }
+
+    /// Entry `index` as a 15-bit colour, little-endian.
+    // @source: anomie-regs#213b
+    // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+    pub(crate) fn color(&self, index: u8) -> Rgb555 {
+        let offset = usize::from(index) * 2;
+        let low = self.0.get(offset).copied().unwrap_or_default();
+        let high = self.0.get(offset + 1).copied().unwrap_or_default();
+        Rgb555::from_le_bytes([low, high])
+    }
+}
+
+impl Deref for Cgram {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl DerefMut for Cgram {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
 }
 
 /// `$2115` bits 3–2: how many low bits of the word address are rotated left by three. Each
@@ -173,7 +289,7 @@ impl VramPort {
     // @source: anomie-regs#2117
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     // @source: adr-0029
-    pub(crate) fn write_address(&mut self, vram: &[u8], byte: PortByte, value: u8) {
+    pub(crate) fn write_address(&mut self, vram: &Vram, byte: PortByte, value: u8) {
         let [low, high] = self.address.to_le_bytes();
         self.address = match byte {
             PortByte::Low => u16::from_le_bytes([value, high]),
@@ -188,9 +304,9 @@ impl VramPort {
     // @source: anomie-regs#2119
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     // @source: adr-0029
-    pub(crate) fn write_data(&mut self, vram: &mut [u8], byte: PortByte, value: u8, allowed: bool) {
-        if allowed && let Some(slot) = vram.get_mut(self.index(byte)) {
-            *slot = value;
+    pub(crate) fn write_data(&mut self, vram: &mut Vram, byte: PortByte, value: u8, allowed: bool) {
+        if allowed {
+            vram.write(self.translated(), byte, value);
         }
         if self.control.increment_on == byte {
             self.increment();
@@ -215,7 +331,7 @@ impl VramPort {
     // @source: anomie-regs#213a
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
     // @source: adr-0029
-    pub(crate) fn after_read(&mut self, vram: &[u8], byte: PortByte) {
+    pub(crate) fn after_read(&mut self, vram: &Vram, byte: PortByte) {
         if self.control.increment_on == byte {
             self.prefetch = self.load(vram);
             self.increment();
@@ -224,24 +340,15 @@ impl VramPort {
 
     /// The word at the translated address.
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
-    fn load(&self, vram: &[u8]) -> u16 {
-        let low = vram
-            .get(self.index(PortByte::Low))
-            .copied()
-            .unwrap_or_default();
-        let high = vram
-            .get(self.index(PortByte::High))
-            .copied()
-            .unwrap_or_default();
-        u16::from_le_bytes([low, high])
+    fn load(&self, vram: &Vram) -> u16 {
+        vram.word(self.translated())
     }
 
-    /// The byte offset of `byte` of the addressed word: translated, bit 15 dropped.
+    /// The addressed word, translated as `$2115` says.
     // @source: anomie-regs#2115
     // @source: fullsnes#snesmemoryvramaccesstileandbgmap
-    fn index(&self, byte: PortByte) -> usize {
-        let word = self.control.translation.apply(self.address) & VRAM_WORD_MASK;
-        usize::from(word) * 2 + usize::from(byte == PortByte::High)
+    const fn translated(&self) -> u16 {
+        self.control.translation.apply(self.address)
     }
 
     /// Steps the address on, wrapping at 16 bits.
@@ -288,7 +395,7 @@ impl CgramPort {
     // @source: anomie-regs#2122
     // @source: fullsnes#snesmemorycgramaccesspalettememory
     // @source: adr-0029
-    pub(crate) fn write(&mut self, cgram: &mut [u8], value: u8, allowed: bool) {
+    pub(crate) fn write(&mut self, cgram: &mut Cgram, value: u8, allowed: bool) {
         let index = usize::from(self.address);
         if index.is_multiple_of(2) {
             self.latch = value;
@@ -302,7 +409,7 @@ impl CgramPort {
     // @source: anomie-regs#213b
     // @source: fullsnes#snesmemorycgramaccesspalettememory
     // @source: adr-0029
-    pub(crate) fn peek(self, cgram: &[u8], open_bus: u8) -> u8 {
+    pub(crate) fn peek(self, cgram: &Cgram, open_bus: u8) -> u8 {
         let byte = cgram
             .get(usize::from(self.address))
             .copied()
@@ -481,7 +588,7 @@ mod tests {
     // @source: adr-0029
     #[test]
     fn vram_writes_increment_on_the_byte_vmain_names() {
-        let mut vram = vec![0; 0x1_0000];
+        let mut vram = Vram::zeroed();
         let mut port = VramPort::power_on();
         port.write_control(0x80);
         port.write_address(&vram, PortByte::Low, 0x10);
@@ -521,7 +628,7 @@ mod tests {
     // @source: adr-0029
     #[test]
     fn translation_applies_to_the_access_not_the_address() {
-        let mut vram = vec![0; 0x1_0000];
+        let mut vram = Vram::zeroed();
         let mut port = VramPort::power_on();
         port.write_control(0x04);
         port.write_address(&vram, PortByte::Low, 0x03);
@@ -538,7 +645,7 @@ mod tests {
     // @source: adr-0029
     #[test]
     fn vram_reads_return_the_prefetch_then_load_before_incrementing() {
-        let mut vram = vec![0; 0x1_0000];
+        let mut vram = Vram::zeroed();
         vram[0x200..0x206].copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         let mut port = VramPort::power_on();
         port.write_control(0x80);
@@ -570,7 +677,7 @@ mod tests {
     // @source: adr-0029
     #[test]
     fn cgram_writes_a_word_on_its_high_byte() {
-        let mut cgram = vec![0; 0x200];
+        let mut cgram = Cgram::zeroed();
         let mut port = CgramPort::power_on();
         port.write_address(0x10);
         port.write(&mut cgram, 0x1F, true);

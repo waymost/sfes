@@ -15,12 +15,8 @@
 
 use sfes_api::Rgb555;
 
-use crate::{register::Register, sprite::Priority};
+use crate::{memory::Vram, register::Register, sprite::Priority};
 
-/// A VRAM word address has 15 bits (ADR 0029, point 3).
-const VRAM_WORD_MASK: u16 = 0x7FFF;
-/// A VRAM byte address has 16 bits.
-const VRAM_BYTE_MASK: u32 = 0xFFFF;
 /// A scroll register holds 10 bits.
 const SCROLL_MASK: u16 = 0x03FF;
 /// `BGnHOFS`'s write rule keeps the old register's bits 10–8 in the new word's bits 2–0.
@@ -516,7 +512,7 @@ impl Backgrounds {
     /// The tilemap entry for tile (`tile_x`, `tile_y`) of `background`.
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: fullsnes#snesppubgcontrol
-    fn entry(&self, vram: &[u8], background: Background, tile_x: u16, tile_y: u16) -> u16 {
+    fn entry(&self, vram: &Vram, background: Background, tile_x: u16, tile_y: u16) -> u16 {
         let register = self.tilemaps[background as usize];
         let wide = register & TILEMAP_WIDE != 0;
         let tall = register & TILEMAP_TALL != 0;
@@ -528,7 +524,7 @@ impl Backgrounds {
         if wide && tile_x >= SCREEN_TILES {
             word += SCREEN_WORDS;
         }
-        vram_word(vram, word)
+        vram.word(word)
     }
 
     /// The horizontal and vertical scroll `background` has at column `x`: its registers',
@@ -540,7 +536,7 @@ impl Backgrounds {
     // @source: fullsnes#snesppuvideomemoryvram
     // @source: adr-0031
     // @source: adr-0036
-    fn scrolls(&self, vram: &[u8], setup: Setup, background: Background, x: u16) -> (u16, u16) {
+    fn scrolls(&self, vram: &Vram, setup: Setup, background: Background, x: u16) -> (u16, u16) {
         let index = background as usize;
         let horizontal = self.horizontal[index] & SCROLL_MASK;
         let vertical = self.vertical[index] & SCROLL_MASK;
@@ -591,7 +587,7 @@ impl Backgrounds {
     // @source: adr-0036
     fn pixel_entry(
         &self,
-        vram: &[u8],
+        vram: &Vram,
         setup: Setup,
         background: Background,
         across: u16,
@@ -632,7 +628,7 @@ impl Backgrounds {
     // @source: adr-0036
     pub(crate) fn sample(
         &self,
-        vram: &[u8],
+        vram: &Vram,
         setup: Setup,
         background: Background,
         x: u16,
@@ -679,7 +675,7 @@ impl Backgrounds {
         for plane in 0..planes {
             // Planes come in pairs, a byte each in a word, a pair to every 16 bytes.
             let address = row_start + (plane / 2) * 16 + plane % 2;
-            let byte = vram_byte(vram, address);
+            let byte = vram.byte(address);
             value |= (byte >> shift & 1) << plane;
         }
         if value == 0 {
@@ -721,36 +717,17 @@ pub(crate) fn direct_color(value: u8, palette: u8) -> Rgb555 {
     Rgb555::from_channels(red, green, blue)
 }
 
-/// VRAM word `address`, with bit 15 dropped (ADR 0029, point 3).
-// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
-// @source: fullsnes#snesmemoryvramaccesstileandbgmap
-// @source: adr-0029
-pub(crate) fn vram_word(vram: &[u8], address: u16) -> u16 {
-    let byte = usize::from(address & VRAM_WORD_MASK) * 2;
-    let low = vram.get(byte).copied().unwrap_or_default();
-    let high = vram.get(byte + 1).copied().unwrap_or_default();
-    u16::from_le_bytes([low, high])
-}
-
-/// VRAM byte `address`, wrapped to 64 KiB (ADR 0030, point 3).
-// @source: anomie-regs#backgrounds/tile-maps-and-character-maps
-// @source: adr-0030
-pub(crate) fn vram_byte(vram: &[u8], address: u32) -> u8 {
-    let index = usize::try_from(address & VRAM_BYTE_MASK).unwrap_or_default();
-    vram.get(index).copied().unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
-    use alloc::{format, vec, vec::Vec};
+    use alloc::{format, vec::Vec};
 
     use super::*;
 
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0030
     /// A VRAM image of 64 KiB.
-    fn vram() -> Vec<u8> {
-        vec![0; 0x1_0000]
+    fn vram() -> Vram {
+        Vram::zeroed()
     }
 
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
