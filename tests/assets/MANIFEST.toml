@@ -174,6 +174,12 @@ sha256 = "f23b515200e30d6375a70cc9e7a779c3c561285a672a63d10e5a4a2a76201529"
 notes = "Own test cartridge: Mode 7 by band from eight HDMA channels: the identity matrix, the horizontal and vertical flips, wrap, transparent and character-0 fill outside the playfield, B and C swapping the axes, and EXTBG's BG2 in front of BG1. Built from tests/carts/bg-mode7-bands/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/obj-limits.sfc"
+license = "own"
+sha256 = "a6f8f5f852d173c51b0db633c7420ecac403d6cb5c12acf0102c8144258781a6"
+notes = "Own test cartridge: Sprites at 16x32 with the priority rotation of $2103, a vertical flip by square halves, time over dropping the first sprite's tiles, and a sprite at X -256 that uses time but draws nothing. Built from tests/carts/obj-limits/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"

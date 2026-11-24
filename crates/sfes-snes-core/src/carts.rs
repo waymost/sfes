@@ -556,6 +556,54 @@ fn sprites_cart_draws_sprites_in_order_with_flips_and_sets_range_over() {
     assert_eq!(status & 0x0F, 1);
 }
 
+// @source: anomie-regs#2101
+// @source: anomie-regs#2103
+// @source: anomie-regs#213e
+// @source: anomie-regs#sprites
+// @source: anomie-regs#sprites/drawing-the-sprites
+// @source: anomie-regs#sprites/sprite-priority
+// @source: fullsnes#snesppuspritesobjs
+// @source: fullsnes#snespputimersandstatus
+// @source: adr-0013
+// @source: adr-0029
+// @source: adr-0033
+#[test]
+fn obj_limits_cart_rotates_priority_flips_by_halves_and_drops_tiles_on_time_over() {
+    let snes = drawn(include_bytes!("../../../tests/assets/carts/obj-limits.sfc"));
+    // Sprites are 16x32; a sprite at Y is on lines Y + 1 to Y + 32, rows Y to Y + 31.
+    //   rows 0-31: sprite 1 (cyan) at 0 and sprite 2 (magenta) at 8. Sprite 2 is the first
+    //        ($2103 bit 7 with word address 4), so it is in front at 8 to 15 (ADR 0033,
+    //        point 6).
+    //   rows 40-71: sprite 3 at 0 has its tile rows in order, red, green, blue, yellow.
+    //        Sprite 4 at 32 is flipped vertically, which for a 16x32 sprite flips each 16x16
+    //        half: green, red, yellow, blue (ADR 0033, point 4).
+    //   rows 80-111: 18 sprites of 2 tiles on a line. Loaded from the last, sprites 22 to 6
+    //        fill the 34 tiles, so sprite 5 at 0, the first of them, is not drawn (ADR
+    //        0033, point 5).
+    //   rows 120-151: sprites 39 to 24 take 32 tiles and sprite 40, at X -256 read as 0
+    //        for its tiles' time, 2 more; sprite 23 at 32 is dropped, and sprite 40 draws
+    //        nothing at its true X.
+    let rotated = runs(&[(CYAN, 8), (MAGENTA, 16)], WHITE);
+    let band = |left: Rgb555, right: Rgb555| runs(&[(left, 16), (WHITE, 16), (right, 16)], WHITE);
+    let crowded = runs(&[(WHITE, 200), (CYAN, 16)], WHITE);
+    assert_picture(
+        &snes,
+        256,
+        &[
+            (0..32, Some(&rotated)),
+            (40..48, Some(&band(RED, GREEN))),
+            (48..56, Some(&band(GREEN, RED))),
+            (56..64, Some(&band(BLUE, YELLOW))),
+            (64..72, Some(&band(YELLOW, BLUE))),
+            (80..112, Some(&crowded)),
+            (120..152, Some(&crowded)),
+        ],
+        WHITE,
+    );
+    // Time over is set by the crowded lines; no line has more than 32 sprites.
+    assert_eq!(snes.peek_bus(0x00_213E).value & 0xC0, 0x80);
+}
+
 // @source: anomie-regs#2123
 // @source: anomie-regs#2126
 // @source: anomie-regs#212a

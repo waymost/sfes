@@ -91,6 +91,27 @@ loop:
     stz a:$4304 + channel * $10
 .endmacro
 
+; sprite xpos, ypos, tile, attributes: one OAM record, written through $2104 (OAMDATA), which
+; increments the address after each byte; the record is X, Y, tile, `vhoopppN`
+; (anomie-regs#sprites/oam).
+; @source: anomie-regs#2104, anomie-regs#sprites/oam
+.macro sprite xpos, ypos, tile, attributes
+    ppu_write $2104, xpos
+    ppu_write $2104, ypos
+    ppu_write $2104, tile
+    ppu_write $2104, attributes
+.endmacro
+
+; solid_tile colour: one 4-bit tile of a single colour. Plane 0 is the low byte of the first
+; eight words and plane 1 the high byte; planes 2 and 3 are the same in the next eight
+; (anomie-regs#backgrounds/tile-maps-and-character-maps, fullsnes#snesppuvideomemoryvram).
+; @source: anomie-regs#backgrounds/tile-maps-and-character-maps
+; @source: fullsnes#snesppuvideomemoryvram
+.macro solid_tile colour
+    vram_rows (((((colour) >> 1) & 1) * $FF00) | (((colour) & 1) * $FF))
+    vram_rows (((((colour) >> 3) & 1) * $FF00) | ((((colour) >> 2) & 1) * $FF))
+.endmacro
+
 ; One zero byte in RODATA for clear_vram's fixed-address DMA (ADR 0013).
 ; @source: adr-0013
 .pushseg
