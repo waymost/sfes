@@ -12,7 +12,9 @@ use alloc::{boxed::Box, vec};
 use sfes_api::{Rgb555, SplitMix64};
 
 use crate::{
-    background::{Background, Backgrounds, Color, Layer, Sample, Setup, priority_order},
+    background::{
+        Background, BackgroundMode, Backgrounds, Color, Layer, Mode, Sample, Setup, priority_order,
+    },
     color_math::{ColorMath, Operand, Previous, Source, dim},
     counters::{CounterLatch, CounterRegister},
     layer::{LayerKind, LayerLine, Layers},
@@ -53,10 +55,6 @@ const PPU2_VERSION: u8 = 3;
 /// `$2105` at power-on: fullsnes's "xFh", with the unknown high nibble taken as 0
 /// (ADR 0028, point 5).
 const BACKGROUND_MODE_POWER_ON: u8 = 0x0F;
-/// `$2105` bits 2–0: the BG mode.
-const BACKGROUND_MODE_MASK: u8 = 0x07;
-/// `$2105` bit 3: mode 1's BG3 priority bit.
-const BACKGROUND_3_FIRST: u8 = 0x08;
 /// The pixels of a normal line.
 const LINE_PIXELS: u16 = 256;
 /// `$2133` bit 3: pseudo-hires.
@@ -92,7 +90,7 @@ pub struct Ppu {
     /// $2123–$212B, $212E and $212F: the windows.
     windows: Windows,
     /// $2105 BGMODE: the BG mode and character sizes.
-    background_mode: u8,
+    background_mode: BackgroundMode,
     /// $2107–$2114 BG1SC–BG4VOFS: the backgrounds' tilemaps, characters and scrolls.
     backgrounds: Backgrounds,
     /// $212C TM: the layers on the main screen.
@@ -149,7 +147,7 @@ impl Ppu {
             mode7: Mode7::power_on(),
             sprites: Sprites::power_on(),
             windows: Windows::power_on(),
-            background_mode: BACKGROUND_MODE_POWER_ON,
+            background_mode: BackgroundMode::from(BACKGROUND_MODE_POWER_ON),
             backgrounds: Backgrounds::power_on(),
             main_screen: Layers::empty(),
             sub_screen: Layers::empty(),
@@ -404,7 +402,7 @@ impl Ppu {
             Register::OamAddressLow => self.oam_port.write_address_low(value),
             Register::OamAddressHigh => self.oam_port.write_address_high(value),
             Register::OamData => self.oam_port.write(&mut self.oam, value, blank),
-            Register::BackgroundMode => self.background_mode = value,
+            Register::BackgroundMode => self.background_mode = BackgroundMode::from(value),
             Register::Background1Tilemap
             | Register::Background2Tilemap
             | Register::Background3Tilemap
@@ -569,9 +567,8 @@ impl Ppu {
         out: &mut LineOut,
         layers: Option<&mut LayerLine>,
     ) {
-        let mode = self.background_mode & BACKGROUND_MODE_MASK;
-        // BG modes 5 and 6 are true hi-res.
-        let hires_mode = matches!(mode, 5 | 6);
+        let mode = self.background_mode.mode;
+        let hires_mode = mode.hires();
         let width = if self.screen_mode & PSEUDO_HIRES != 0 || hires_mode {
             LineWidth::Wide
         } else {
@@ -581,11 +578,11 @@ impl Ppu {
         let interlaced = self.screen_mode & INTERLACE != 0;
         out.fill(line, width, interlaced, self.color(0));
         let setup = Setup {
-            control: self.background_mode,
+            background_mode: self.background_mode,
             direct_color: self.color_math.direct_color(),
         };
         let extbg = self.screen_mode & EXTBG != 0;
-        let order = priority_order(mode, self.background_mode & BACKGROUND_3_FIRST != 0, extbg);
+        let order = priority_order(self.background_mode, extbg);
         let main_layers = self.main_screen;
         // The sub screen matters where math adds it, and in every wide line.
         let sub_wanted = wide || (self.color_math.adds_sub_screen() && self.color_math.any_layer());
@@ -688,7 +685,7 @@ impl Ppu {
     fn capture_layers(
         &self,
         out: &mut LayerLine,
-        mode: u8,
+        mode: Mode,
         setup: Setup,
         screens: Layers,
         line: u16,
@@ -728,7 +725,7 @@ impl Ppu {
     // @source: adr-0036
     fn samples(
         &self,
-        mode: u8,
+        mode: Mode,
         setup: Setup,
         layers: Layers,
         x: u16,
@@ -742,7 +739,7 @@ impl Ppu {
                 return None;
             }
             let (column, row) = self.mosaic.block(background, x, line);
-            if mode == 7 {
+            if mode == Mode::Seven {
                 let (column, row) = if background == Background::Two {
                     self.mosaic.extbg_block(x, line)
                 } else {
@@ -761,7 +758,7 @@ impl Ppu {
             } else {
                 (half, self.signals.field as u16)
             };
-            let row = if interlaced && matches!(mode, 5 | 6) {
+            let row = if interlaced && mode.hires() {
                 2 * row + field
             } else {
                 row
@@ -1033,10 +1030,13 @@ mod tests {
         ppu.reset();
         assert_eq!(ppu.screen_mode, 0);
         assert_eq!(ppu.next_line(), 1);
-        assert_eq!(ppu.background_mode, 0x05);
+        assert_eq!(ppu.background_mode, BackgroundMode::from(0x05));
         assert_eq!(ppu.ppu1_open_bus, 0x11);
         assert_eq!(ppu.vram(), before.vram());
-        assert_eq!(Ppu::power_on(&mut SplitMix64::new(0)).background_mode, 0x0F);
+        assert_eq!(
+            Ppu::power_on(&mut SplitMix64::new(0)).background_mode,
+            BackgroundMode::from(0x0F)
+        );
     }
 
     // @source: anomie-regs#2100
