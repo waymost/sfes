@@ -17,10 +17,11 @@
 //! layers they mask on the main and sub screens (ADR 0034; ADR 0035). The colour window's
 //! area is read by colour math.
 
-use crate::{background::Background, register::Register};
+use crate::{
+    layer::{LayerKind, Layers},
+    register::Register,
+};
 
-/// `$212E` and `$212F` bits 4–0: BG1 to BG4 and OBJ.
-const SCREEN_MASK: u8 = 0x1F;
 /// A layer's window setting is four bits: window 1's enable and invert, then window 2's.
 const SETTING_MASK: u8 = 0x0F;
 /// A setting's bit for window 1 enabled; the invert bit is the one below it.
@@ -33,25 +34,9 @@ const WINDOW_1_INVERT: u8 = 0x01;
 const WINDOW_2_INVERT: u8 = 0x04;
 /// A logic field is two bits.
 const LOGIC_MASK: u8 = 0x03;
-
-/// A layer a window can mask. Each variant's value is its index and, up to OBJ, its bit in
-/// `$212E`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub(crate) enum Masked {
-    /// BG1.
-    Background1 = 0,
-    /// BG2.
-    Background2 = 1,
-    /// BG3.
-    Background3 = 2,
-    /// BG4.
-    Background4 = 3,
-    /// The sprites.
-    Object = 4,
-    /// The colour window; it has no designation bit, and `$2130` reads its area.
-    Color = 5,
-}
+/// The colour window's place among the window settings and logic fields, after BG1 to BG4
+/// and the sprites.
+const COLOR_WINDOW: u8 = 5;
 
 /// Which screen a layer is on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,19 +45,6 @@ pub(crate) enum Screen {
     Main,
     /// The sub screen, with `$212F`.
     Sub,
-}
-
-impl From<Background> for Masked {
-    // @source: anomie-regs#2123
-    // @source: anomie-regs#212e
-    fn from(background: Background) -> Self {
-        match background {
-            Background::One => Self::Background1,
-            Background::Two => Self::Background2,
-            Background::Three => Self::Background3,
-            Background::Four => Self::Background4,
-        }
-    }
 }
 
 /// How two windows combine; each variant's value is the register's field.
@@ -128,9 +100,9 @@ pub(crate) struct Windows {
     /// `$212A WBGLOG` and `$212B WOBJLOG`.
     logic: [u8; 2],
     /// `$212E TMW`: the layers masked on the main screen.
-    main: u8,
+    main: Layers,
     /// `$212F TSW`: the layers masked on the sub screen.
-    sub: u8,
+    sub: Layers,
 }
 
 impl Windows {
@@ -143,8 +115,8 @@ impl Windows {
             first: [0; 2],
             second: [0; 2],
             logic: [0; 2],
-            main: 0,
-            sub: 0,
+            main: Layers::empty(),
+            sub: Layers::empty(),
         }
     }
 
@@ -173,8 +145,8 @@ impl Windows {
             Register::Window2Right => self.second[1] = value,
             Register::WindowLogicBackgrounds => self.logic[0] = value,
             Register::WindowLogicObjectColor => self.logic[1] = value,
-            Register::MainScreenWindow => self.main = value & SCREEN_MASK,
-            Register::SubScreenWindow => self.sub = value & SCREEN_MASK,
+            Register::MainScreenWindow => self.main = Layers::from_bits_truncate(value),
+            Register::SubScreenWindow => self.sub = Layers::from_bits_truncate(value),
             _ => {}
         }
     }
@@ -187,16 +159,35 @@ impl Windows {
         u16::from(edges[0]) <= column && column <= u16::from(edges[1])
     }
 
-    /// The area of `layer` at `column`: false with neither window enabled, the one enabled
-    /// window's value (inverted if its bit says so), else the layer's logic of the two
-    /// (ADR 0034, points 2 and 4).
+    /// The area of `layer` at `column` (ADR 0034, points 2 and 4).
     // @source: anomie-regs#2123
     // @source: anomie-regs#212a
     // @source: anomie-regs#windows
     // @source: fullsnes#snesppuwindow
     // @source: adr-0034
-    pub(crate) fn area(&self, layer: Masked, column: u16) -> bool {
-        let index = layer as u8;
+    pub(crate) fn area(&self, layer: LayerKind, column: u16) -> bool {
+        self.area_at(layer as u8, column)
+    }
+
+    /// The colour window's area at `column`, which `$2130` reads (ADR 0035, point 4).
+    // @source: anomie-regs#2125
+    // @source: anomie-regs#212b
+    // @source: anomie-regs#windows
+    // @source: adr-0034
+    // @source: adr-0035
+    pub(crate) fn color_area(&self, column: u16) -> bool {
+        self.area_at(COLOR_WINDOW, column)
+    }
+
+    /// The area at `column` of the window target whose setting and logic field are at
+    /// `index`, 0 to 5: false with neither window enabled, the one enabled window's value
+    /// (inverted if its bit says so), else the target's logic of the two.
+    // @source: anomie-regs#2123
+    // @source: anomie-regs#212a
+    // @source: anomie-regs#windows
+    // @source: fullsnes#snesppuwindow
+    // @source: adr-0034
+    fn area_at(&self, index: u8, column: u16) -> bool {
         let shift = 4 * (index % 2);
         let select = self.select.get(usize::from(index / 2));
         let setting = select.copied().unwrap_or_default() >> shift & SETTING_MASK;
@@ -217,18 +208,17 @@ impl Windows {
 
     /// Whether `layer` is masked at `column` on `screen`: its `$212E` (main) or `$212F`
     /// (sub) bit is set and its area is true there (ADR 0034, point 5; ADR 0035, point 3).
-    /// The colour window has no bit and is never masked.
     // @source: anomie-regs#212e
     // @source: anomie-regs#212f
     // @source: fullsnes#snesppuwindow
     // @source: adr-0034
     // @source: adr-0035
-    pub(crate) fn masked(&self, screen: Screen, layer: Masked, column: u16) -> bool {
+    pub(crate) fn masked(&self, screen: Screen, layer: LayerKind, column: u16) -> bool {
         let designated = match screen {
             Screen::Main => self.main,
             Screen::Sub => self.sub,
         };
-        designated >> (layer as u8) & 1 != 0 && self.area(layer, column)
+        designated.contains(Layers::from(layer)) && self.area(layer, column)
     }
 }
 
@@ -256,18 +246,18 @@ mod tests {
         windows
     }
 
-    /// The columns 0 to 39 where `layer`'s area is true, as a string of `#` and `.`.
+    /// The columns 0 to 39 where `area` is true, as a string of `#` and `.`.
     // @source: adr-0034
-    fn picture(windows: &Windows, layer: Masked) -> String {
+    fn columns(area: impl Fn(u16) -> bool) -> String {
         (0..40)
-            .map(|column| {
-                if windows.area(layer, column) {
-                    '#'
-                } else {
-                    '.'
-                }
-            })
+            .map(|column| if area(column) { '#' } else { '.' })
             .collect::<String>()
+    }
+
+    /// The columns 0 to 39 where `layer`'s area is true.
+    // @source: adr-0034
+    fn picture(windows: &Windows, layer: LayerKind) -> String {
+        columns(|column| windows.area(layer, column))
     }
 
     // @source: anomie-regs#2126
@@ -279,7 +269,7 @@ mod tests {
         // BG1: window 1 enabled, bit 1 of its setting.
         let windows = windows([0x02, 0, 0], [0, 0]);
         assert_eq!(
-            picture(&windows, Masked::Background1),
+            picture(&windows, LayerKind::Background1),
             "........################................"
         );
     }
@@ -291,13 +281,13 @@ mod tests {
         // Window 1 enabled and inverted: outside 8 to 23.
         let inverted = windows([0x03, 0, 0], [0, 0]);
         assert_eq!(
-            picture(&inverted, Masked::Background1),
+            picture(&inverted, LayerKind::Background1),
             "########................################"
         );
         // Invert alone, without enable, is a disabled window: nothing is masked
         // (anomie-regs#212a, "Neither window enabled").
         let disabled = windows([0x01, 0, 0], [0, 0]);
-        assert_eq!(picture(&disabled, Masked::Background1), ".".repeat(40));
+        assert_eq!(picture(&disabled, LayerKind::Background1), ".".repeat(40));
     }
 
     // @source: anomie-regs#2126
@@ -307,15 +297,15 @@ mod tests {
     fn a_window_whose_left_edge_is_above_its_right_is_empty() {
         let mut windows = windows([0x02, 0, 0], [0, 0]);
         windows.write(Register::Window1Left, 24);
-        assert_eq!(picture(&windows, Masked::Background1), ".".repeat(40));
+        assert_eq!(picture(&windows, LayerKind::Background1), ".".repeat(40));
         // Inverted, an empty window is on everywhere.
         windows.write(Register::WindowMaskBackground12, 0x03);
-        assert_eq!(picture(&windows, Masked::Background1), "#".repeat(40));
+        assert_eq!(picture(&windows, LayerKind::Background1), "#".repeat(40));
         // Equal edges are one pixel.
         windows.write(Register::Window1Left, 23);
         windows.write(Register::WindowMaskBackground12, 0x02);
         assert_eq!(
-            picture(&windows, Masked::Background1),
+            picture(&windows, LayerKind::Background1),
             format!("{}#{}", ".".repeat(23), ".".repeat(16))
         );
     }
@@ -329,19 +319,19 @@ mod tests {
         // BG1 with both windows enabled: setting 0x0A; its logic is `$212A` bits 1 to 0.
         let both = |logic| windows([0x0A, 0, 0], [logic, 0]);
         assert_eq!(
-            picture(&both(0), Masked::Background1),
+            picture(&both(0), LayerKind::Background1),
             "........########################........"
         );
         assert_eq!(
-            picture(&both(1), Masked::Background1),
+            picture(&both(1), LayerKind::Background1),
             "................########................"
         );
         assert_eq!(
-            picture(&both(2), Masked::Background1),
+            picture(&both(2), LayerKind::Background1),
             "........########........########........"
         );
         assert_eq!(
-            picture(&both(3), Masked::Background1),
+            picture(&both(3), LayerKind::Background1),
             "########........########........########"
         );
     }
@@ -356,23 +346,23 @@ mod tests {
         let windows = windows([0xAA, 0xAA, 0xAA], [0b11_10_01_00, 0b01]);
         let area = |layer| picture(&windows, layer);
         assert_eq!(
-            area(Masked::Background1),
+            area(LayerKind::Background1),
             "........########################........"
         );
         assert_eq!(
-            area(Masked::Background2),
+            area(LayerKind::Background2),
             "................########................"
         );
         assert_eq!(
-            area(Masked::Background3),
+            area(LayerKind::Background3),
             "........########........########........"
         );
         assert_eq!(
-            area(Masked::Background4),
+            area(LayerKind::Background4),
             "########........########........########"
         );
         assert_eq!(
-            area(Masked::Object),
+            area(LayerKind::Sprites),
             "................########................"
         );
     }
@@ -385,17 +375,17 @@ mod tests {
     fn a_settings_nibble_is_the_low_half_for_layers_0_2_and_4_and_the_high_half_for_1_and_3() {
         // BG2 (high half of `$2123`) has window 1; BG3 (low half of `$2124`) window 2.
         let windows = windows([0x20, 0x08, 0x80], [0, 0]);
-        assert_eq!(picture(&windows, Masked::Background1), ".".repeat(40));
+        assert_eq!(picture(&windows, LayerKind::Background1), ".".repeat(40));
         assert_eq!(
-            picture(&windows, Masked::Background2),
+            picture(&windows, LayerKind::Background2),
             "........################................"
         );
         assert_eq!(
-            picture(&windows, Masked::Background3),
+            picture(&windows, LayerKind::Background3),
             "................################........"
         );
-        assert_eq!(picture(&windows, Masked::Background4), ".".repeat(40));
-        assert_eq!(picture(&windows, Masked::Object), ".".repeat(40));
+        assert_eq!(picture(&windows, LayerKind::Background4), ".".repeat(40));
+        assert_eq!(picture(&windows, LayerKind::Sprites), ".".repeat(40));
     }
 
     // @source: anomie-regs#212e
@@ -406,12 +396,13 @@ mod tests {
         let mut windows = windows([0x02, 0, 0x02], [0, 0]);
         // BG1 and OBJ both have window 1, but only BG1 is designated.
         windows.write(Register::MainScreenWindow, 0x01);
-        assert!(windows.masked(Screen::Main, Masked::Background1, 10));
-        assert!(!windows.masked(Screen::Main, Masked::Background1, 4));
-        assert!(!windows.masked(Screen::Main, Masked::Object, 10));
-        // Bit 4 is OBJ; the colour window has no designation bit.
+        assert!(windows.masked(Screen::Main, LayerKind::Background1, 10));
+        assert!(!windows.masked(Screen::Main, LayerKind::Background1, 4));
+        assert!(!windows.masked(Screen::Main, LayerKind::Sprites, 10));
+        // Bit 4 is OBJ; bits 7 to 5 are not kept.
         windows.write(Register::MainScreenWindow, 0xFF);
-        assert!(windows.masked(Screen::Main, Masked::Object, 10));
+        assert!(windows.masked(Screen::Main, LayerKind::Sprites, 10));
+        assert_eq!(windows.main, Layers::all());
     }
 
     // @source: fullsnes#snesiomap
@@ -419,7 +410,11 @@ mod tests {
     #[test]
     fn nothing_is_masked_at_power_on() {
         let windows = Windows::power_on();
-        for layer in [Masked::Background1, Masked::Background4, Masked::Object] {
+        for layer in [
+            LayerKind::Background1,
+            LayerKind::Background4,
+            LayerKind::Sprites,
+        ] {
             assert!(!windows.masked(Screen::Main, layer, 0), "{layer:?}");
         }
     }
@@ -434,13 +429,11 @@ mod tests {
         // the setting; with window 1 not enabled it is window 2's value, 16..=31.
         let mut windows = windows([0x02, 0, 0x80], [0, 0]);
         windows.write(Register::SubScreenWindow, 0x01);
-        assert!(windows.masked(Screen::Sub, Masked::Background1, 10));
-        assert!(!windows.masked(Screen::Main, Masked::Background1, 10));
-        // Bits 7 and 6 of $212F are not kept, and the colour window is never "masked".
-        windows.write(Register::SubScreenWindow, 0xFF);
-        assert!(!windows.masked(Screen::Sub, Masked::Color, 20));
+        assert!(windows.masked(Screen::Sub, LayerKind::Background1, 10));
+        assert!(!windows.masked(Screen::Main, LayerKind::Background1, 10));
+        // The colour window has an area but no designation bit.
         assert_eq!(
-            picture(&windows, Masked::Color),
+            columns(|column| windows.color_area(column)),
             "................################........"
         );
     }

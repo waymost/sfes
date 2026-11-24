@@ -15,7 +15,7 @@ use crate::{
     background::{Background, Backgrounds, Color, Layer, Sample, Setup, priority_order},
     color_math::{ColorMath, Operand, Previous, Source, dim},
     counters::{CounterLatch, CounterRegister},
-    layer::{LayerKind, LayerLine},
+    layer::{LayerKind, LayerLine, Layers},
     line::{LineOut, LineWidth},
     memory::{CgramPort, Half, OamPort, VramPort},
     mode7::Mode7,
@@ -23,7 +23,7 @@ use crate::{
     register::{ReadKind, Register},
     signals::{Period, Signals},
     sprite::{Pixel as SpritePixel, Sprites},
-    window::{Masked, Screen, Windows},
+    window::{Screen, Windows},
 };
 
 /// VRAM: 64 KiB.
@@ -57,10 +57,6 @@ const BACKGROUND_MODE_POWER_ON: u8 = 0x0F;
 const BACKGROUND_MODE_MASK: u8 = 0x07;
 /// `$2105` bit 3: mode 1's BG3 priority bit.
 const BACKGROUND_3_FIRST: u8 = 0x08;
-/// `$212C` and `$212D` bits 4–0: BG1 to BG4 and the sprites on a screen.
-const SCREEN_LAYERS: u8 = 0x1F;
-/// `$212C` and `$212D` bit 4: the sprites on a screen.
-const SCREEN_SPRITES: u8 = 0x10;
 /// The pixels of a normal line.
 const LINE_PIXELS: u16 = 256;
 /// `$2133` bit 3: pseudo-hires.
@@ -99,10 +95,10 @@ pub struct Ppu {
     background_mode: u8,
     /// $2107–$2114 BG1SC–BG4VOFS: the backgrounds' tilemaps, characters and scrolls.
     backgrounds: Backgrounds,
-    /// $212C TM: the layers on the main screen, bits 4–0.
-    main_screen: u8,
-    /// $212D TS: the layers on the sub screen, bits 4–0.
-    sub_screen: u8,
+    /// $212C TM: the layers on the main screen.
+    main_screen: Layers,
+    /// $212D TS: the layers on the sub screen.
+    sub_screen: Layers,
     /// $2130–$2132 CGWSEL, CGADSUB and COLDATA: colour math and the fixed colour.
     color_math: ColorMath,
     /// $2106 MOSAIC: the block size, the backgrounds it acts on and where its rows start.
@@ -155,8 +151,8 @@ impl Ppu {
             windows: Windows::power_on(),
             background_mode: BACKGROUND_MODE_POWER_ON,
             backgrounds: Backgrounds::power_on(),
-            main_screen: 0,
-            sub_screen: 0,
+            main_screen: Layers::empty(),
+            sub_screen: Layers::empty(),
             color_math: ColorMath::power_on(),
             mosaic: Mosaic::power_on(FIRST_OUTPUT_LINE),
             screen_mode: 0,
@@ -466,8 +462,8 @@ impl Ppu {
             | Register::WindowLogicObjectColor
             | Register::MainScreenWindow
             | Register::SubScreenWindow => self.windows.write(register, value),
-            Register::MainScreen => self.main_screen = value & SCREEN_LAYERS,
-            Register::SubScreen => self.sub_screen = value & SCREEN_LAYERS,
+            Register::MainScreen => self.main_screen = Layers::from_bits_truncate(value),
+            Register::SubScreen => self.sub_screen = Layers::from_bits_truncate(value),
             Register::Mosaic => self.mosaic.write(value, self.next_line),
             Register::ColorMathSelect | Register::ColorMathDesignation | Register::FixedColor => {
                 self.color_math.write(register, value);
@@ -593,22 +589,26 @@ impl Ppu {
         let main_layers = self.main_screen;
         // The sub screen matters where math adds it, and in every wide line.
         let sub_wanted = wide || (self.color_math.adds_sub_screen() && self.color_math.any_layer());
-        let sub_layers = if sub_wanted { self.sub_screen } else { 0 };
+        let sub_layers = if sub_wanted {
+            self.sub_screen
+        } else {
+            Layers::empty()
+        };
         // Modes 5 and 6 show other half-pixels of a background on each screen.
         let fetched = if hires_mode {
             main_layers
         } else {
             main_layers | sub_layers
         };
-        let sprite_layers = main_layers | sub_layers;
         // Evaluation always runs: its flags are readable state (EMU-06); the pixels only
         // when the sprites are on a screen that is looked at.
         let first = self.oam_port.first_sprite();
         let evaluated = self.sprites.evaluate(&self.oam, first, line);
         // Layer images take every layer that is on a screen, looked at or not.
         let screens = self.main_screen | self.sub_screen;
-        let captured = layers.as_ref().map_or(0, |_| screens);
-        let sprites = ((sprite_layers | captured) & SCREEN_SPRITES != 0)
+        let captured = layers.as_ref().map_or(Layers::empty(), |_| screens);
+        let sprites = (main_layers | sub_layers | captured)
+            .contains(Layers::SPRITES)
             .then(|| evaluated.pixels(&self.vram));
         if let Some(layers) = layers {
             self.capture_layers(layers, mode, setup, captured, line, sprites.as_ref());
@@ -644,7 +644,7 @@ impl Ppu {
             let main = self.front(Screen::Main, main_layers, order, &main_samples, sprite, x);
             let source = main.map_or(Source::Backdrop, |(source, _)| source);
             let mut color = main.map_or_else(|| self.color(0), |(_, sample)| self.resolve(sample));
-            let area = self.windows.area(Masked::Color, x);
+            let area = self.windows.color_area(x);
             let clipped = self.color_math.clips(area);
             if clipped {
                 color = Rgb555::BLACK;
@@ -690,7 +690,7 @@ impl Ppu {
         out: &mut LayerLine,
         mode: u8,
         setup: Setup,
-        screens: u8,
+        screens: Layers,
         line: u16,
         sprites: Option<&[Option<SpritePixel>; 256]>,
     ) {
@@ -699,13 +699,12 @@ impl Ppu {
             let column = usize::from(x);
             let samples = self.samples(mode, setup, screens, x, line, 1);
             for (background, sample) in Background::ALL.into_iter().zip(samples) {
-                let kind = LayerKind::ALL[background as usize];
-                if let Some(slot) = out.layer_mut(kind).get_mut(column) {
+                if let Some(slot) = out.layer_mut(LayerKind::from(background)).get_mut(column) {
                     *slot = sample.map(|sample| self.resolve(sample));
                 }
             }
             let sprite = sprites.and_then(|pixels| pixels.get(column).copied().flatten());
-            if screens & SCREEN_SPRITES != 0
+            if screens.contains(Layers::SPRITES)
                 && let Some(slot) = out.layer_mut(LayerKind::Sprites).get_mut(column)
             {
                 *slot = sprite.map(|pixel| self.color(pixel.index));
@@ -731,7 +730,7 @@ impl Ppu {
         &self,
         mode: u8,
         setup: Setup,
-        layers: u8,
+        layers: Layers,
         x: u16,
         line: u16,
         half: u16,
@@ -739,7 +738,7 @@ impl Ppu {
         let extbg = self.screen_mode & EXTBG != 0;
         let interlaced = self.screen_mode & INTERLACE != 0;
         Background::ALL.map(|background| {
-            if layers >> background as u8 & 1 == 0 {
+            if !layers.contains(Layers::from(background)) {
                 return None;
             }
             let (column, row) = self.mosaic.block(background, x, line);
@@ -786,7 +785,7 @@ impl Ppu {
     fn front(
         &self,
         screen: Screen,
-        layers: u8,
+        layers: Layers,
         order: &[Layer],
         samples: &[Option<Sample>; 4],
         sprite: Option<SpritePixel>,
@@ -794,8 +793,8 @@ impl Ppu {
     ) -> Option<(Source, Sample)> {
         order.iter().find_map(|layer| match *layer {
             Layer::Background { background, high } => {
-                let masked = self.windows.masked(screen, Masked::from(background), x);
-                if layers >> background as u8 & 1 == 0 || masked {
+                let masked = self.windows.masked(screen, LayerKind::from(background), x);
+                if !layers.contains(Layers::from(background)) || masked {
                     return None;
                 }
                 samples
@@ -803,10 +802,12 @@ impl Ppu {
                     .copied()
                     .flatten()
                     .filter(|sample| sample.high == high)
-                    .map(|sample| (Source::Background(background as u8), sample))
+                    .map(|sample| (Source::Background(background), sample))
             }
             Layer::Sprites(priority) => {
-                if layers & SCREEN_SPRITES == 0 || self.windows.masked(screen, Masked::Object, x) {
+                if !layers.contains(Layers::SPRITES)
+                    || self.windows.masked(screen, LayerKind::Sprites, x)
+                {
                     return None;
                 }
                 sprite
