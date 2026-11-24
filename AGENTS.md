@@ -15,6 +15,7 @@ Working rules for every contributor to sfes, human or coding assistant. Read [`P
 
   The id is a key in [`provenance/bibliography.toml`](provenance/bibliography.toml) or an ADR number in `docs/adr/`. The anchor after `#` names the section; each entry's `notes` give its anchor forms. Cite the most precise place the document offers: for a 65C816 cycle sequence that is the row of the datasheet's instruction-operation table (`wdc-w65c816s#table-5-7-1a`), not the table or the chapter.
 - An item's `@source:` lines list documents first, then ADRs in ascending order, each tag once; the order among documents is free. `cargo xtask provenance lint` checks it.
+- An item's doc comment comes first, then its `@source:` lines, then its attributes. A module's tags come before its `//!` doc.
 - Own test cartridges (`tests/carts/`, ADR 0013) are tagged the same way with `; @source:`: each source file in its leading comments, and each `.proc` and `.macro` in the comment lines directly above it. An expected value the cartridge checks itself cites its source beside it.
 - A test driven by test vectors cites the vector set (`sst-65816`, or `sst-65816#a9.n` for one file). Vectors are evidence, not a specification: the function under test still cites the document it was written from.
 - Read the cited section before writing the code. The source documents that cannot be redistributed are kept outside the repo by the project owner; if you cannot read the section, do not write the code.
@@ -28,6 +29,7 @@ Working rules for every contributor to sfes, human or coding assistant. Read [`P
 - [Conventional Commits](https://www.conventionalcommits.org/): `feat(ppu): …`, `fix(cpu): …`, `docs(adr): …`, `ci: …`, `chore: …`.
 - Every commit is signed off (`git commit -s`, DCO). When an assistant contributed, add a trailer naming it, e.g. `Assisted-by: Claude Code (claude-opus-5-5)`.
 - An ADR in `docs/adr/NNNN-title.md` is required for hardware ambiguities, new dependencies in chip or core crates, and any format change.
+- A doc comment or explainer that says a behaviour waits for another issue ("until #N", "not drawn yet") is updated in the PR that lands #N.
 - An accepted ADR is corrected in place only for a slip or a detail that leaves its decision's intent unchanged, with a dated line under its header saying what changed: `- **Amended:** 2026-11-21: …`. A changed decision is a new ADR that supersedes the old one.
 - Where a cited document is wrong (a slip, a misnumbered bit), the ADR that relies on that section says so, and the entry's `notes` in `provenance/bibliography.toml` list it under "known slips".
 - An ADR that changes or refines the [technical design](docs/design/technical-design.md) or the [feature specification](docs/design/feature-specification.md) updates that document in the same PR, with a citation such as "(ADR 0004)" at the changed text.
@@ -70,6 +72,7 @@ The [technical design](docs/design/technical-design.md)'s code sketches show sha
 
   CI checks formatting with this command.
 - **No glob imports of a module's items** (`use foo::*`), outside `use super::*` in tests. Enforced by `clippy::wildcard_imports` and `clippy::enum_glob_use`.
+- **Name enum variants by path** (`Background::One`, `Self::One`), not through `use Enum::{One, Two}`. A bare variant name in a pattern turns into a binding that matches anything once the import goes.
 - **Derives:** the std traits alphabetically, then other crates' traits path-qualified and alphabetical:
 
   ```rust
@@ -83,13 +86,15 @@ The [technical design](docs/design/technical-design.md)'s code sketches show sha
   ```
 
 - **Convert with `Type::from(value)` or `.map(Type::from)`**, not `.into()`. `Into::into` is listed in `clippy.toml`'s `disallowed-methods`. A widening integer conversion is `u32::from(value)`, not `as` (`clippy::cast_lossless`).
-- **A narrowing or sign-changing integer conversion is `as`**, with an `#[expect(clippy::cast_possible_truncation, reason = "…")]` (or the matching cast lint) on the smallest item around it saying why the value fits. Use `T::try_from` only where failure is a real case the code handles. `#[allow]` is denied and every `#[expect]` gives a reason (`clippy::allow_attributes`, `clippy::allow_attributes_without_reason`).
+- **A narrowing or sign-changing integer conversion is `as`**, with an `#[expect(clippy::cast_possible_truncation, reason = "…")]` (or the matching cast lint) on the smallest item around it saying why the value fits. Use `T::try_from` only where failure is a real case the code handles; never `T::try_from(value).unwrap_or_default()` (or `.ok()`, `let Ok … else`) for a value known to fit, which turns a bug into a silent 0. `#[allow]` is denied and every `#[expect]` gives a reason (`clippy::allow_attributes`, `clippy::allow_attributes_without_reason`).
 
   ```rust
   #[expect(clippy::cast_possible_truncation, reason = "a dot is below 341")]
   const fn dot_at(offset: u64) -> u16 { (offset / 4) as u16 }
   ```
 
+- **A register the code reads per pixel, per access or per cycle is decoded once, on write**, into typed state (enums, bitflags, newtypes), as `VramControl` is. One read rarely can stay the byte the CPU wrote.
+- **Registers whose bits index the same things share one type.** The PPU's TM, TS, TMW, TSW and CGADSUB bits 4–0 are all `Layers`, whose bit positions are the `LayerKind` values; a shift by a layer number is not written out at each use.
 - **A value from a fixed set is an enum or a newtype index**, not a raw `u8` or `usize`: a register, a port, a DMA channel, an access speed. When the hardware gives each variant a number, the enum is `#[repr(..)]` with explicit discriminants and is read with `as`, not a `match` that returns the same numbers. An array indexed by such a type cannot be indexed out of range.
 
   ```rust
@@ -119,7 +124,7 @@ The [technical design](docs/design/technical-design.md)'s code sketches show sha
   }
   ```
 
-- **Parameters and `let` bindings are full words**: `address`, `value`, `machine`, `index`, not `addr`, `v`, `m`, `i`. Generic type parameters (`A: Accuracy`, `O: Observer`) are the exception.
+- **Parameters, closure parameters and `let` bindings are full words**: `address`, `value`, `machine`, `index`, not `addr`, `v`, `m`, `i`, and `|sample| sample.color`, not `|s| s.color`. Generic type parameters (`A: Accuracy`, `O: Observer`) and the hardware's own coordinate names (`x`, `y`) are the exceptions.
 - **Hardware registers are named in full words, and their doc comment gives the address and the documents' mnemonic**, so a search by either still finds them:
 
   ```rust
