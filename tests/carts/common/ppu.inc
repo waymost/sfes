@@ -70,6 +70,27 @@
     stp
 .endmacro
 
+; Reads $4212 until `branch` falls through on bit 7, vertical blank, which the load puts
+; in N: bpl waits for vertical blank to begin, bmi for it to end (anomie-regs#4212).
+; @source: anomie-regs#4212, wdc-w65c816s#table-5-7-1a
+.macro wait_vblank branch
+.local loop
+loop:
+    lda a:$4212                 ; HVBJOY
+    branch loop
+.endmacro
+
+; hdma_channel channel, control, port, table: a direct channel reading `table` in bank $00
+; (anomie-regs#43x0, #43x1, #43x2, #43x4).
+; @source: anomie-regs#43x0, anomie-regs#43x1, anomie-regs#43x2, anomie-regs#43x4
+.macro hdma_channel channel, control, port, table
+    ppu_write $4300 + channel * $10, control
+    ppu_write $4301 + channel * $10, port
+    ppu_write $4302 + channel * $10, <table
+    ppu_write $4303 + channel * $10, >table
+    stz a:$4304 + channel * $10
+.endmacro
+
 ; One zero byte in RODATA for clear_vram's fixed-address DMA (ADR 0013).
 ; @source: adr-0013
 .pushseg
