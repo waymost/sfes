@@ -204,89 +204,85 @@ pub(crate) enum Layer {
 const fn layer(background: Background, high: bool) -> Layer {
     Layer::Background { background, high }
 }
-
-use Background::{Four, One, Three, Two};
-use Layer::Sprites;
-
 /// Mode 0, front to back (anomie-regs#backgrounds/mode-0).
 const MODE_0: [Layer; 12] = [
-    Sprites(Priority::Three),
-    layer(One, true),
-    layer(Two, true),
-    Sprites(Priority::Two),
-    layer(One, false),
-    layer(Two, false),
-    Sprites(Priority::One),
-    layer(Three, true),
-    layer(Four, true),
-    Sprites(Priority::Zero),
-    layer(Three, false),
-    layer(Four, false),
+    Layer::Sprites(Priority::Three),
+    layer(Background::One, true),
+    layer(Background::Two, true),
+    Layer::Sprites(Priority::Two),
+    layer(Background::One, false),
+    layer(Background::Two, false),
+    Layer::Sprites(Priority::One),
+    layer(Background::Three, true),
+    layer(Background::Four, true),
+    Layer::Sprites(Priority::Zero),
+    layer(Background::Three, false),
+    layer(Background::Four, false),
 ];
 /// Mode 1 with `$2105` bit 3 clear.
 const MODE_1: [Layer; 10] = [
-    Sprites(Priority::Three),
-    layer(One, true),
-    layer(Two, true),
-    Sprites(Priority::Two),
-    layer(One, false),
-    layer(Two, false),
-    Sprites(Priority::One),
-    layer(Three, true),
-    Sprites(Priority::Zero),
-    layer(Three, false),
+    Layer::Sprites(Priority::Three),
+    layer(Background::One, true),
+    layer(Background::Two, true),
+    Layer::Sprites(Priority::Two),
+    layer(Background::One, false),
+    layer(Background::Two, false),
+    Layer::Sprites(Priority::One),
+    layer(Background::Three, true),
+    Layer::Sprites(Priority::Zero),
+    layer(Background::Three, false),
 ];
 /// Mode 1 with `$2105` bit 3 set: BG3's high tiles in front.
 const MODE_1_BG3_FIRST: [Layer; 10] = [
-    layer(Three, true),
-    Sprites(Priority::Three),
-    layer(One, true),
-    layer(Two, true),
-    Sprites(Priority::Two),
-    layer(One, false),
-    layer(Two, false),
-    Sprites(Priority::One),
-    Sprites(Priority::Zero),
-    layer(Three, false),
+    layer(Background::Three, true),
+    Layer::Sprites(Priority::Three),
+    layer(Background::One, true),
+    layer(Background::Two, true),
+    Layer::Sprites(Priority::Two),
+    layer(Background::One, false),
+    layer(Background::Two, false),
+    Layer::Sprites(Priority::One),
+    Layer::Sprites(Priority::Zero),
+    layer(Background::Three, false),
 ];
 /// Modes 2 to 5.
 const TWO_BACKGROUNDS: [Layer; 8] = [
-    Sprites(Priority::Three),
-    layer(One, true),
-    Sprites(Priority::Two),
-    layer(Two, true),
-    Sprites(Priority::One),
-    layer(One, false),
-    Sprites(Priority::Zero),
-    layer(Two, false),
+    Layer::Sprites(Priority::Three),
+    layer(Background::One, true),
+    Layer::Sprites(Priority::Two),
+    layer(Background::Two, true),
+    Layer::Sprites(Priority::One),
+    layer(Background::One, false),
+    Layer::Sprites(Priority::Zero),
+    layer(Background::Two, false),
 ];
 /// Mode 6: BG1 alone.
 const MODE_6: [Layer; 6] = [
-    Sprites(Priority::Three),
-    layer(One, true),
-    Sprites(Priority::Two),
-    Sprites(Priority::One),
-    layer(One, false),
-    Sprites(Priority::Zero),
+    Layer::Sprites(Priority::Three),
+    layer(Background::One, true),
+    Layer::Sprites(Priority::Two),
+    Layer::Sprites(Priority::One),
+    layer(Background::One, false),
+    Layer::Sprites(Priority::Zero),
 ];
 
 /// Mode 7: BG1 alone.
 const MODE_7: [Layer; 5] = [
-    Sprites(Priority::Three),
-    Sprites(Priority::Two),
-    Sprites(Priority::One),
-    layer(One, false),
-    Sprites(Priority::Zero),
+    Layer::Sprites(Priority::Three),
+    Layer::Sprites(Priority::Two),
+    Layer::Sprites(Priority::One),
+    layer(Background::One, false),
+    Layer::Sprites(Priority::Zero),
 ];
 /// Mode 7 with EXTBG: BG2's high pixels, BG1, then BG2's low pixels.
 const MODE_7_EXTBG: [Layer; 7] = [
-    Sprites(Priority::Three),
-    Sprites(Priority::Two),
-    layer(Two, true),
-    Sprites(Priority::One),
-    layer(One, false),
-    Sprites(Priority::Zero),
-    layer(Two, false),
+    Layer::Sprites(Priority::Three),
+    Layer::Sprites(Priority::Two),
+    layer(Background::Two, true),
+    Layer::Sprites(Priority::One),
+    layer(Background::One, false),
+    Layer::Sprites(Priority::Zero),
+    layer(Background::Two, false),
 ];
 
 /// The registers of BG1 to BG4, and the write-twice latch their scrolls share.
@@ -383,7 +379,7 @@ pub(crate) enum Color {
 
 impl Background {
     /// All four, BG1 first.
-    pub(crate) const ALL: [Self; 4] = [One, Two, Three, Four];
+    pub(crate) const ALL: [Self; 4] = [Self::One, Self::Two, Self::Three, Self::Four];
 }
 
 /// The layers of `background_mode` from front to back, sprites among them (ADR 0033,
@@ -424,11 +420,13 @@ pub(crate) const fn priority_order(
 // @source: adr-0036
 const fn depth(mode: Mode, background: Background) -> Option<Depth> {
     match (mode, background) {
-        (Mode::Zero, _) | (Mode::One, Three) | (Mode::Four | Mode::Five, Two) => Some(Depth::Two),
-        (Mode::One | Mode::Two, One | Two) | (Mode::Three, Two) | (Mode::Five | Mode::Six, One) => {
-            Some(Depth::Four)
-        }
-        (Mode::Three | Mode::Four, One) => Some(Depth::Eight),
+        (Mode::Zero, _)
+        | (Mode::One, Background::Three)
+        | (Mode::Four | Mode::Five, Background::Two) => Some(Depth::Two),
+        (Mode::One | Mode::Two, Background::One | Background::Two)
+        | (Mode::Three, Background::Two)
+        | (Mode::Five | Mode::Six, Background::One) => Some(Depth::Four),
+        (Mode::Three | Mode::Four, Background::One) => Some(Depth::Eight),
         _ => None,
     }
 }
