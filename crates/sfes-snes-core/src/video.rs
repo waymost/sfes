@@ -182,8 +182,13 @@ impl Video {
             self.layer_frame.clear();
         }
         self.layers_complete = false;
-        self.width = u16::try_from(width.pixels()).unwrap_or(u16::MAX);
-        self.height = u16::try_from(count * rows).unwrap_or(u16::MAX);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a line is at most 512 pixels, and a frame at most 239 lines of 2 rows"
+        )]
+        let (width, height) = (width.pixels() as u16, (count * rows) as u16);
+        self.width = width;
+        self.height = height;
         self.field = (rows == 2).then_some(field);
     }
 

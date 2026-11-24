@@ -1495,8 +1495,8 @@ mod tests {
         for record in ppu.oam.chunks_mut(4).take(33) {
             record.copy_from_slice(&[0, 128, 0, 0]);
         }
-        for (index, record) in ppu.oam.chunks_mut(4).take(9).enumerate() {
-            record.copy_from_slice(&[u8::try_from(index * 8).unwrap_or_default(), 0, 0, 0]);
+        for (x, record) in (0..9).map(|index| index * 8).zip(ppu.oam.chunks_mut(4)) {
+            record.copy_from_slice(&[x, 0, 0, 0]);
         }
         ppu.write(Register::ObjectSelect, 0xA2);
         ppu.render_line(1, &mut out);

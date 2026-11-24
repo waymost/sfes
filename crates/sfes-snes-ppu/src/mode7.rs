@@ -246,11 +246,15 @@ impl Mode7 {
         } else {
             let column = (across & PLAYFIELD_MASK) / 8;
             let row = (down & PLAYFIELD_MASK) / 8;
-            let word = u32::try_from(row * MAP_TILES + column).unwrap_or_default();
+            #[expect(
+                clippy::cast_sign_loss,
+                reason = "the row and column are masked to 0..=127"
+            )]
+            let word = (row * MAP_TILES + column) as u32;
             vram.byte(word * 2)
         };
-        let within =
-            u32::try_from((down & TILE_MASK) * 8 + (across & TILE_MASK)).unwrap_or_default();
+        #[expect(clippy::cast_sign_loss, reason = "both parts are masked to 0..=7")]
+        let within = ((down & TILE_MASK) * 8 + (across & TILE_MASK)) as u32;
         vram.byte((u32::from(character) * 64 + within) * 2 + 1)
     }
 
