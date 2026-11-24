@@ -168,6 +168,12 @@ sha256 = "dd4424dcb6072e516520a6089c95828568c1e5fa150cd1643d80dee1847cdba1"
 notes = "Own test cartridge: PPU registers changed mid-frame by three HDMA channels (BGMODE, BG1HOFS and INIDISP in 16-line bands, forced blank and brightness 7 included), and a VRAM write outside vertical and forced blank that the PPU refuses. Built from tests/carts/ppu-hdma/ by `cargo xtask carts build` (ADR 0013)."
 
 [[asset]]
+path = "carts/bg-mode7-bands.sfc"
+license = "own"
+sha256 = "f23b515200e30d6375a70cc9e7a779c3c561285a672a63d10e5a4a2a76201529"
+notes = "Own test cartridge: Mode 7 by band from eight HDMA channels: the identity matrix, the horizontal and vertical flips, wrap, transparent and character-0 fill outside the playfield, B and C swapping the axes, and EXTBG's BG2 in front of BG1. Built from tests/carts/bg-mode7-bands/ by `cargo xtask carts build` (ADR 0013)."
+
+[[asset]]
 path = "third-party/gilyon/LICENSE"
 license = "MIT"
 source_url = "https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"

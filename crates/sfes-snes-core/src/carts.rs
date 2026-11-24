@@ -413,6 +413,65 @@ fn assert_picture(
     }
 }
 
+// @source: anomie-regs#210d
+// @source: anomie-regs#211a
+// @source: anomie-regs#211b
+// @source: anomie-regs#2133
+// @source: anomie-regs#backgrounds/mode-7
+// @source: anomie-regs#dma-and-hdma/hdma
+// @source: fullsnes#snesppurotationscaling
+// @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
+// @source: adr-0013
+// @source: adr-0026
+// @source: adr-0028
+// @source: adr-0032
+#[test]
+fn bg_mode_7_bands_cart_flips_swaps_axes_fills_outside_and_shows_extbg() {
+    let snes = drawn(include_bytes!(
+        "../../../tests/assets/carts/bg-mode7-bands.sfc"
+    ));
+    // Every map row is the same: column 0 red, 1 blue, 127 character 4, the rest clear. Line
+    // L, column x is SX = x and SY = L, flipped by M7SEL, and with no centre the position is
+    // X = A*(HOFS + SX) + B*(VOFS + SY), Y = C*(HOFS + SX) + D*(VOFS + SY) (ADR 0032,
+    // point 2). Band n is rows 16n to 16n + 15, lines 16n + 1 on (ADR 0028, point 6).
+    //   0: X = x. Columns 0 and 1 are pixels 0 to 15.
+    //   1: X = 255 - x. Column 0 is pixels 255 to 248, column 1 247 to 240.
+    //   2: X = x - 8. Pixels 0 to 7 are X -8 to -1, which wraps to column 127, character
+    //      4, BG1's cyan (ADR 0032, point 3).
+    //   3: outside is transparent: the backdrop.
+    //   4: outside is character 0: magenta.
+    //   5: X = L - 81 and Y = x: line 81 on is column 0 whole, line 89 on column 1.
+    //   6: SY = L ^ $FF, so X = 112 - L: lines 97 to 104 are column 1, 105 to 112 column 0.
+    //   7: as 2, with EXTBG's BG2 on: character 4's $84 is BG2 entry 4 at priority 1, in
+    //      front of BG1 (yellow); the others are priority 0, behind BG1, and the same
+    //      colour (ADR 0032, point 5).
+    let straight = runs(&[(RED, 8), (BLUE, 8)], WHITE);
+    let flipped = runs(&[(WHITE, 240), (BLUE, 8), (RED, 8)], WHITE);
+    let wrapped = runs(&[(CYAN, 8), (RED, 8), (BLUE, 8)], WHITE);
+    let transparent = runs(&[(WHITE, 8), (RED, 8), (BLUE, 8)], WHITE);
+    let filled = runs(&[(MAGENTA, 8), (RED, 8), (BLUE, 8)], WHITE);
+    let red = vec![RED; LINE_COLUMNS];
+    let blue = vec![BLUE; LINE_COLUMNS];
+    let extbg = runs(&[(YELLOW, 8), (RED, 8), (BLUE, 8)], WHITE);
+    assert_picture(
+        &snes,
+        256,
+        &[
+            (0..16, Some(&straight)),
+            (16..32, Some(&flipped)),
+            (32..48, Some(&wrapped)),
+            (48..64, Some(&transparent)),
+            (64..80, Some(&filled)),
+            (80..88, Some(&red)),
+            (88..96, Some(&blue)),
+            (96..104, Some(&blue)),
+            (104..112, Some(&red)),
+            (112..PICTURE_ROWS, Some(&extbg)),
+        ],
+        WHITE,
+    );
+}
+
 // @source: anomie-regs#2105
 // @source: anomie-regs#210d
 // @source: anomie-regs#211b

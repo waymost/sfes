@@ -1,0 +1,2 @@
+# Board and linker configuration for this cartridge (ADR 0013).
+board = "lorom"
