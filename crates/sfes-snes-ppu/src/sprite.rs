@@ -9,18 +9,14 @@
 //! Sprites: `$2101 OBSEL`, the per-line evaluation with its 32-sprite and 34-tile limits
 //! and the flags in `$213E`, and the pixels of the tiles that evaluation loads (ADR 0033).
 
-use crate::memory::Vram;
+use crate::memory::{OAM_ENTRY_BYTES, OAM_HIGH_TABLE, SPRITE_COUNT, Vram};
 
-/// How many sprites OAM holds.
-const SPRITE_COUNT: u8 = 128;
 /// A sprite index has 7 bits.
-const INDEX_MASK: u8 = 0x7F;
+const INDEX_MASK: u8 = SPRITE_COUNT - 1;
 /// How many sprites in range a line keeps.
 const MAX_SPRITES: usize = 32;
 /// How many tiles a line loads.
 const MAX_TILES: usize = 34;
-/// Where OAM's high table starts.
-const HIGH_TABLE: usize = 0x200;
 /// `$2101` bits 7–5: the size pair.
 const SIZE_SHIFT: u8 = 5;
 /// `$2101` bits 4–3: the gap before the second tile table.
@@ -54,9 +50,9 @@ const WRAPPED_X: i16 = -256;
 /// A sprite's Y and a line's row have 8 bits.
 const ROW_MASK: u16 = 0xFF;
 /// The first CGRAM entry of the sprites' palettes.
-const PALETTE_START: u8 = 128;
+pub(crate) const PALETTE_START: u8 = 128;
 /// The size of a palette.
-const PALETTE_COLORS: u8 = 16;
+pub(crate) const PALETTE_COLORS: u8 = 16;
 /// OAM attribute bits 5–4: the priority.
 const PRIORITY_SHIFT: u8 = 4;
 
@@ -143,8 +139,8 @@ impl Sprite {
     // @source: adr-0033
     fn read(oam: &[u8], select: u8, index: u8) -> Self {
         let at = |offset: usize| oam.get(offset).copied().unwrap_or_default();
-        let base = usize::from(index) * 4;
-        let high = at(HIGH_TABLE + usize::from(index) / 4) >> ((index % 4) * 2);
+        let base = usize::from(index) * usize::from(OAM_ENTRY_BYTES);
+        let high = at(usize::from(OAM_HIGH_TABLE) + usize::from(index) / 4) >> ((index % 4) * 2);
         // A 9-bit two's complement number: bit 8 weighs -256.
         let x = i16::from(at(base)) - if high & 1 != 0 { 256 } else { 0 };
         let large = usize::from(high & 2 != 0);
@@ -446,7 +442,8 @@ mod tests {
         let shift = (index % 4) * 2;
         let x_high = u8::try_from(x >> 8).unwrap_or_default();
         let bits = (x_high | (u8::from(large) << 1)) << shift;
-        oam[0x200 + index / 4] = (oam[0x200 + index / 4] & !(3 << shift)) | bits;
+        let high = usize::from(OAM_HIGH_TABLE) + index / 4;
+        oam[high] = (oam[high] & !(3 << shift)) | bits;
     }
 
     // @source: anomie-regs#2101

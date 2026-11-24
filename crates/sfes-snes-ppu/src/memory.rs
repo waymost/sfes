@@ -20,8 +20,16 @@ use sfes_api::Rgb555;
 pub const VRAM_SIZE: usize = 0x1_0000;
 /// CGRAM: 256 colours of 2 bytes.
 pub const CGRAM_SIZE: usize = 0x200;
+/// How many sprites OAM holds.
+pub(crate) const SPRITE_COUNT: u8 = 128;
+/// The bytes of one sprite's entry in OAM's low table.
+pub(crate) const OAM_ENTRY_BYTES: u16 = 4;
+/// Where OAM's high table starts: after the low table's entries, at `$200`.
+pub(crate) const OAM_HIGH_TABLE: u16 = SPRITE_COUNT as u16 * OAM_ENTRY_BYTES;
+/// The high table holds 2 bits for each sprite: 32 bytes.
+const OAM_HIGH_TABLE_SIZE: u16 = SPRITE_COUNT as u16 / 4;
 /// OAM: 512 bytes of sprite entries and a 32-byte high table.
-pub const OAM_SIZE: usize = 0x220;
+pub const OAM_SIZE: usize = (OAM_HIGH_TABLE + OAM_HIGH_TABLE_SIZE) as usize;
 /// VRAM word addresses have 15 bits: bit 15 is not connected.
 const VRAM_WORD_MASK: u16 = 0x7FFF;
 /// VRAM byte addresses have 16 bits.
@@ -34,10 +42,8 @@ const CGRAM_ADDRESS_MASK: u16 = 0x1FF;
 const CGRAM_HIGH_MASK: u8 = 0x7F;
 /// OAM byte addresses have 10 bits.
 const OAM_ADDRESS_MASK: u16 = 0x3FF;
-/// Where OAM's high table starts.
-const OAM_HIGH_TABLE: u16 = 0x200;
 /// The high table's 32 bytes, mirrored up to `$3FF`.
-const OAM_HIGH_TABLE_MASK: u16 = 0x1F;
+const OAM_HIGH_TABLE_MASK: u16 = OAM_HIGH_TABLE_SIZE - 1;
 /// `$2103` bit 7: the priority bit.
 const OAM_PRIORITY: u8 = 0x80;
 /// `$2103` bit 0: bit 8 of the reload value.
