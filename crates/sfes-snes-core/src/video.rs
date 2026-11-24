@@ -128,11 +128,14 @@ mod tests {
 
     use super::*;
 
-    /// A PPU whose backdrop is `color`.
+    /// A PPU with the screen on at full brightness, whose backdrop is `color`.
+    // @source: anomie-regs#2100
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0028
-    fn ppu(color: u16) -> Ppu {
+    // @source: adr-0035
+    fn ppu(color: Rgb555) -> Ppu {
         let mut ppu = Ppu::power_on(&mut SplitMix64::new(0));
+        ppu.write(Register::DisplayControl, 0x0F);
         set_backdrop(&mut ppu, color);
         ppu
     }
@@ -140,21 +143,21 @@ mod tests {
     /// Sets the backdrop, CGRAM entry 0, to `color`.
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     // @source: adr-0028
-    fn set_backdrop(ppu: &mut Ppu, color: u16) {
+    fn set_backdrop(ppu: &mut Ppu, color: Rgb555) {
         ppu.cgram_mut()[..2].copy_from_slice(&color.to_le_bytes());
     }
 
     /// `bits` as a pixel.
     // @source: fullsnes#snesppucolorpalettememorycgramanddirectcolors
     fn pixel(bits: u16) -> Rgb555 {
-        Rgb555::new(bits).unwrap()
+        Rgb555::from_bits_truncate(bits)
     }
 
     // @source: anomie-timing#s-ppu/rendering
     // @source: adr-0028
     #[test]
     fn a_plain_frame_is_256_by_its_line_count() {
-        let mut ppu = ppu(0x1234);
+        let mut ppu = ppu(pixel(0x1234));
         let mut video = Video::default();
         for line in 1..=224 {
             video.render(&mut ppu, line);
@@ -177,12 +180,12 @@ mod tests {
     // @source: adr-0028
     #[test]
     fn one_wide_line_makes_the_frame_512_and_doubles_the_others() {
-        let mut ppu = ppu(0x0001);
+        let mut ppu = ppu(pixel(0x0001));
         let mut video = Video::default();
         for line in 1..=239 {
             if line == 100 {
                 ppu.write(Register::BackgroundMode, 0x05);
-                set_backdrop(&mut ppu, 0x0002);
+                set_backdrop(&mut ppu, pixel(0x0002));
             }
             if line == 101 {
                 ppu.write(Register::BackgroundMode, 0x01);
@@ -208,11 +211,11 @@ mod tests {
     // @source: adr-0028
     #[test]
     fn interlace_fills_two_rows_per_line_from_this_frame_only() {
-        let mut ppu = ppu(0x0003);
+        let mut ppu = ppu(pixel(0x0003));
         ppu.write(Register::ScreenMode, 0x01);
         let mut video = Video::default();
         for line in 1..=224_u16 {
-            set_backdrop(&mut ppu, line);
+            set_backdrop(&mut ppu, pixel(line));
             video.render(&mut ppu, line);
         }
         video.present(224, Field::First);
@@ -232,7 +235,7 @@ mod tests {
     // @source: adr-0028
     #[test]
     fn a_frame_missing_a_line_is_not_presented() {
-        let mut ppu = ppu(0x0004);
+        let mut ppu = ppu(pixel(0x0004));
         let mut video = Video::default();
         for line in 1..=224 {
             video.render(&mut ppu, line);
@@ -250,7 +253,7 @@ mod tests {
         copy.present(224, Field::First);
         assert_eq!(copy.frame().width, 0);
         video.abandon();
-        set_backdrop(&mut ppu, 0x0005);
+        set_backdrop(&mut ppu, pixel(0x0005));
         video.present(224, Field::First);
         assert!(
             video

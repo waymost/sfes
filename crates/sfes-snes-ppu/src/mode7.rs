@@ -297,6 +297,8 @@ impl Mode7 {
 mod tests {
     use alloc::{vec, vec::Vec};
 
+    use sfes_api::Rgb555;
+
     use super::*;
 
     // @source: anomie-regs#211b
@@ -552,7 +554,7 @@ mod tests {
         let direct = mode7.samples(&vram, true, true, 3, 1);
         assert_eq!(
             direct[0].map(|sample| sample.color),
-            Some(Color::Direct(0x6008))
+            Some(Color::Direct(Rgb555::from_bits_truncate(0x6008)))
         );
         assert_eq!(direct[1], Some(two));
     }

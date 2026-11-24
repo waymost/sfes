@@ -1269,15 +1269,19 @@ fn ppu1_open_bus_answers_its_write_only_registers_and_ppu2_follows_the_counters(
     assert_eq!(read(&mut bus, 0x00_213D), 0xFE);
 }
 
+// @source: anomie-regs#2100
 // @source: anomie-timing#s-ppu/rendering
 // @source: adr-0028
+// @source: adr-0035
 #[test]
 fn a_line_is_drawn_when_the_ppu_is_synced_after_it_starts_or_when_the_frame_ends() {
     let mut bus = bus();
     bus.ppu.cgram_mut()[..2].copy_from_slice(&[0x11, 0x00]);
+    // Forced blank is on at power-on and draws black: turn the screen on at full brightness.
+    write(&mut bus, 0x00_2100, 0x0F);
     idle_to_line(&mut bus, 10);
     // A write to any PPU register syncs it: lines 1 to 10 are drawn with colour $0011.
-    write(&mut bus, 0x00_2100, 0x00);
+    write(&mut bus, 0x00_2100, 0x0F);
     assert_eq!(bus.ppu.next_line(), 11);
     // A CGRAM change that does not pass through the bus reaches only later lines.
     bus.ppu.cgram_mut()[..2].copy_from_slice(&[0x22, 0x00]);
@@ -1290,7 +1294,7 @@ fn a_line_is_drawn_when_the_ppu_is_synced_after_it_starts_or_when_the_frame_ends
     assert!(pixels[10 * 256..].iter().all(|&pixel| pixel == later));
     // Vertical blank draws nothing, and the next frame starts from line 1.
     assert_eq!(bus.ppu.next_line(), 1);
-    write(&mut bus, 0x00_2100, 0x00);
+    write(&mut bus, 0x00_2100, 0x0F);
     assert_eq!(bus.ppu.next_line(), 1);
 }
 
