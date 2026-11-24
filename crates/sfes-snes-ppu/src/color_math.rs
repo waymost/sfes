@@ -308,8 +308,13 @@ impl ColorMath {
                 i16::from(left) + i16::from(right)
             };
             let sum = if halves { sum >> 1 } else { sum };
-            // Clamped to 0..=31, so it fits.
-            u8::try_from(sum.clamp(0, i16::from(CHANNEL_MAX))).unwrap_or_default()
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "clamped to 0..=31"
+            )]
+            let channel = sum.clamp(0, i16::from(CHANNEL_MAX)) as u8;
+            channel
         })
     }
 }
@@ -345,9 +350,10 @@ pub(crate) fn dim(color: Rgb555, control: u8) -> Rgb555 {
     if level == 0 {
         return Rgb555::BLACK;
     }
-    // At most 31 * 16 / 16, so it fits.
     color.map(|channel| {
-        u8::try_from(u16::from(channel) * (u16::from(level) + 1) / 16).unwrap_or_default()
+        #[expect(clippy::cast_possible_truncation, reason = "at most 31 * 16 / 16")]
+        let dimmed = (u16::from(channel) * (u16::from(level) + 1) / 16) as u8;
+        dimmed
     })
 }
 

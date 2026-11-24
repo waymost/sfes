@@ -96,7 +96,7 @@ impl Vram {
     // @source: anomie-regs#backgrounds/tile-maps-and-character-maps
     // @source: adr-0030
     pub(crate) fn byte(&self, address: u32) -> u8 {
-        let offset = usize::try_from(address & VRAM_BYTE_MASK).unwrap_or_default();
+        let offset = (address & VRAM_BYTE_MASK) as usize;
         self.0.get(offset).copied().unwrap_or_default()
     }
 

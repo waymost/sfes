@@ -177,8 +177,9 @@ impl Sprite {
     // @source: fullsnes#snespputimersandstatus
     // @source: adr-0033
     fn row_on(self, line: u16) -> Option<i16> {
-        let row = line.wrapping_sub(1).wrapping_sub(u16::from(self.y)) & ROW_MASK;
-        i16::try_from(row).ok().filter(|&row| row < self.height)
+        #[expect(clippy::cast_possible_wrap, reason = "masked to 8 bits")]
+        let row = (line.wrapping_sub(1).wrapping_sub(u16::from(self.y)) & ROW_MASK) as i16;
+        (row < self.height).then_some(row)
     }
 
     /// The X range and time use: -256 counts as 0.
@@ -257,15 +258,14 @@ impl Line {
             let high = vram.word(tile.word.wrapping_add(PLANE_PAIR_WORDS));
             for column in 0..TILE_PIXELS {
                 // Bit 7 is the left pixel, unless the tile is flipped.
-                let bit =
-                    u32::try_from(if tile.flip { column } else { 7 - column }).unwrap_or_default();
+                #[expect(clippy::cast_sign_loss, reason = "a column is 0..=7")]
+                let bit = (if tile.flip { column } else { 7 - column }) as u32;
                 let value = ((low >> bit) & 1)
                     | (((low >> (8 + bit)) & 1) << 1)
                     | (((high >> bit) & 1) << 2)
                     | (((high >> (8 + bit)) & 1) << 3);
-                let Ok(value) = u8::try_from(value) else {
-                    continue;
-                };
+                #[expect(clippy::cast_possible_truncation, reason = "four 1-bit planes")]
+                let value = value as u8;
                 if value == 0 {
                     continue;
                 }
@@ -383,8 +383,12 @@ impl Sprites {
     // @source: fullsnes#snesppuspritesobjs
     // @source: adr-0033
     fn tile(self, sprite: Sprite, source_column: i16, source_row: i16, column: i16) -> Tile {
-        let tile_row = u8::try_from(source_row / TILE_PIXELS).unwrap_or_default();
-        let tile_column = u8::try_from(source_column).unwrap_or_default();
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a sprite is at most 64 pixels, 8 tiles, across and down"
+        )]
+        let (tile_row, tile_column) = ((source_row / TILE_PIXELS) as u8, source_column as u8);
         // The 16 by 16 table has no carry from a column to the row or from the row out.
         let number_row = (sprite.tile >> TILE_SHIFT).wrapping_add(tile_row) & 0x0F;
         let number_column = (sprite.tile & 0x0F).wrapping_add(tile_column) & 0x0F;
@@ -398,7 +402,8 @@ impl Sprites {
         let first = base
             .wrapping_add(u16::from(number) << TILE_SHIFT)
             .wrapping_add(name);
-        let pixel_row = u16::try_from(source_row % TILE_PIXELS).unwrap_or_default();
+        #[expect(clippy::cast_sign_loss, reason = "a row is not negative")]
+        let pixel_row = (source_row % TILE_PIXELS) as u16;
         Tile {
             x: sprite.x + column * TILE_PIXELS,
             word: first.wrapping_add(pixel_row),
@@ -444,14 +449,13 @@ mod tests {
     // @source: adr-0033
     /// Sets sprite `index`: position, tile and attributes, with its high-table bits.
     fn put(oam: &mut [u8], index: usize, x: i16, y: u8, tile: u8, attributes: u8, large: bool) {
-        let x = u16::from_le_bytes(x.to_le_bytes()) & 0x1FF;
-        oam[index * 4] = u8::try_from(x & 0xFF).unwrap_or_default();
+        let [x_low, x_high] = x.to_le_bytes();
+        oam[index * 4] = x_low;
         oam[index * 4 + 1] = y;
         oam[index * 4 + 2] = tile;
         oam[index * 4 + 3] = attributes;
         let shift = (index % 4) * 2;
-        let x_high = u8::try_from(x >> 8).unwrap_or_default();
-        let bits = (x_high | (u8::from(large) << 1)) << shift;
+        let bits = ((x_high & 1) | (u8::from(large) << 1)) << shift;
         let high = usize::from(OAM_HIGH_TABLE) + index / 4;
         oam[high] = (oam[high] & !(3 << shift)) | bits;
     }
