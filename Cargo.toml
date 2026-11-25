@@ -29,6 +29,12 @@ blake3 = { version = "1.8.7", default-features = false }
 serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
 thiserror = { version = "2.0.21", default-features = false }
 
+# Reference player only (PROV-08: never a dependency of a library crate)
+clap = { version = "4.6.10", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+pollster = "1.0.3"
+wgpu = "30.0.2"
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+
 # Tooling (xtask)
 anyhow = "1.0.104"
 cargo_metadata = "0.23.1"
