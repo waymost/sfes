@@ -1,0 +1,16 @@
+rom = "carts/hires.sfc"
+rom_sha256 = "095059edeb6ec2e488d115cdaefe15d36ca6c18b820f6a5edf9f30e2b02aab89"
+
+[[checkpoint]]
+frame = 10
+width = 512
+height = 224
+blake3 = "015f585e1e0b3272d1283d9c35cd37ea01a54ae32e0c76c08362ccd739aa8142"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 512
+height = 224
+blake3 = "015f585e1e0b3272d1283d9c35cd37ea01a54ae32e0c76c08362ccd739aa8142"
+status = "unverified"

@@ -40,6 +40,9 @@ commands:
   golden --update [name…]
                        rerun goldens in tests/assets/golden/ and rewrite changed checkpoints as
                        unverified (ADR 0015)
+  golden --new <name> <rom> <frame>…
+                       write tests/assets/golden/<name>.toml for a ROM (path relative to
+                       tests/assets/) with an unverified checkpoint at each frame (ADR 0015)
   golden --png <name> <frame>
                        write a golden's frame to target/golden/<name>-<frame>.png
   carts build          assemble the own test cartridges into tests/assets/carts/ (ADR 0013)
@@ -82,6 +85,9 @@ fn run() -> Result<bool> {
         ["vectors", "lock", set] => ("vectors lock", vectors::lock(&root, Some(set))?),
         ["roms", "fetch"] => ("roms fetch", roms::fetch(&root)?),
         ["golden", "--update", names @ ..] => ("golden --update", golden::update(&root, names)?),
+        ["golden", "--new", name, rom, frames @ ..] if !frames.is_empty() => {
+            ("golden --new", golden::new(&root, name, rom, frames)?)
+        }
         ["golden", "--png", name, frame] => ("golden --png", golden::png(&root, name, frame)?),
         ["carts", "build"] => ("carts build", carts::build(&root)?),
         ["carts", "check"] => ("carts check", carts::check(&root)?),

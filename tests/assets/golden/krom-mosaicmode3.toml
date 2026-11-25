@@ -1,0 +1,16 @@
+rom = "fetched/krom/MosaicMode3.sfc"
+rom_sha256 = "6deebf7ddbe46392d900914dd69e6a060d868e9cc7436a486987c1fb868885db"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "9c3358213ee9d39c38172ca48b3d62107387658b88eb2a8d21291f4f3b4d6ccb"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "9c3358213ee9d39c38172ca48b3d62107387658b88eb2a8d21291f4f3b4d6ccb"
+status = "unverified"

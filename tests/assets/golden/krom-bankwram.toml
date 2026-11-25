@@ -1,0 +1,16 @@
+rom = "fetched/krom/BANKWRAM.sfc"
+rom_sha256 = "6ee3c92304298e5b6b083f1309285d5b8a75ad4287220ba16d1eb7df01167b06"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "61974dad663eca60c20c8c0dbc79e91bf61b1087ebe81943d9beb5f64a404512"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "61974dad663eca60c20c8c0dbc79e91bf61b1087ebe81943d9beb5f64a404512"
+status = "unverified"

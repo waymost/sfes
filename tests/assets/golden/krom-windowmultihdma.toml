@@ -1,0 +1,16 @@
+rom = "fetched/krom/WindowMultiHDMA.sfc"
+rom_sha256 = "1bacb0c050a42c8ba3a53268f1bf74cd8889234ca904e195490adf3bf682f363"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "2d0acaa2eaa41bb69c15bec34fc1ab47c253921518fead0a6c296a32acf68db8"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "2d0acaa2eaa41bb69c15bec34fc1ab47c253921518fead0a6c296a32acf68db8"
+status = "unverified"

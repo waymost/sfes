@@ -1,0 +1,16 @@
+rom = "fetched/krom/Perspective.sfc"
+rom_sha256 = "cf31c9af58af91bd3541b1ee4133fca3379ea93416a7ed718bc21d3a5044422a"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "3f383ce0105e01ba8138f40e3ab1e15a01f6803d63a078cbe69fe3dec620a3e4"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "3f383ce0105e01ba8138f40e3ab1e15a01f6803d63a078cbe69fe3dec620a3e4"
+status = "unverified"

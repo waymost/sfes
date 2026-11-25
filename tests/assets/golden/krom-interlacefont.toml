@@ -1,0 +1,16 @@
+rom = "fetched/krom/InterlaceFont.sfc"
+rom_sha256 = "097e4c79fbf351c8e8b74c73ce3d60752ec5f8691185f46737aac786f45dd36c"
+
+[[checkpoint]]
+frame = 60
+width = 512
+height = 448
+blake3 = "989f8aa29225ba0b7e06da445c97c1df0825dc673f95dbee58c13649980c29ab"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 512
+height = 448
+blake3 = "989f8aa29225ba0b7e06da445c97c1df0825dc673f95dbee58c13649980c29ab"
+status = "unverified"

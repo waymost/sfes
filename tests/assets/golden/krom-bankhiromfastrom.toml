@@ -1,0 +1,16 @@
+rom = "fetched/krom/BANKHiROMFastROM.sfc"
+rom_sha256 = "676f859ffcbe5b903e30049db04c479c5dd41b8bc1bd14485d735f9d185dc8c5"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "5159c16754af44f69d753d165b0ccf882be084942ab3bcad389addc99a76ecc9"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "5159c16754af44f69d753d165b0ccf882be084942ab3bcad389addc99a76ecc9"
+status = "unverified"

@@ -17,7 +17,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use sfes_test_harness::{
     golden::{self, Frame, Golden, Rgb555},
-    roms::Rom,
+    roms::{self, Rom},
 };
 
 use crate::finding::Finding;
@@ -61,6 +61,36 @@ pub(crate) fn update(root: &Path, names: &[&str]) -> Result<Vec<Finding>> {
     Ok(findings)
 }
 
+/// `cargo xtask golden --new <name> <rom> <frame>…`: writes `<name>.toml` for the ROM at `rom`
+/// (relative to `tests/assets/`) with a checkpoint at each frame. It never replaces a file; add
+/// `[[input]]` tables by hand and run `--update` to refresh the hashes.
+pub(crate) fn new(root: &Path, name: &str, rom: &str, frames: &[&str]) -> Result<Vec<Finding>> {
+    let target = root.join(GOLDEN).join(format!("{name}.toml"));
+    golden_path_name(name)?;
+    if target.exists() {
+        bail!("{GOLDEN}/{name}.toml exists; use --update to refresh it");
+    }
+    let frames = frames
+        .iter()
+        .map(|frame| {
+            frame
+                .parse::<u32>()
+                .with_context(|| format!("{frame:?} is not a frame number"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let bytes = match roms::load(rom)? {
+        Rom::Present(bytes) => bytes,
+        Rom::Skipped(message) => bail!("{message}"),
+    };
+    let mut machine = golden::boot(&bytes)?;
+    let made = golden::create(rom, &bytes, Vec::new(), &frames, machine.as_mut())?;
+    let text = made.to_toml().context("writing the golden as TOML")?;
+    fs::create_dir_all(root.join(GOLDEN)).context("creating the golden directory")?;
+    fs::write(&target, text).with_context(|| format!("writing {}", target.display()))?;
+    println!("wrote {}", display(root, &target));
+    Ok(Vec::new())
+}
+
 /// `cargo xtask golden --png <name> <frame>`.
 pub(crate) fn png(root: &Path, name: &str, frame: &str) -> Result<Vec<Finding>> {
     let frame = frame
@@ -86,8 +116,8 @@ pub(crate) fn png(root: &Path, name: &str, frame: &str) -> Result<Vec<Finding>> 
     Ok(findings)
 }
 
-/// The golden file named `name`, which must exist.
-fn golden_path(root: &Path, name: &str) -> Result<PathBuf> {
+/// Checks that `name` is a plain file name.
+fn golden_path_name(name: &str) -> Result<()> {
     let plain = !name.is_empty()
         && name
             .bytes()
@@ -96,6 +126,12 @@ fn golden_path(root: &Path, name: &str) -> Result<PathBuf> {
     if !plain {
         bail!("{name:?} is not a golden name: use the file name in {GOLDEN}/ without .toml");
     }
+    Ok(())
+}
+
+/// The golden file named `name`, which must exist.
+fn golden_path(root: &Path, name: &str) -> Result<PathBuf> {
+    golden_path_name(name)?;
     let path = root.join(GOLDEN).join(format!("{name}.toml"));
     if !path.is_file() {
         bail!("{GOLDEN}/{name}.toml does not exist");

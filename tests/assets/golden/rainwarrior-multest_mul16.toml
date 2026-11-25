@@ -1,0 +1,16 @@
+rom = "fetched/rainwarrior/multest_mul16.sfc"
+rom_sha256 = "a18b57398fdc611072b88ae3a4fbb7d1c6682d2841ae8863fd8037eacbb495cb"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "d95609f66c73693eacebba762c424cb196c2aa942e6d50f83a4a1105448f9ff6"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "d95609f66c73693eacebba762c424cb196c2aa942e6d50f83a4a1105448f9ff6"
+status = "unverified"

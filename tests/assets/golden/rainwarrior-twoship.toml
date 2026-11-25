@@ -1,0 +1,26 @@
+rom = "fetched/rainwarrior/twoship.sfc"
+rom_sha256 = "98ff5b7b500fe4a93a481bcca510437597eef35fec49d4ec9dd9e8a6f5596076"
+
+[[input]]
+frame = 100
+port = 0
+buttons = "A"
+
+[[input]]
+frame = 101
+port = 0
+buttons = ""
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "0fb64fab9e229c1b9e151e4a23adea36eea6ec5f276f53142faeff4b7c8ea8ce"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 512
+height = 448
+blake3 = "2ed6c085de76884364d2d8a727a58ded4894ad18943903c07b396e083eea3d05"
+status = "unverified"

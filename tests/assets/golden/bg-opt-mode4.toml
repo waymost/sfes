@@ -1,0 +1,16 @@
+rom = "carts/bg-opt-mode4.sfc"
+rom_sha256 = "b1a4d3c9c0c488db0fae50ddb813abb627db70d77bc0c4964af327a2c788cdfb"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "5425f6c6118bad78b092b13e229c518f822d6224513bef80f2a5cf4ade2b3d90"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "5425f6c6118bad78b092b13e229c518f822d6224513bef80f2a5cf4ade2b3d90"
+status = "unverified"

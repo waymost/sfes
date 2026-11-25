@@ -1,0 +1,16 @@
+rom = "fetched/rainwarrior/elasticity.sfc"
+rom_sha256 = "f9e40cd958706f268f95e8f1d333154f0c3060a8efd2bfb5518500d07f09df25"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "9d8cfc4896b9bba165932df8b435e09853b63a8d43a16f1e893377238a400fce"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "9d8cfc4896b9bba165932df8b435e09853b63a8d43a16f1e893377238a400fce"
+status = "unverified"

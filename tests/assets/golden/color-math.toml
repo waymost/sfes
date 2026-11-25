@@ -1,0 +1,16 @@
+rom = "carts/color-math.sfc"
+rom_sha256 = "b8018a158b5e42165434f8904e48bf57807dee940f418b727a1dc9602c82ef08"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "61debea3b00a0cd67e5fce1a525ca6694857b2e13086e71b0d3d8d53e30f3b29"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "61debea3b00a0cd67e5fce1a525ca6694857b2e13086e71b0d3d8d53e30f3b29"
+status = "unverified"

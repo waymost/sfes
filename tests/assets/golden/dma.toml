@@ -1,0 +1,16 @@
+rom = "carts/dma.sfc"
+rom_sha256 = "c89abd8c74e4de044c13a2bb4e942314ef603cb4b74c0ba1985ec5819c6e6eca"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "67eddba29cab2519c0ef475515b6be40ca0c6ba5961ad585a12e95bdfcd41e31"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "67eddba29cab2519c0ef475515b6be40ca0c6ba5961ad585a12e95bdfcd41e31"
+status = "unverified"

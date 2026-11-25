@@ -1,0 +1,16 @@
+rom = "carts/windows.sfc"
+rom_sha256 = "0cb21638ba7dcc77e0e90c9476b1498610bae260887f2641cde556be3a20b9d1"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "48eafd4957010eb2d7fea5668249372008aeeb52fb3f6dc8bbfd3073501b3227"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "48eafd4957010eb2d7fea5668249372008aeeb52fb3f6dc8bbfd3073501b3227"
+status = "unverified"

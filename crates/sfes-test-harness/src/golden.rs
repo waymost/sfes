@@ -542,6 +542,50 @@ pub fn update(golden: &mut Golden, observed: &[FrameHash]) -> usize {
     changed
 }
 
+/// A new golden for the ROM `bytes` (named `rom`, relative to `tests/assets/`) with a checkpoint
+/// at each of `frames`, taken from a run of `machine` through `inputs`. Every checkpoint is
+/// unverified: a person blesses it after comparing the frame with the oracle's.
+///
+/// # Errors
+///
+/// Returns [`GoldenError::Invalid`] when `frames` or `inputs` break a rule of the format.
+// @source: adr-0015
+pub fn create(
+    rom: &str,
+    bytes: &[u8],
+    inputs: Vec<Input>,
+    frames: &[u32],
+    machine: &mut dyn FrameMachine,
+) -> Result<Golden, GoldenError> {
+    let checkpoints = frames
+        .iter()
+        .map(|frame| Checkpoint {
+            frame: *frame,
+            width: 0,
+            height: 0,
+            blake3: "0".repeat(64),
+            status: Status::Unverified,
+            oracle: None,
+            blessed: None,
+        })
+        .collect::<Vec<_>>();
+    let mut golden = Golden {
+        rom: String::from(rom),
+        rom_sha256: sha256_hex(bytes),
+        inputs,
+        checkpoints,
+    };
+    if let Some(problem) = golden.problems().into_iter().next() {
+        return Err(GoldenError::Invalid {
+            path: PathBuf::from(rom),
+            problem,
+        });
+    }
+    let observed = observe(&golden, machine);
+    update(&mut golden, &observed);
+    Ok(golden)
+}
+
 /// The SHA-256 of `bytes` as lower-case hex.
 fn sha256_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -739,6 +783,40 @@ mod tests {
             (None, None)
         );
         assert_eq!(update(&mut golden, &observed), 0);
+    }
+
+    // @source: adr-0015
+    #[test]
+    fn create_takes_each_checkpoint_from_the_run() {
+        let input = Input {
+            frame: 2,
+            port: 0,
+            buttons: Buttons::START,
+        };
+        let made = create(
+            "carts/halt.sfc",
+            b"rom",
+            vec![input],
+            &[2, 4],
+            &mut Counter::new(),
+        )
+        .unwrap();
+        assert_eq!(made.rom_sha256, sha256_hex(b"rom"));
+        assert_eq!(
+            made.checkpoints[0].frame_hash(),
+            counter_hash(2 + Buttons::START.bits())
+        );
+        // START is still held at frame 4: it is held until the port's next entry.
+        assert_eq!(
+            made.checkpoints[1].frame_hash(),
+            counter_hash(4 + Buttons::START.bits())
+        );
+        assert!(made.checkpoints.iter().all(
+            |checkpoint| checkpoint.status == Status::Unverified && checkpoint.oracle.is_none()
+        ));
+        assert_eq!(made.problems(), Vec::<String>::new());
+        let unordered = create("a.sfc", b"", Vec::new(), &[4, 2], &mut Counter::new());
+        assert!(matches!(unordered, Err(GoldenError::Invalid { .. })));
     }
 
     // @source: adr-0015
