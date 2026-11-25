@@ -53,7 +53,7 @@ impl From<RegionArgument> for Region {
 #[derive(Debug, Parser)]
 #[command(version, about, after_help = KEYS)]
 struct Arguments {
-    /// The ROM image to load.
+    /// The ROM image to load: a ROM file, or a zip archive holding one.
     rom: PathBuf,
     /// Square pixels, or the picture stretched 8/7 for a TV-like view.
     #[arg(long, value_enum, default_value = "square")]
@@ -61,6 +61,9 @@ struct Arguments {
     /// Run this video standard whatever the ROM header says.
     #[arg(long, value_enum)]
     region: Option<RegionArgument>,
+    /// For a zip archive holding several ROMs, the member to run.
+    #[arg(long, value_name = "NAME")]
+    entry: Option<String>,
     /// Run this many frames without a window, print the last frame's size, and exit.
     #[arg(long, value_name = "COUNT")]
     frames: Option<u32>,
@@ -75,6 +78,8 @@ pub(crate) struct Options {
     pub(crate) region: Option<Region>,
     /// How the picture's pixels are shaped.
     pub(crate) aspect: Aspect,
+    /// The member of a zip archive to run.
+    pub(crate) entry: Option<String>,
     /// Run this many frames without a window.
     pub(crate) frames: Option<u32>,
 }
@@ -85,12 +90,14 @@ impl From<Arguments> for Options {
             rom,
             aspect,
             region,
+            entry,
             frames,
         } = arguments;
         Self {
             rom,
             region: region.map(Region::from),
             aspect: Aspect::from(aspect),
+            entry,
             frames,
         }
     }
@@ -118,6 +125,7 @@ mod tests {
                 rom: PathBuf::from("game.sfc"),
                 region: None,
                 aspect: Aspect::Square,
+                entry: None,
                 frames: None,
             })
         );
@@ -127,13 +135,15 @@ mod tests {
     fn every_option_is_read_in_any_order() {
         assert_eq!(
             parse_all(&[
-                "--frames", "3", "game.sfc", "--aspect", "8:7", "--region", "pal"
+                "--frames", "3", "game.zip", "--aspect", "8:7", "--region", "pal", "--entry",
+                "a.sfc"
             ])
             .ok(),
             Some(Options {
-                rom: PathBuf::from("game.sfc"),
+                rom: PathBuf::from("game.zip"),
                 region: Some(Region::Pal),
                 aspect: Aspect::Tv,
+                entry: Some(String::from("a.sfc")),
                 frames: Some(3),
             })
         );
@@ -148,5 +158,6 @@ mod tests {
         assert!(parse_all(&["a.sfc", "--aspect", "wide"]).is_err());
         assert!(parse_all(&["a.sfc", "--region", "secam"]).is_err());
         assert!(parse_all(&["a.sfc", "--frames", "-1"]).is_err());
+        assert!(parse_all(&["a.zip", "--entry"]).is_err());
     }
 }

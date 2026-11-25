@@ -17,6 +17,7 @@
 cargo run --release -p sfes-player -- tests/assets/carts/bg-mode1.sfc
 ```
 
+- The ROM can be a plain file (`.sfc`, `.smc`, ...) or a `.zip` archive holding one. An archive with several ROMs needs `--entry <name>`; a member over 16 MiB and encrypted members are refused.
 - Pixels are square at the largest whole scale that fits the window; `--aspect 8:7` stretches the picture for a TV-like view (ADR 0039). `--region ntsc|pal` overrides the header.
 - Arrows are the D-pad; `Z` B, `X` A, `A` Y, `S` X, `Q` L, `W` R; `Enter` Start; `Backspace` or right `Shift` Select.
 - `Space` or `P` pauses, `N` or `.` advances one frame while paused, `R` resets, `Esc` quits.
