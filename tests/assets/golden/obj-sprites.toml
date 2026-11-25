@@ -1,0 +1,16 @@
+rom = "carts/obj-sprites.sfc"
+rom_sha256 = "177bd8b387f8f032b274677ec377d3dc9d6f30f9019f5e067750fd275ae0a35c"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "a51fce0c445471533073845a2896b3db3115dc73cf957a42afa13df293aa9962"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "a51fce0c445471533073845a2896b3db3115dc73cf957a42afa13df293aa9962"
+status = "unverified"

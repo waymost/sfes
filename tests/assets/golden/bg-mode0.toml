@@ -1,0 +1,16 @@
+rom = "carts/bg-mode0.sfc"
+rom_sha256 = "5e3af3e5976481a6b49f6c0c525fc9f0cb84619f6147df02dad32fbf96091c0c"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "42a7e8200ac433c700b285a4c98a8d2dfcb71e36c08cf27dcf8ec511ec08f0fa"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "42a7e8200ac433c700b285a4c98a8d2dfcb71e36c08cf27dcf8ec511ec08f0fa"
+status = "unverified"

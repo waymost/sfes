@@ -1,0 +1,16 @@
+rom = "third-party/gilyon/cputest-full.sfc"
+rom_sha256 = "f61de78d346a68c166d67472a414e5d207368889d37b977d1338f9221ca6400e"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "540b3f6d95fe6e1a453f7bee2ed136ea1864f157f146b35679f7192164964e7c"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "540b3f6d95fe6e1a453f7bee2ed136ea1864f157f146b35679f7192164964e7c"
+status = "unverified"

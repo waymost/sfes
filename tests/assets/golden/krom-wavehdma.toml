@@ -1,0 +1,16 @@
+rom = "fetched/krom/WaveHDMA.sfc"
+rom_sha256 = "b9ecef8a41628d74900cbe6334ae24680dcd6e5526292f3e68aa39be34518b31"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "5a268c2079927fea0172cc85ea8d66fdf6ce5e1081782f1f860af24bd9cd5879"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "3e3d28e652a96ffa40450d6efde1833fb81758143796980012a0cc54aca63a46"
+status = "unverified"

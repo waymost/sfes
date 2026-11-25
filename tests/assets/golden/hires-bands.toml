@@ -1,0 +1,16 @@
+rom = "carts/hires-bands.sfc"
+rom_sha256 = "9813b8ccc767be292b1bf9006f393e94fcc57c217b06a85afb0830a4139bdd3b"
+
+[[checkpoint]]
+frame = 10
+width = 512
+height = 448
+blake3 = "fd849e647c9a5f145a5a7e8bdb0c84d5ae379734ce51fe2a8bc90a74b291c5ea"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 512
+height = 448
+blake3 = "fd849e647c9a5f145a5a7e8bdb0c84d5ae379734ce51fe2a8bc90a74b291c5ea"
+status = "unverified"

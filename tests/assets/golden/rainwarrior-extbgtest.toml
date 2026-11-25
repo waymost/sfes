@@ -1,0 +1,16 @@
+rom = "fetched/rainwarrior/extbgtest.sfc"
+rom_sha256 = "2aaaddc42e417f8549807a11dcea5799dedeb214fbe0083b6fa355e36525874b"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "f1f5a8e5c96bf86fd118c083554fdb645edc8c49268b9b8ab0e3ef2216214932"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "f1f5a8e5c96bf86fd118c083554fdb645edc8c49268b9b8ab0e3ef2216214932"
+status = "unverified"

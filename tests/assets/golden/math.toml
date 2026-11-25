@@ -1,0 +1,16 @@
+rom = "carts/math.sfc"
+rom_sha256 = "efc6af7e85c356439c3c3d680903e4f2d73f8ab4332cbcefe97ac5a4fe286483"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "67eddba29cab2519c0ef475515b6be40ca0c6ba5961ad585a12e95bdfcd41e31"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "67eddba29cab2519c0ef475515b6be40ca0c6ba5961ad585a12e95bdfcd41e31"
+status = "unverified"

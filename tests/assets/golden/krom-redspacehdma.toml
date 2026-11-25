@@ -1,0 +1,16 @@
+rom = "fetched/krom/RedSpaceHDMA.sfc"
+rom_sha256 = "f59bc2cc89b22cad7308fe65f5d9fee1025311c84a9f809e14ebf96ab9a4c4de"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "a928c1979bf55727b18bb28624ab4f6c90367cbe90388eabd3bfc7fb283489c7"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "a928c1979bf55727b18bb28624ab4f6c90367cbe90388eabd3bfc7fb283489c7"
+status = "unverified"

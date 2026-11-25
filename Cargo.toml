@@ -72,5 +72,18 @@ allow_attributes_without_reason = "deny"
 [profile.dev.package.sha2]
 opt-level = 3
 
+# The golden suite (QA-01) runs dozens of ROMs for hundreds of frames each; unoptimized, that
+# takes minutes. Overflow checks stay on in tests.
+[profile.dev.package.sfes-api]
+opt-level = 2
+[profile.dev.package.sfes-snes-cart]
+opt-level = 2
+[profile.dev.package.sfes-snes-core]
+opt-level = 2
+[profile.dev.package.sfes-snes-cpu]
+opt-level = 2
+[profile.dev.package.sfes-snes-ppu]
+opt-level = 2
+
 [profile.test]
 overflow-checks = true

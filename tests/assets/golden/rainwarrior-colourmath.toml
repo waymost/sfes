@@ -1,0 +1,16 @@
+rom = "fetched/rainwarrior/colourmath.sfc"
+rom_sha256 = "597ade58897d5cf2ba4dfa471e5d043672bdf627467799a1a20e57161e0e2986"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "57a8a4b65b747d3d51989ead68933cda7e60d0ebd5eb16434c1216e33deb0c0a"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "57a8a4b65b747d3d51989ead68933cda7e60d0ebd5eb16434c1216e33deb0c0a"
+status = "unverified"

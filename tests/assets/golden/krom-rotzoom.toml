@@ -1,0 +1,16 @@
+rom = "fetched/krom/RotZoom.sfc"
+rom_sha256 = "d5580870e152046ca838fa276568e10c671be63b1db0285030a53dc7864cc4c0"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "e5cc3f81a78a92eca5e94a80fde239a5e19f787a60cdcf347f2b15207401a18e"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "e5cc3f81a78a92eca5e94a80fde239a5e19f787a60cdcf347f2b15207401a18e"
+status = "unverified"

@@ -1,0 +1,16 @@
+rom = "carts/obj-limits.sfc"
+rom_sha256 = "a6f8f5f852d173c51b0db633c7420ecac403d6cb5c12acf0102c8144258781a6"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "749eaef7d8c1f0c6dcc8374adc5d7664de9dd7955d234f02474adc490c32d812"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "749eaef7d8c1f0c6dcc8374adc5d7664de9dd7955d234f02474adc490c32d812"
+status = "unverified"

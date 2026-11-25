@@ -1,0 +1,16 @@
+rom = "fetched/rainwarrior/smalltext.sfc"
+rom_sha256 = "2e771fe3d89fc83e834ac5d6b8ec19daafe1505f0a58763b85be4f19d5b8b81b"
+
+[[checkpoint]]
+frame = 60
+width = 512
+height = 478
+blake3 = "c0570367d9e56e7af457dbbd72b26809c00a8318c7dfdb655a424fc918b652e2"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 512
+height = 478
+blake3 = "c0570367d9e56e7af457dbbd72b26809c00a8318c7dfdb655a424fc918b652e2"
+status = "unverified"

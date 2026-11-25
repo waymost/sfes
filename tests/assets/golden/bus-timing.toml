@@ -1,0 +1,16 @@
+rom = "carts/bus-timing.sfc"
+rom_sha256 = "643a93c14c01b0d644286b8d4f539121a62decd85071157538b7964483c7fecf"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "67eddba29cab2519c0ef475515b6be40ca0c6ba5961ad585a12e95bdfcd41e31"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "67eddba29cab2519c0ef475515b6be40ca0c6ba5961ad585a12e95bdfcd41e31"
+status = "unverified"

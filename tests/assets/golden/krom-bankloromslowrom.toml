@@ -1,0 +1,16 @@
+rom = "fetched/krom/BANKLoROMSlowROM.sfc"
+rom_sha256 = "3f2d0d9d8d3a05912c636830e6c78a823ea357bc99e0115fe46d0e9a7f6737c6"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "bef32f61f3edea1835f00b639f1e0b8862beea280ec4f1afcd0d6719b0c2041c"
+status = "unverified"
+
+[[checkpoint]]
+frame = 300
+width = 256
+height = 224
+blake3 = "bef32f61f3edea1835f00b639f1e0b8862beea280ec4f1afcd0d6719b0c2041c"
+status = "unverified"

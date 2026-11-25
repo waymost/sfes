@@ -1,0 +1,16 @@
+rom = "carts/ppu-hdma.sfc"
+rom_sha256 = "dd4424dcb6072e516520a6089c95828568c1e5fa150cd1643d80dee1847cdba1"
+
+[[checkpoint]]
+frame = 10
+width = 256
+height = 224
+blake3 = "d23f4b49ac6fedea2aea324632ed38f4edaae3192f2b9318e09a3f134c15d4ba"
+status = "unverified"
+
+[[checkpoint]]
+frame = 60
+width = 256
+height = 224
+blake3 = "d23f4b49ac6fedea2aea324632ed38f4edaae3192f2b9318e09a3f134c15d4ba"
+status = "unverified"
