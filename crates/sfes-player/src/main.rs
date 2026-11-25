@@ -9,9 +9,10 @@ mod cli;
 mod input;
 mod layout;
 mod pacing;
+mod rom;
 mod video;
 
-use std::{ffi::OsStr, fs, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sfes_api::{Fast, Stop};
@@ -21,24 +22,17 @@ use crate::cli::Options;
 
 fn main() -> Result<()> {
     let options = cli::parse();
-    let machine = build(&options)?;
+    let rom = rom::load(&options.rom, options.entry.as_deref())?;
+    let machine = build(&options, rom.bytes)?;
     if let Some(count) = options.frames {
         headless(machine, count);
         return Ok(());
     }
-    let name = options
-        .rom
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or("rom")
-        .to_owned();
-    app::run(machine, name, options.aspect)
+    app::run(machine, rom.name, options.aspect)
 }
 
-/// Loads the ROM and powers the machine on.
-fn build(options: &Options) -> Result<Snes<Fast>> {
-    let image =
-        fs::read(&options.rom).with_context(|| format!("reading {}", options.rom.display()))?;
+/// Loads the ROM image and powers the machine on.
+fn build(options: &Options, image: Vec<u8>) -> Result<Snes<Fast>> {
     let mut builder = Snes::<Fast>::builder(Arc::from(image));
     if let Some(region) = options.region {
         builder = builder.region(region);
