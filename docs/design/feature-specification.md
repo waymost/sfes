@@ -505,7 +505,7 @@ Achievement developers today reproduce tickets by hand with save states on the p
 
 The player is deliberately small: it exists to watch the core during development, play games for verification, and record movies, which makes it the authoring tool for start states, demonstrations, tests and bug reports. It grows in three steps, at M2, M5 and M6. Communities: testers, learners, integration authors, TAS authors.
 
-**PLY-01 Development viewer (P0, M2).** A window that shows the framebuffer at integer scale with keyboard input, pause, frame advance and reset. Audio arrives at M3. It is needed as soon as the PPU draws anything, and is the main learning feedback loop.
+**PLY-01 Development viewer (P0, M2).** A window that shows the framebuffer at integer scale (square pixels, or 8:7 with an option; ADR 0039) with keyboard input, pause, frame advance and reset. Audio arrives at M3. It is needed as soon as the PPU draws anything, and is the main learning feedback loop.
 
 **PLY-02 Recording and start-state authoring (P0, M5).** Record any session as a movie (FND-04). Mark the current frame as a named start state, saved as a movie from power-on plus a cached serialized state. Play movies back with a frame counter and desync indicator. This is how RL-07 and RL-14 start states are made, so it MUST exist by M5.
 

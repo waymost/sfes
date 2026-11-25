@@ -12,3 +12,10 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
+clap.workspace = true
+pollster.workspace = true
+sfes-api.workspace = true
+sfes-snes-core.workspace = true
+wgpu.workspace = true
+winit.workspace = true
