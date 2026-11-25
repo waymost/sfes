@@ -19,3 +19,4 @@ sfes-api.workspace = true
 sfes-snes-core.workspace = true
 wgpu.workspace = true
 winit.workspace = true
+zip.workspace = true
